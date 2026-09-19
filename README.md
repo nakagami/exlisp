@@ -348,3 +348,12 @@ ExLisp.Global.add(1, 2)
 # => 3
 ```
 
+## Limitations and Notes
+
+### Immutability and Circular/Infinite Lists
+
+Since ExLisp runs on the BEAM (Erlang/Elixir) virtual machine, all runtime data structures are **immutable and acyclic (DAG)**.
+
+- Destructive cons cell modifications (such as `(setf (cdddr foo) foo)` or `rplacd`) cannot create circular or infinite lists.
+- To handle infinite sequences or repeating streams, use lazy evaluation (e.g. closures or stream generator patterns) instead.
+
