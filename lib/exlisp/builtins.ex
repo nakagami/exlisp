@@ -10121,4 +10121,105 @@ defmodule ExLisp.Builtins do
   end
 
   def get_universal_time([]), do: get_universal_time()
+
+  # --- Readtables ---
+  def readtablep(args) when is_list(args) do
+    case args do
+      [rt | _] -> ExLisp.Readtable.readtablep(rt)
+      rt -> ExLisp.Readtable.readtablep(rt)
+    end
+  end
+  def readtablep(rt), do: ExLisp.Readtable.readtablep(rt)
+
+  def copy_readtable(args \\ [])
+  def copy_readtable(args) when is_list(args) do
+    case args do
+      [from, to | _] -> ExLisp.Readtable.copy_readtable(from, to)
+      [from] -> ExLisp.Readtable.copy_readtable(from, nil)
+      _ -> ExLisp.Readtable.copy_readtable(nil, nil)
+    end
+  end
+  def copy_readtable(from, to), do: ExLisp.Readtable.copy_readtable(from, to)
+
+  def set_macro_character(args) when is_list(args) do
+    case args do
+      [char, func, non_term, rt | _] -> ExLisp.Readtable.set_macro_character(char, func, non_term, rt)
+      [char, func, non_term] -> ExLisp.Readtable.set_macro_character(char, func, non_term, nil)
+      [char, func] -> ExLisp.Readtable.set_macro_character(char, func, nil, nil)
+      _ -> nil
+    end
+  end
+  def set_macro_character(char, func), do: ExLisp.Readtable.set_macro_character(char, func, nil, nil)
+  def set_macro_character(char, func, non_term), do: ExLisp.Readtable.set_macro_character(char, func, non_term, nil)
+  def set_macro_character(char, func, non_term, rt), do: ExLisp.Readtable.set_macro_character(char, func, non_term, rt)
+
+  def get_macro_character(args) when is_list(args) do
+    case args do
+      [char, rt | _] -> ExLisp.Readtable.get_macro_character(char, rt)
+      [char] -> ExLisp.Readtable.get_macro_character(char, nil)
+      char -> ExLisp.Readtable.get_macro_character(char, nil)
+    end
+  end
+  def get_macro_character(char), do: ExLisp.Readtable.get_macro_character(char, nil)
+  def get_macro_character(char, rt), do: ExLisp.Readtable.get_macro_character(char, rt)
+
+  def make_dispatch_macro_character(args) when is_list(args) do
+    case args do
+      [char, non_term, rt | _] -> ExLisp.Readtable.make_dispatch_macro_character(char, non_term, rt)
+      [char, non_term] -> ExLisp.Readtable.make_dispatch_macro_character(char, non_term, nil)
+      [char] -> ExLisp.Readtable.make_dispatch_macro_character(char, nil, nil)
+      char -> ExLisp.Readtable.make_dispatch_macro_character(char, nil, nil)
+    end
+  end
+  def make_dispatch_macro_character(char), do: ExLisp.Readtable.make_dispatch_macro_character(char, nil, nil)
+  def make_dispatch_macro_character(char, non_term), do: ExLisp.Readtable.make_dispatch_macro_character(char, non_term, nil)
+  def make_dispatch_macro_character(char, non_term, rt), do: ExLisp.Readtable.make_dispatch_macro_character(char, non_term, rt)
+
+  def set_dispatch_macro_character(args) when is_list(args) do
+    case args do
+      [disp, sub, func, rt | _] -> ExLisp.Readtable.set_dispatch_macro_character(disp, sub, func, rt)
+      [disp, sub, func] -> ExLisp.Readtable.set_dispatch_macro_character(disp, sub, func, nil)
+      _ -> nil
+    end
+  end
+  def set_dispatch_macro_character(disp, sub, func), do: ExLisp.Readtable.set_dispatch_macro_character(disp, sub, func, nil)
+  def set_dispatch_macro_character(disp, sub, func, rt), do: ExLisp.Readtable.set_dispatch_macro_character(disp, sub, func, rt)
+
+  def get_dispatch_macro_character(args) when is_list(args) do
+    case args do
+      [disp, sub, rt | _] -> ExLisp.Readtable.get_dispatch_macro_character(disp, sub, rt)
+      [disp, sub] -> ExLisp.Readtable.get_dispatch_macro_character(disp, sub, nil)
+      _ -> nil
+    end
+  end
+  def get_dispatch_macro_character(disp, sub), do: ExLisp.Readtable.get_dispatch_macro_character(disp, sub, nil)
+  def get_dispatch_macro_character(disp, sub, rt), do: ExLisp.Readtable.get_dispatch_macro_character(disp, sub, rt)
+
+  def set_syntax_from_char(args) when is_list(args) do
+    case args do
+      [to_char, from_char, to_rt, from_rt | _] -> ExLisp.Readtable.set_syntax_from_char(to_char, from_char, to_rt, from_rt)
+      [to_char, from_char, to_rt] -> ExLisp.Readtable.set_syntax_from_char(to_char, from_char, to_rt, nil)
+      [to_char, from_char] -> ExLisp.Readtable.set_syntax_from_char(to_char, from_char, nil, nil)
+      _ -> nil
+    end
+  end
+  def set_syntax_from_char(to_char, from_char), do: ExLisp.Readtable.set_syntax_from_char(to_char, from_char, nil, nil)
+  def set_syntax_from_char(to_char, from_char, to_rt), do: ExLisp.Readtable.set_syntax_from_char(to_char, from_char, to_rt, nil)
+  def set_syntax_from_char(to_char, from_char, to_rt, from_rt), do: ExLisp.Readtable.set_syntax_from_char(to_char, from_char, to_rt, from_rt)
+
+  def readtable_case(args) when is_list(args) do
+    case args do
+      [rt | _] -> ExLisp.Readtable.readtable_case(rt)
+      rt -> ExLisp.Readtable.readtable_case(rt)
+    end
+  end
+  def readtable_case(rt), do: ExLisp.Readtable.readtable_case(rt)
+
+  def set_readtable_case(args) when is_list(args) do
+    case args do
+      [rt, new_case | _] -> ExLisp.Readtable.set_readtable_case(rt, new_case)
+      _ -> :upcase
+    end
+  end
+  def set_readtable_case(rt, new_case), do: ExLisp.Readtable.set_readtable_case(rt, new_case)
 end

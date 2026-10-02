@@ -1373,6 +1373,56 @@ defmodule CommonLispTest do
     end
   end
 
+  describe "Common Lisp Readtables (*readtable*, copy-readtable, set-macro-character, etc.)" do
+    test "copy-readtable and readtablep" do
+      code = """
+      (let ((rt (copy-readtable)))
+        (list (readtablep rt)
+              (readtablep nil)
+              (readtable-case rt)))
+      """
+      assert ExLisp.eval(code) == [:t, nil, :upcase]
+    end
+
+    test "set-macro-character and get-macro-character" do
+      code = """
+      (let ((rt (copy-readtable)))
+        (set-macro-character #\\$ (lambda (stream char) '(dollar)) nil rt)
+        (let ((fn-and-flag (multiple-value-list (get-macro-character #\\$ rt)))
+              (paren-info (multiple-value-list (get-macro-character #\\( rt))))
+          (list (functionp (first fn-and-flag))
+                (second fn-and-flag)
+                (functionp (first paren-info))
+                (second paren-info))))
+      """
+      assert ExLisp.eval(code) == [:t, nil, :t, nil]
+    end
+
+    test "dispatch macro characters" do
+      code = """
+      (let ((rt (copy-readtable)))
+        (make-dispatch-macro-character #\\? t rt)
+        (set-dispatch-macro-character #\\? #\\! (lambda (s c n) '(exclamation)) rt)
+        (let ((handler (get-dispatch-macro-character #\\? #\\! rt)))
+          (list (functionp handler)
+                (get-dispatch-macro-character #\\? #\\z rt))))
+      """
+      assert ExLisp.eval(code) == [:t, nil]
+    end
+
+    test "set-syntax-from-char" do
+      code = """
+      (let ((rt (copy-readtable)))
+        (set-syntax-from-char #\\! #\\; rt)
+        (let ((semi-info (multiple-value-list (get-macro-character #\\; rt)))
+              (bang-info (multiple-value-list (get-macro-character #\\! rt))))
+          (list (functionp (first semi-info))
+                (functionp (first bang-info)))))
+      """
+      assert ExLisp.eval(code) == [:t, :t]
+    end
+  end
+
   describe "SBCL quit and exit functions" do
     @tag timeout: 300_000
     test "sb-ext:quit and quit exit with expected status codes" do

@@ -702,6 +702,34 @@ defmodule BuiltinFunction do
     :unintern => {:unintern, :unintern},
     :_cl_unintern_ => {:unintern, :unintern},
 
+    # Readtables
+    :readtablep => {:readtablep, :readtablep},
+    :_cl_readtablep_ => {:readtablep, :readtablep},
+    :copy_readtable => {:copy_readtable, :copy_readtable},
+    :_cl_copy_readtable_ => {:copy_readtable, :copy_readtable},
+    :"copy-readtable" => {:copy_readtable, :copy_readtable},
+    :set_macro_character => {:set_macro_character, :set_macro_character},
+    :_cl_set_macro_character_ => {:set_macro_character, :set_macro_character},
+    :"set-macro-character" => {:set_macro_character, :set_macro_character},
+    :get_macro_character => {:get_macro_character, :get_macro_character},
+    :_cl_get_macro_character_ => {:get_macro_character, :get_macro_character},
+    :"get-macro-character" => {:get_macro_character, :get_macro_character},
+    :make_dispatch_macro_character => {:make_dispatch_macro_character, :make_dispatch_macro_character},
+    :_cl_make_dispatch_macro_character_ => {:make_dispatch_macro_character, :make_dispatch_macro_character},
+    :"make-dispatch-macro-character" => {:make_dispatch_macro_character, :make_dispatch_macro_character},
+    :set_dispatch_macro_character => {:set_dispatch_macro_character, :set_dispatch_macro_character},
+    :_cl_set_dispatch_macro_character_ => {:set_dispatch_macro_character, :set_dispatch_macro_character},
+    :"set-dispatch-macro-character" => {:set_dispatch_macro_character, :set_dispatch_macro_character},
+    :get_dispatch_macro_character => {:get_dispatch_macro_character, :get_dispatch_macro_character},
+    :_cl_get_dispatch_macro_character_ => {:get_dispatch_macro_character, :get_dispatch_macro_character},
+    :"get-dispatch-macro-character" => {:get_dispatch_macro_character, :get_dispatch_macro_character},
+    :set_syntax_from_char => {:set_syntax_from_char, :set_syntax_from_char},
+    :_cl_set_syntax_from_char_ => {:set_syntax_from_char, :set_syntax_from_char},
+    :"set-syntax-from-char" => {:set_syntax_from_char, :set_syntax_from_char},
+    :readtable_case => {:readtable_case, :readtable_case},
+    :_cl_readtable_case_ => {:readtable_case, :readtable_case},
+    :"readtable-case" => {:readtable_case, :readtable_case},
+
     # Bitwise & math operations
     :logand => {:logand, :logand},
     :_cl_logand_ => {:logand, :logand},
@@ -1447,7 +1475,16 @@ defmodule BuiltinFunction do
              :hex_search,
              :hex_info,
              :hex_where_is_package,
-             :quit
+             :quit,
+             :readtablep,
+             :copy_readtable,
+             :set_macro_character,
+             :get_macro_character,
+             :make_dispatch_macro_character,
+             :set_dispatch_macro_character,
+             :get_dispatch_macro_character,
+             :set_syntax_from_char,
+             :readtable_case
            ] ->
         args_cons = ast_cons_list(compiled_args)
 
