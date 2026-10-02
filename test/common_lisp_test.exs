@@ -519,6 +519,37 @@ defmodule CommonLispTest do
       assert ExLisp.eval("(format nil \"~%line1~%line2\")") == "\nline1\nline2"
     end
 
+    test "format extended directives" do
+      # Iteration and escape (~{ ~} and ~^, ~:^)
+      assert ExLisp.eval(~S'(format nil "~{~a~^, ~}" (list 1 2 3))') == "1, 2, 3"
+      assert ExLisp.eval(~S'(format nil "~@{~a~^; ~}" 10 20 30)') == "10; 20; 30"
+      assert ExLisp.eval(~S'(format nil "~:{~a=~a~:^, ~}" (list (list "a" 1) (list "b" 2)))') == "a=1, b=2"
+
+      # Conditionals (~[ ~])
+      assert ExLisp.eval(~S'(format nil "~[zero~;one~;two~:;other~]" 1)') == "one"
+      assert ExLisp.eval(~S'(format nil "~[zero~;one~;two~:;other~]" 9)') == "other"
+      assert ExLisp.eval(~S'(format nil "~:[no~;yes~]" t)') == "yes"
+      assert ExLisp.eval(~S'(format nil "~:[no~;yes~]" nil)') == "no"
+      assert ExLisp.eval(~S'(format nil "~@[val is ~a~]" "test")') == "val is test"
+
+      # Radix / Numbers / Roman (~R, ~:D, ~P)
+      assert ExLisp.eval(~S'(format nil "~r" 4)') == "four"
+      assert ExLisp.eval(~S'(format nil "~:r" 4)') == "fourth"
+      assert ExLisp.eval(~S'(format nil "~@r" 14)') == "XIV"
+      assert ExLisp.eval(~S'(format nil "~:d" 1000000)') == "1,000,000"
+      assert ExLisp.eval(~S'(format nil "~d dog~:p" 1)') == "1 dog"
+      assert ExLisp.eval(~S'(format nil "~d dog~:p" 3)') == "3 dogs"
+
+      # Case conversion (~( ~))
+      assert ExLisp.eval(~S'(format nil "~(~a~)" "HELLO WORLD")') == "hello world"
+      assert ExLisp.eval(~S'(format nil "~:(~a~)" "hello world")') == "Hello World"
+      assert ExLisp.eval(~S'(format nil "~@(~a~)" "hello world")') == "Hello world"
+
+      # Indirection (~?) and arg jump (~*)
+      assert ExLisp.eval(~S'(format nil "~? is ~a" "<~a>" (list 42) "answer")') == "<42> is answer"
+      assert ExLisp.eval(~S'(format nil "~a ~*~a" 1 2 3)') == "1 3"
+    end
+
     test "write-line, write-string, and write-char" do
       import ExUnit.CaptureIO
 

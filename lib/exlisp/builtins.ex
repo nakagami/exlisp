@@ -8095,7 +8095,7 @@ defmodule ExLisp.Builtins do
   def format(dest, fmt_string, args \\ []) do
     fmt = to_string_val(fmt_string)
     arg_list = if is_list(args), do: args, else: [args]
-    formatted = do_format(fmt, arg_list)
+    formatted = ExLisp.CLFormat.format(fmt, arg_list)
 
     cond do
       dest in [:t, :T, true, "t", "T"] ->
@@ -8113,55 +8113,6 @@ defmodule ExLisp.Builtins do
         formatted
     end
   end
-
-  defp do_format(fmt, args) do
-    parse_format(String.to_charlist(fmt), args, [])
-  end
-
-  defp parse_format([], _args, acc), do: acc |> Enum.reverse() |> List.to_string()
-
-  defp parse_format([?~, directive | rest], args, acc) do
-    case directive do
-      d when d in [?A, ?a] ->
-        {val, rem_args} = pop_arg(args)
-        str_val = if is_binary(val), do: val, else: inspect(ExLisp.to_repl_display(val))
-        parse_format(rest, rem_args, Enum.reverse(String.to_charlist(str_val)) ++ acc)
-
-      d when d in [?S, ?s] ->
-        {val, rem_args} = pop_arg(args)
-        str_val = inspect(ExLisp.to_repl_display(val))
-        parse_format(rest, rem_args, Enum.reverse(String.to_charlist(str_val)) ++ acc)
-
-      d when d in [?D, ?d] ->
-        {val, rem_args} = pop_arg(args)
-        str_val = "#{val}"
-        parse_format(rest, rem_args, Enum.reverse(String.to_charlist(str_val)) ++ acc)
-
-      d when d in [?F, ?f] ->
-        {val, rem_args} = pop_arg(args)
-        str_val = "#{val}"
-        parse_format(rest, rem_args, Enum.reverse(String.to_charlist(str_val)) ++ acc)
-
-      ?% ->
-        parse_format(rest, args, [?\n | acc])
-
-      ?~ ->
-        parse_format(rest, args, [?~ | acc])
-
-      ?& ->
-        parse_format(rest, args, [?\n | acc])
-
-      _ ->
-        parse_format(rest, args, [directive, ?~ | acc])
-    end
-  end
-
-  defp parse_format([c | rest], args, acc) do
-    parse_format(rest, args, [c | acc])
-  end
-
-  defp pop_arg([head | tail]), do: {head, tail}
-  defp pop_arg([]), do: {nil, []}
 
   # --- Utilities ---
 
