@@ -8439,19 +8439,6 @@ defmodule ExLisp.Builtins do
     cleaned
   end
 
-  def symbol_package(%ExLisp.Symbol{}), do: nil
-  def symbol_package([sym]), do: symbol_package(sym)
-
-  def symbol_package(sym) when is_atom(sym) do
-    if keywordp(sym) == :t do
-      :KEYWORD
-    else
-      :COMMON_LISP_USER
-    end
-  end
-
-  def symbol_package(_), do: nil
-
   def symbol_value([sym]), do: symbol_value(sym)
   def symbol_value(nil), do: nil
   def symbol_value(:t), do: :t
@@ -8643,35 +8630,6 @@ defmodule ExLisp.Builtins do
   end
 
   defp remove_plist_prop(other, _prop), do: {false, other}
-
-  def intern(name, _pkg \\ nil) do
-    normalize_sym_prop(name)
-  end
-
-  def find_symbol(name, _pkg \\ nil) do
-    normalize_sym_prop(name)
-  end
-
-  def defpackage(args) do
-    case args do
-      [pkg | _] -> normalize_sym_prop(pkg)
-      pkg -> normalize_sym_prop(pkg)
-    end
-  end
-
-  def in_package(args) do
-    case args do
-      [pkg | _] -> normalize_sym_prop(pkg)
-      pkg -> normalize_sym_prop(pkg)
-    end
-  end
-
-  def find_package(args) do
-    case args do
-      [pkg | _] -> normalize_sym_prop(pkg)
-      pkg -> normalize_sym_prop(pkg)
-    end
-  end
 
   # --- Bitwise & math operations ---
 
@@ -9568,11 +9526,178 @@ defmodule ExLisp.Builtins do
 
   # --- Package operations & module management ---
 
-  def export(_args), do: :t
-  def use_package(_args), do: :t
-  def shadow(_args), do: :t
-  def shadowing_import(_args), do: :t
-  def import(_args), do: :t
+  def find_package(args) when is_list(args) do
+    case args do
+      [pkg | _] -> ExLisp.Package.find_package(pkg)
+      pkg -> ExLisp.Package.find_package(pkg)
+    end
+  end
+  def find_package(pkg), do: ExLisp.Package.find_package(pkg)
+
+  def packagep(pkg), do: ExLisp.Package.packagep(pkg)
+  def package_name(pkg), do: ExLisp.Package.package_name(pkg)
+  def package_nicknames(pkg), do: ExLisp.Package.package_nicknames(pkg)
+  def package_use_list(pkg), do: ExLisp.Package.package_use_list(pkg)
+  def package_used_by_list(pkg), do: ExLisp.Package.package_used_by_list(pkg)
+  def package_shadowing_symbols(pkg), do: ExLisp.Package.package_shadowing_symbols(pkg)
+  def list_all_packages, do: ExLisp.Package.list_all_packages()
+  def list_all_packages([]), do: ExLisp.Package.list_all_packages()
+
+  def make_package(args) when is_list(args) do
+    case args do
+      [name | opts] ->
+        opt_kw = Enum.chunk_every(opts, 2) |> Enum.map(fn [k, v] -> {k, v} end)
+        ExLisp.Package.make_package(name, opt_kw)
+      name ->
+        ExLisp.Package.make_package(name)
+    end
+  end
+  def make_package(name), do: ExLisp.Package.make_package(name)
+  def make_package(name, opts), do: ExLisp.Package.make_package(name, opts)
+
+  def delete_package(args) when is_list(args) do
+    case args do
+      [pkg | _] -> ExLisp.Package.delete_package(pkg)
+      pkg -> ExLisp.Package.delete_package(pkg)
+    end
+  end
+  def delete_package(pkg), do: ExLisp.Package.delete_package(pkg)
+
+  def rename_package(args) when is_list(args) do
+    case args do
+      [pkg, new_name, new_nicks | _] -> ExLisp.Package.rename_package(pkg, new_name, new_nicks)
+      [pkg, new_name] -> ExLisp.Package.rename_package(pkg, new_name, [])
+      _ -> raise ArgumentError, "rename-package requires at least 2 arguments"
+    end
+  end
+  def rename_package(pkg, new_name), do: ExLisp.Package.rename_package(pkg, new_name, [])
+  def rename_package(pkg, new_name, new_nicks), do: ExLisp.Package.rename_package(pkg, new_name, new_nicks)
+
+  def defpackage(args) when is_list(args) do
+    case args do
+      [name | opts] -> ExLisp.Package.defpackage(name, opts)
+      name -> ExLisp.Package.defpackage(name)
+    end
+  end
+  def defpackage(name), do: ExLisp.Package.defpackage(name)
+  def defpackage(name, opts), do: ExLisp.Package.defpackage(name, opts)
+
+  def in_package(args) when is_list(args) do
+    case args do
+      [name | _] -> ExLisp.Package.set_current_package(name)
+      name -> ExLisp.Package.set_current_package(name)
+    end
+  end
+  def in_package(name), do: ExLisp.Package.set_current_package(name)
+
+  def export(args) when is_list(args) do
+    case args do
+      [symbols, pkg | _] -> ExLisp.Package.export(symbols, pkg)
+      [symbols] -> ExLisp.Package.export(symbols)
+      symbols -> ExLisp.Package.export(symbols)
+    end
+  end
+  def export(symbols), do: ExLisp.Package.export(symbols)
+  def export(symbols, pkg), do: ExLisp.Package.export(symbols, pkg)
+
+  def unexport(args) when is_list(args) do
+    case args do
+      [symbols, pkg | _] -> ExLisp.Package.unexport(symbols, pkg)
+      [symbols] -> ExLisp.Package.unexport(symbols)
+      symbols -> ExLisp.Package.unexport(symbols)
+    end
+  end
+  def unexport(symbols), do: ExLisp.Package.unexport(symbols)
+  def unexport(symbols, pkg), do: ExLisp.Package.unexport(symbols, pkg)
+
+  def import(args) when is_list(args) do
+    case args do
+      [symbols, pkg | _] -> ExLisp.Package.import(symbols, pkg)
+      [symbols] -> ExLisp.Package.import(symbols)
+      symbols -> ExLisp.Package.import(symbols)
+    end
+  end
+  def import(symbols), do: ExLisp.Package.import(symbols)
+  def import(symbols, pkg), do: ExLisp.Package.import(symbols, pkg)
+
+  def shadow(args) when is_list(args) do
+    case args do
+      [symbols, pkg | _] -> ExLisp.Package.shadow(symbols, pkg)
+      [symbols] -> ExLisp.Package.shadow(symbols)
+      symbols -> ExLisp.Package.shadow(symbols)
+    end
+  end
+  def shadow(symbols), do: ExLisp.Package.shadow(symbols)
+  def shadow(symbols, pkg), do: ExLisp.Package.shadow(symbols, pkg)
+
+  def shadowing_import(args) when is_list(args) do
+    case args do
+      [symbols, pkg | _] -> ExLisp.Package.shadowing_import(symbols, pkg)
+      [symbols] -> ExLisp.Package.shadowing_import(symbols)
+      symbols -> ExLisp.Package.shadowing_import(symbols)
+    end
+  end
+  def shadowing_import(symbols), do: ExLisp.Package.shadowing_import(symbols)
+  def shadowing_import(symbols, pkg), do: ExLisp.Package.shadowing_import(symbols, pkg)
+
+  def use_package(args) when is_list(args) do
+    case args do
+      [pkgs, target_pkg | _] -> ExLisp.Package.use_package(pkgs, target_pkg)
+      [pkgs] -> ExLisp.Package.use_package(pkgs)
+      pkgs -> ExLisp.Package.use_package(pkgs)
+    end
+  end
+  def use_package(pkgs), do: ExLisp.Package.use_package(pkgs)
+  def use_package(pkgs, target_pkg), do: ExLisp.Package.use_package(pkgs, target_pkg)
+
+  def unuse_package(args) when is_list(args) do
+    case args do
+      [pkgs, target_pkg | _] -> ExLisp.Package.unuse_package(pkgs, target_pkg)
+      [pkgs] -> ExLisp.Package.unuse_package(pkgs)
+      pkgs -> ExLisp.Package.unuse_package(pkgs)
+    end
+  end
+  def unuse_package(pkgs), do: ExLisp.Package.unuse_package(pkgs)
+  def unuse_package(pkgs, target_pkg), do: ExLisp.Package.unuse_package(pkgs, target_pkg)
+
+  def intern(args) when is_list(args) do
+    case args do
+      [name, pkg | _] -> ExLisp.Package.intern(name, pkg)
+      [name] -> ExLisp.Package.intern(name)
+      name -> ExLisp.Package.intern(name)
+    end
+  end
+  def intern(name), do: ExLisp.Package.intern(name)
+  def intern(name, pkg), do: ExLisp.Package.intern(name, pkg)
+
+  def find_symbol(args) when is_list(args) do
+    case args do
+      [name, pkg | _] -> ExLisp.Package.find_symbol(name, pkg)
+      [name] -> ExLisp.Package.find_symbol(name)
+      name -> ExLisp.Package.find_symbol(name)
+    end
+  end
+  def find_symbol(name), do: ExLisp.Package.find_symbol(name)
+  def find_symbol(name, pkg), do: ExLisp.Package.find_symbol(name, pkg)
+
+  def unintern(args) when is_list(args) do
+    case args do
+      [sym, pkg | _] -> ExLisp.Package.unintern(sym, pkg)
+      [sym] -> ExLisp.Package.unintern(sym)
+      sym -> ExLisp.Package.unintern(sym)
+    end
+  end
+  def unintern(sym), do: ExLisp.Package.unintern(sym)
+  def unintern(sym, pkg), do: ExLisp.Package.unintern(sym, pkg)
+
+  def symbol_package(args) when is_list(args) do
+    case args do
+      [sym | _] -> ExLisp.Package.symbol_package(sym)
+      sym -> ExLisp.Package.symbol_package(sym)
+    end
+  end
+  def symbol_package(sym), do: ExLisp.Package.symbol_package(sym)
+
   def provide(_args), do: :t
   def require(_args), do: :t
 

@@ -218,6 +218,7 @@ defmodule ExLisp.ASDF do
   Loads all `.lisp` files in the system sequentially from the base directory.
   """
   def load_system(system_info, base_dir) do
+    prev_pkg = ExLisp.Package.current_package()
     files = get_load_order(system_info)
 
     Enum.each(files, fn rel_file ->
@@ -235,6 +236,17 @@ defmodule ExLisp.ASDF do
       end
     end)
 
+    # Use package in COMMON-LISP-USER if system matches package
+    sys_name = system_info.name
+    if pkg = ExLisp.Package.find_package(sys_name) do
+      try do
+        ExLisp.Package.use_package(pkg.name, "COMMON-LISP-USER")
+      rescue
+        _ -> :ok
+      end
+    end
+
+    ExLisp.Package.set_current_package(prev_pkg)
     :ok
   end
 

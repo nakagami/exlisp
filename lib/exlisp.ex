@@ -24,6 +24,7 @@ defmodule ExLisp do
 
   defp unwrap_primary_value([:_values_, [first | _]]), do: first
   defp unwrap_primary_value([:_values_, []]), do: nil
+  defp unwrap_primary_value([:_values_, first | _]), do: first
   defp unwrap_primary_value(other), do: other
 
   @doc """

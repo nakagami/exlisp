@@ -986,7 +986,7 @@ defmodule CommonLispTest do
       assert String.starts_with?(Atom.to_string(sym), "var")
 
       assert ExLisp.eval("(symbol-name 'hello)") == "HELLO"
-      assert ExLisp.eval("(symbol-package 'hello)") == :COMMON_LISP_USER
+      assert ExLisp.eval("(package-name (symbol-package 'hello))") == "COMMON-LISP-USER"
     end
 
     test "symbol-value and set" do
@@ -1038,9 +1038,41 @@ defmodule CommonLispTest do
     test "intern, find-symbol, defpackage, in-package" do
       assert ExLisp.eval("(intern \"MY-NEW-SYM\")") == :my_new_sym
       assert ExLisp.eval("(find-symbol \"MY-NEW-SYM\")") == :my_new_sym
-      assert ExLisp.eval("(defpackage :my-pkg)") == :my_pkg
-      assert ExLisp.eval("(in-package :my-pkg)") == :my_pkg
-      assert ExLisp.eval("(find-package :my-pkg)") == :my_pkg
+      assert ExLisp.eval("(package-name (defpackage :my-pkg (:use :cl) (:export :my-func)))") == "MY-PKG"
+      assert ExLisp.eval("(package-name (in-package :my-pkg))") == "MY-PKG"
+      assert ExLisp.eval("(package-name (find-package :my-pkg))") == "MY-PKG"
+      assert ExLisp.eval("(packagep (find-package :my-pkg))") == :t
+    end
+
+    test "defpackage with export, use-package, and package-use-list" do
+      code = """
+      (progn
+        (defpackage :math-pkg
+          (:use :cl)
+          (:export :calc-add :calc-sub)
+          (:nicknames :mp))
+        (list
+          (package-name (find-package :mp))
+          (export 'math-pkg::extra-sym :math-pkg)
+          (multiple-value-list (find-symbol "CALC-ADD" :math-pkg))))
+      """
+      res = ExLisp.eval(code)
+      assert hd(res) == "MATH-PKG"
+      assert List.last(res) == [:calc_add, :external]
+    end
+
+    test "shadow, import, and unexport" do
+      code = """
+      (progn
+        (defpackage :shadow-test-pkg
+          (:use :cl)
+          (:shadow :my-shadow-sym))
+        (shadow 'another-sym :shadow-test-pkg)
+        (package-shadowing-symbols :shadow-test-pkg))
+      """
+      shadows = ExLisp.eval(code)
+      assert :my_shadow_sym in shadows
+      assert :another_sym in shadows
     end
   end
 
