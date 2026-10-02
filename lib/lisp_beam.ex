@@ -2726,10 +2726,12 @@ defmodule LispBeam do
 
   def compile_lambda([params_node | body_nodes], local_env) do
     clean_local_env =
-      Enum.reject(local_env, fn
-        {:__tagbody_local__, _, _, _} -> true
-        _ -> false
+      Enum.map(local_env, fn
+        {:__tagbody_tag__, t, id, _loop_fun} -> {:__tagbody_tag__, t, id, nil}
+        {:__tagbody_local__, _, _, _} -> nil
+        other -> other
       end)
+      |> Enum.reject(&is_nil/1)
       |> MapSet.new()
 
     if has_lambda_list_keywords?(params_node) do
@@ -3635,6 +3637,26 @@ defmodule LispBeam do
                 compile_setq([place, val_node], local_env)
             end
 
+          name when name in [:svref, :_cl_svref_] ->
+            case place_args do
+              [arr_node, idx_node] ->
+                arr_var = :"V_arr_#{System.unique_integer([:positive, :monotonic])}"
+                idx_var = :"V_idx_#{System.unique_integer([:positive, :monotonic])}"
+                val_var = :"V_val_#{System.unique_integer([:positive, :monotonic])}"
+
+                {:block, 1,
+                 [
+                   {:match, 1, {:var, 1, arr_var}, compile_expr(arr_node, local_env)},
+                   {:match, 1, {:var, 1, idx_var}, compile_expr(idx_node, local_env)},
+                   {:match, 1, {:var, 1, val_var}, compile_expr(val_node, local_env)},
+                   {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_svref}},
+                    [{:var, 1, arr_var}, {:var, 1, idx_var}, {:var, 1, val_var}]}
+                 ]}
+
+              _ ->
+                compile_setq([place, val_node], local_env)
+            end
+
           name when name in [:aref, :_cl_aref_, :bit, :_cl_bit_, :sbit, :_cl_sbit_] ->
             case place_args do
               [arr_node, idx_node] ->
@@ -4466,6 +4488,7 @@ defmodule LispBeam do
   def compile_tagbody(elements, local_env) do
     segments = group_tagbody_segments(elements)
     unique_tag = :"__tagbody_#{System.unique_integer([:positive])}"
+    loop_fun_name = :"TagbodyLoop_#{System.unique_integer([:positive, :monotonic])}"
 
     tag_set =
       Enum.map(segments, &elem(&1, 0))
@@ -4475,24 +4498,25 @@ defmodule LispBeam do
     filtered_env =
       Enum.reject(local_env, fn
         {:__tagbody_tag__, t, _} -> MapSet.member?(tag_set, t)
+        {:__tagbody_tag__, t, _, _} -> MapSet.member?(tag_set, t)
         _ -> false
       end)
       |> MapSet.new()
 
     tagbody_env =
       Enum.reduce(tag_set, filtered_env, fn t, acc ->
-        MapSet.put(acc, {:__tagbody_tag__, t, unique_tag})
+        MapSet.put(acc, {:__tagbody_tag__, t, unique_tag, loop_fun_name})
       end)
 
     v_tag = :"V_tag_#{System.unique_integer([:positive])}"
     v_next = :"V_next_#{System.unique_integer([:positive])}"
     v_throw_dest = :"V_throw_dest_#{System.unique_integer([:positive])}"
     v_dest_tag = :"V_dest_tag_#{System.unique_integer([:positive])}"
-    loop_fun_name = :"TagbodyLoop_#{System.unique_integer([:positive, :monotonic])}"
 
     case_clauses =
       Enum.map(segments, fn {tag, expr_nodes, next_tag} ->
-        compiled_exprs = Enum.map(expr_nodes, &compile_expr(&1, tagbody_env))
+        pruned_nodes = prune_after_go(expr_nodes)
+        compiled_exprs = Enum.map(pruned_nodes, &compile_expr(&1, tagbody_env))
 
         next_val =
           if next_tag do
@@ -4501,7 +4525,14 @@ defmodule LispBeam do
             {:atom, 1, :done}
           end
 
-        {:clause, 1, [{:atom, 1, tag}], [], compiled_exprs ++ [next_val]}
+        body_exprs =
+          if ends_with_top_level_go?(pruned_nodes) do
+            compiled_exprs
+          else
+            compiled_exprs ++ [next_val]
+          end
+
+        {:clause, 1, [{:atom, 1, tag}], [], body_exprs}
       end) ++
         [
           {:clause, 1, [{:var, 1, :_}], [], [{:atom, 1, :done}]}
@@ -4561,6 +4592,25 @@ defmodule LispBeam do
     {:call, 1, {:named_fun, 1, loop_fun_name, loop_clauses}, [{:atom, 1, first_tag}]}
   end
 
+  defp prune_after_go(nodes) do
+    Enum.reduce_while(nodes, [], fn node, acc ->
+      if is_top_level_go?(node) do
+        {:halt, [node | acc]}
+      else
+        {:cont, [node | acc]}
+      end
+    end)
+    |> Enum.reverse()
+  end
+
+  defp is_top_level_go?({:list, _pos, [op | _]}), do: extract_symbol_name(op) in [:go, :_cl_go_]
+  defp is_top_level_go?({:quoted, _pos, [op | _]}), do: extract_symbol_name(op) in [:go, :_cl_go_]
+  defp is_top_level_go?([op | _]), do: extract_symbol_name(op) in [:go, :_cl_go_]
+  defp is_top_level_go?(_), do: false
+
+  defp ends_with_top_level_go?([]), do: false
+  defp ends_with_top_level_go?(nodes), do: is_top_level_go?(List.last(nodes))
+
   defp group_tagbody_segments(elements) do
     # Break elements into [{tag, [exprs], next_tag}]
     raw_segments =
@@ -4589,14 +4639,30 @@ defmodule LispBeam do
   def compile_go([tag_node | _], local_env) do
     tag = to_atom_symbol(tag_node)
 
-    target_tagbody_id =
-      Enum.find_value(local_env, fn
-        {:__tagbody_tag__, ^tag, tagbody_id} -> tagbody_id
-        _ -> nil
+    tag_entry =
+      Enum.find(local_env, fn
+        {:__tagbody_tag__, ^tag, _, _} -> true
+        {:__tagbody_tag__, ^tag, _} -> true
+        _ -> false
       end)
 
-    {:call, 1, {:remote, 1, {:atom, 1, :erlang}, {:atom, 1, :throw}},
-     [{:tuple, 1, [{:atom, 1, :lisp_go}, {:atom, 1, target_tagbody_id}, {:atom, 1, tag}]}]}
+    case tag_entry do
+      {:__tagbody_tag__, ^tag, _unique_tag, loop_fun_name}
+      when is_atom(loop_fun_name) and not is_nil(loop_fun_name) ->
+        {:call, 1, {:var, 1, loop_fun_name}, [{:atom, 1, tag}]}
+
+      {:__tagbody_tag__, ^tag, target_tagbody_id, _} ->
+        {:call, 1, {:remote, 1, {:atom, 1, :erlang}, {:atom, 1, :throw}},
+         [{:tuple, 1, [{:atom, 1, :lisp_go}, {:atom, 1, target_tagbody_id}, {:atom, 1, tag}]}]}
+
+      {:__tagbody_tag__, ^tag, target_tagbody_id} ->
+        {:call, 1, {:remote, 1, {:atom, 1, :erlang}, {:atom, 1, :throw}},
+         [{:tuple, 1, [{:atom, 1, :lisp_go}, {:atom, 1, target_tagbody_id}, {:atom, 1, tag}]}]}
+
+      _ ->
+        {:call, 1, {:remote, 1, {:atom, 1, :erlang}, {:atom, 1, :throw}},
+         [{:tuple, 1, [{:atom, 1, :lisp_go}, {:atom, 1, nil}, {:atom, 1, tag}]}]}
+    end
   end
 
   # --- Loops (dotimes, dolist) ---

@@ -3663,10 +3663,10 @@ defmodule ExLisp.Builtins do
     do_mapcar1(ensure_list_arg(other), fn_val, [])
   end
 
-  defp do_mapcar1([], _fn_val, acc), do: Enum.reverse(acc)
+  defp do_mapcar1([], _fn_val, acc), do: :lists.reverse(acc)
 
   defp do_mapcar1([h | t], fn_val, acc) when is_function(fn_val, 1) do
-    do_mapcar1(t, fn_val, [fn_val.(unwrap_mv_primary(h)) | acc])
+    do_mapcar1(t, fn_val, [fn_val.(h) | acc])
   end
 
   defp do_mapcar1([h | t], fn_val, acc) do
@@ -3675,7 +3675,7 @@ defmodule ExLisp.Builtins do
 
   defp do_mapcar_n(lists, fn_val, acc) do
     if Enum.any?(lists, &(&1 == [] or &1 == nil)) do
-      Enum.reverse(acc)
+      :lists.reverse(acc)
     else
       heads = Enum.map(lists, fn [h | _] -> h end)
       tails = Enum.map(lists, fn [_ | t] -> t end)
@@ -6834,9 +6834,7 @@ defmodule ExLisp.Builtins do
         tid =
           :ets.new(:lisp_array, [
             :set,
-            :public,
-            {:read_concurrency, true},
-            {:write_concurrency, true}
+            :public
           ])
 
         cond do
@@ -6934,17 +6932,17 @@ defmodule ExLisp.Builtins do
 
   def aref({:array, [_dim], tid}, idx) when is_integer(idx) do
     case :ets.lookup(tid, idx) do
-      [{^idx, val}] ->
+      [{_, val}] ->
         val
 
-      [] ->
+      _ ->
         case :ets.lookup(tid, :__init__) do
-          [{:__init__, default}] ->
+          [{_, default}] ->
             default
 
           _ ->
             case :ets.lookup(tid, :__displaced__) do
-              [{:__displaced__, target, offset}] ->
+              [{_, target, offset}] ->
                 aref(target, offset + idx)
 
               _ ->
@@ -7051,17 +7049,29 @@ defmodule ExLisp.Builtins do
     end
   end
 
+  def set_svref({:array, [_dim], tid}, index, val) when is_integer(index) do
+    :ets.insert(tid, {index, val})
+    val
+  end
+
+  def set_svref(arr, index, val) do
+    set_aref(arr, index, val)
+  end
+
+  def svref([arr, index]), do: svref(arr, index)
+  def svref(_), do: nil
+
   def svref({:array, [_dim], tid}, index) when is_integer(index) do
     case :ets.lookup(tid, index) do
-      [{^index, val}] ->
+      [{_, val}] ->
         val
 
-      [] ->
+      _ ->
         case :ets.lookup(tid, :__init__) do
-          [{:__init__, default}] -> default
-          [] ->
+          [{_, default}] -> default
+          _ ->
             case :ets.lookup(tid, :__meta__) do
-              [{:__meta__, %{initial_element: default}}] -> default
+              [{_, %{initial_element: default}}] -> default
               _ -> nil
             end
         end
@@ -7097,11 +7107,6 @@ defmodule ExLisp.Builtins do
   end
 
   def set_elt(_seq, _index, val), do: val
-
-  def set_svref({:array, [_dim], tid}, index, val) when is_integer(index) do
-    :ets.insert(tid, {index, val})
-    val
-  end
 
   def arrayp([arr]), do: arrayp(arr)
   def arrayp({:array, _, _}), do: :t

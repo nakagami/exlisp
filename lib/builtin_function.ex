@@ -1146,6 +1146,9 @@ defmodule BuiltinFunction do
       {:aref, [arr, idx]} ->
         {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :aref}}, [arr, idx]}
 
+      {:svref, [arr, idx]} ->
+        {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :svref}}, [arr, idx]}
+
       {:mapcar, [f, l]} ->
         {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :mapcar}}, [f, l]}
 
