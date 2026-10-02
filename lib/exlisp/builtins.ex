@@ -4356,7 +4356,7 @@ defmodule ExLisp.Builtins do
             nil
           else
             indices =
-              if from_end, do: Enum.to_list(max_start..0), else: Enum.to_list(0..max_start)
+              if from_end, do: Enum.to_list(max_start..0//-1), else: Enum.to_list(0..max_start)
 
             match_idx =
               Enum.find(indices, fn i ->
