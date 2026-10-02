@@ -37,10 +37,41 @@ defmodule ExLisp.Condition do
 
   def init_condition_hierarchy do
     Enum.each(@condition_classes, fn {name, supers} ->
+      extra_slots =
+        case name do
+          n when n in [:cell_error, :unbound_variable, :undefined_function] ->
+            [[:name, :initarg, :name, :initform, nil]]
+
+          :type_error ->
+            [
+              [:datum, :initarg, :datum, :initform, nil],
+              [:expected_type, :initarg, :expected_type, :initform, nil]
+            ]
+
+          :stream_error ->
+            [[:stream, :initarg, :stream, :initform, nil]]
+
+          :file_error ->
+            [[:pathname, :initarg, :pathname, :initform, nil]]
+
+          :package_error ->
+            [[:package, :initarg, :package, :initform, nil]]
+
+          :arithmetic_error ->
+            [
+              [:operation, :initarg, :operation, :initform, nil],
+              [:operands, :initarg, :operands, :initform, []]
+            ]
+
+          _ ->
+            []
+        end
+
       ExLisp.CLOS.register_class(name, supers, [
         [:format_control, :initarg, :format_control, :initform, ""],
         [:format_arguments, :initarg, :format_arguments, :initform, []],
         [:report_fun, :initarg, :report_fun, :initform, nil]
+        | extra_slots
       ])
     end)
   end
@@ -51,6 +82,7 @@ defmodule ExLisp.Condition do
   Registers a user-defined condition.
   """
   def define_condition(name, parent_types, slots, options \\ []) do
+    init_condition_hierarchy()
     parents =
       cond do
         parent_types == [] or parent_types == nil -> [:condition]
@@ -469,7 +501,20 @@ defmodule ExLisp.Condition do
         handler_fn.(c)
 
       :error, %RuntimeError{message: msg} = ex ->
-        cond_obj = make_condition(:simple_error, [format_control: msg, format_arguments: []])
+        cond_obj =
+          cond do
+            String.starts_with?(msg, "Unbound variable: ") ->
+              var_str = String.replace_prefix(msg, "Unbound variable: ", "")
+              var_sym = try do String.to_atom(var_str) rescue _ -> var_str end
+              make_condition(:unbound_variable, [name: var_sym, format_control: msg, format_arguments: []])
+            String.starts_with?(msg, "Undefined function: ") ->
+              fn_str = String.replace_prefix(msg, "Undefined function: ", "")
+              fn_sym = try do String.to_atom(fn_str) rescue _ -> fn_str end
+              make_condition(:undefined_function, [name: fn_sym, format_control: msg, format_arguments: []])
+            true ->
+              make_condition(:simple_error, [format_control: msg, format_arguments: []])
+          end
+
         matching = Enum.find(clauses, fn {t, _} -> condition_matches_type?(cond_obj, t) end)
         if matching do
           {_t, handler_fn} = matching

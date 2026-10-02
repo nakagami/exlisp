@@ -5755,59 +5755,61 @@ defmodule LispBeam do
   end
 
   def extract_symbol_name({:id, _pos, [name]}) when is_binary(name) do
-    cleaned = clean_uninterned_name(name)
-    if String.starts_with?(cleaned, "|") or String.starts_with?(cleaned, ":|") do
-      String.to_atom(cleaned)
+    if String.starts_with?(name, "|") or String.starts_with?(name, ":|") do
+      String.to_atom(name)
     else
-      String.downcase(cleaned) |> String.to_atom()
+      String.downcase(name) |> String.to_atom()
     end
   end
 
   def extract_symbol_name({:id, _pos, parts}) when is_list(parts) do
     case parts do
       ["#", name] ->
-        clean_uninterned_name(name) |> String.downcase() |> String.to_atom()
+        String.downcase(name) |> String.to_atom()
 
       [sym] when is_atom(sym) ->
-        str = Atom.to_string(sym) |> clean_uninterned_name()
+        str = Atom.to_string(sym)
 
         if String.starts_with?(str, "|") or String.starts_with?(str, ":|") do
-          String.to_atom(str)
+          sym
         else
           str |> String.downcase() |> String.to_atom()
         end
 
       _ ->
-        Enum.join(parts, ".") |> clean_uninterned_name() |> String.downcase() |> String.to_atom()
+        Enum.join(parts, ".") |> String.downcase() |> String.to_atom()
     end
   end
 
   def extract_symbol_name({:lit, atom}) when is_atom(atom) do
-    str = Atom.to_string(atom) |> clean_uninterned_name()
+    str = Atom.to_string(atom)
 
     if String.starts_with?(str, "|") or String.starts_with?(str, ":|") do
-      String.to_atom(str)
+      atom
     else
       str |> String.downcase() |> String.to_atom()
     end
   end
 
+  def extract_symbol_name({:lit, name}) when is_binary(name) do
+    extract_symbol_name(name)
+  end
+
   def extract_symbol_name(atom) when is_atom(atom) do
-    str = Atom.to_string(atom) |> clean_uninterned_name()
+    str = Atom.to_string(atom)
 
     if String.starts_with?(str, "|") or String.starts_with?(str, ":|") do
-      String.to_atom(str)
+      atom
     else
       str |> String.downcase() |> String.to_atom()
     end
   end
 
   def extract_symbol_name(name) when is_binary(name) do
-    cleaned = clean_uninterned_name(name)
-    if String.starts_with?(cleaned, "|") or String.starts_with?(cleaned, ":|") do
-      String.to_atom(cleaned)
+    if String.starts_with?(name, "|") or String.starts_with?(name, ":|") do
+      String.to_atom(name)
     else
-      String.downcase(cleaned) |> String.to_atom()
+      String.downcase(name) |> String.to_atom()
     end
   end
 
@@ -6606,18 +6608,18 @@ defmodule LispBeam do
   defp compile_defpackage(args, local_env) do
     case args do
       [pkg_node | opt_nodes] ->
-        pkg_name = extract_symbol_name(pkg_node) |> to_string() |> String.trim_leading(":")
+        pkg_name = extract_symbol_name(pkg_node) |> to_string() |> clean_uninterned_name() |> String.trim_leading(":")
         opts_ast =
           Enum.map(opt_nodes, fn
             {:list, _, opt_elems} ->
               Enum.map(opt_elems, fn
                 {:keyword, _, kw} -> kw
-                node -> extract_symbol_name(node)
+                node -> extract_symbol_name(node) |> to_string() |> clean_uninterned_name()
               end)
             {:quoted, _, opt_elems} ->
               Enum.map(opt_elems, fn
                 {:keyword, _, kw} -> kw
-                node -> extract_symbol_name(node)
+                node -> extract_symbol_name(node) |> to_string() |> clean_uninterned_name()
               end)
             other ->
               other
@@ -6641,7 +6643,7 @@ defmodule LispBeam do
   defp compile_in_package(args, local_env) do
     case args do
       [pkg_node | _] ->
-        pkg_name = extract_symbol_name(pkg_node) |> to_string() |> String.trim_leading(":")
+        pkg_name = extract_symbol_name(pkg_node) |> to_string() |> clean_uninterned_name() |> String.trim_leading(":")
         try do
           ExLisp.Package.set_current_package(pkg_name)
         rescue

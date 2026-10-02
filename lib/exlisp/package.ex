@@ -778,7 +778,7 @@ defmodule ExLisp.Package do
   defp symbol_to_str(sym) do
     case sym do
       s when is_binary(s) ->
-        clean_uninterned(s) |> String.trim_leading(":") |> String.upcase()
+        clean_uninterned(s) |> String.trim_leading(":") |> String.upcase() |> String.replace("_", "-")
 
       a when is_atom(a) ->
         a |> Atom.to_string() |> clean_uninterned() |> String.trim_leading(":") |> String.upcase() |> String.replace("_", "-")
@@ -787,7 +787,7 @@ defmodule ExLisp.Package do
         n |> clean_uninterned() |> String.trim_leading(":") |> String.upcase() |> String.replace("_", "-")
 
       _ ->
-        to_string(sym) |> clean_uninterned() |> String.trim_leading(":") |> String.upcase()
+        to_string(sym) |> clean_uninterned() |> String.trim_leading(":") |> String.upcase() |> String.replace("_", "-")
     end
   end
 

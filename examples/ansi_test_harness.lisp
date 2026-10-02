@@ -1,5 +1,11 @@
 ;;; ExLisp ANSI-TEST Runner Harness
 
+(unless (find-package "REGRESSION-TEST")
+  (make-package "REGRESSION-TEST" :nicknames '("RT" "RTEST") :use '("COMMON-LISP")))
+
+(unless (find-package "CL-TEST")
+  (make-package "CL-TEST" :use '("COMMON-LISP" "REGRESSION-TEST" "COMMON-LISP-USER")))
+
 (defvar *test-passed-count* 0)
 (defvar *test-failed-count* 0)
 (defvar *test-total-count* 0)

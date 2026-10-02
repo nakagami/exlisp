@@ -8676,6 +8676,27 @@ defmodule ExLisp.Builtins do
 
   def cell_error_name(c) do
     cond do
+      match?({:instance, _, _}, c) ->
+        case ExLisp.CLOS.slot_value(c, :name) do
+          nil ->
+            ctrl = ExLisp.CLOS.slot_value(c, :format_control) || ""
+            cond do
+              String.starts_with?(ctrl, "Unbound variable: ") ->
+                name = String.trim_leading(ctrl, "Unbound variable: ")
+                String.to_atom(name)
+
+              String.starts_with?(ctrl, "Undefined function: ") ->
+                name = String.trim_leading(ctrl, "Undefined function: ")
+                String.to_atom(name)
+
+              true ->
+                nil
+            end
+
+          name ->
+            name
+        end
+
       is_struct(c) and Map.has_key?(c, :message) ->
         msg = c.message
 
