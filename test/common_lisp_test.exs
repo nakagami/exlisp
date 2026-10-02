@@ -933,6 +933,50 @@ defmodule CommonLispTest do
                assert ExLisp.eval("(warn \"Something is wrong ~a\" 123)") == nil
              end) =~ "WARNING: Something is wrong 123"
     end
+
+    test "define-condition and custom conditions" do
+      code = """
+      (progn
+        (define-condition my-calc-error (error)
+          ((val :initarg :val :accessor my-val))
+          (:report (lambda (c s) (format s "Calculation failed with val ~a" (my-val c)))))
+        (handler-case
+          (error 'my-calc-error :val 42)
+          (my-calc-error (c) (my-val c))))
+      """
+      assert ExLisp.eval(code) == 42
+    end
+
+    test "restart-case and invoke-restart" do
+      code = """
+      (defun divide (x y)
+        (restart-case (/ x y)
+          (return-zero () 0)
+          (use-val (v) v)))
+      """
+      ExLisp.eval(code)
+
+      handle_zero = """
+      (handler-bind ((error (lambda (c) (invoke-restart 'return-zero))))
+        (divide 10 0))
+      """
+      assert ExLisp.eval(handle_zero) == 0
+
+      handle_custom = """
+      (handler-bind ((error (lambda (c) (invoke-restart 'use-val 99))))
+        (divide 10 0))
+      """
+      assert ExLisp.eval(handle_custom) == 99
+    end
+
+    test "cerror and continue restart" do
+      code = """
+      (handler-bind ((error (lambda (c) (invoke-restart 'continue))))
+        (cerror "Ignore and proceed" "Division alert")
+        :resumed)
+      """
+      assert ExLisp.eval(code) == :resumed
+    end
   end
 
   describe "Common Lisp Symbols & Packages (gensym, symbol-name, get, setf get, intern, defpackage)" do

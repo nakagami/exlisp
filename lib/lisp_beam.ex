@@ -1003,6 +1003,18 @@ defmodule LispBeam do
       name when name in [:handler_case, :_cl_handler_case_] ->
         compile_handler_case(args, local_env)
 
+      name when name in [:handler_bind, :_cl_handler_bind_] ->
+        compile_handler_bind(args, local_env)
+
+      name when name in [:restart_case, :_cl_restart_case_] ->
+        compile_restart_case(args, local_env)
+
+      name when name in [:restart_bind, :_cl_restart_bind_] ->
+        compile_restart_bind(args, local_env)
+
+      name when name in [:define_condition, :_cl_define_condition_] ->
+        compile_define_condition(args, local_env)
+
       name
       when name in [:declaim, :_cl_declaim_, :proclaim, :_cl_proclaim_, :declare, :_cl_declare_] ->
         {:atom, 1, :t}
@@ -1094,9 +1106,6 @@ defmodule LispBeam do
         end
 
       name when name in [:deftype, :_cl_deftype_] ->
-        {:atom, 1, :t}
-
-      name when name in [:define_condition, :_cl_define_condition_] ->
         {:atom, 1, :t}
 
       name when name in [:the, :_cl_the_] ->
@@ -4057,57 +4066,298 @@ defmodule LispBeam do
      ], []}
   end
 
+  def compile_define_condition([name_node, parents_node | rest_nodes], local_env) do
+    cond_name = extract_symbol_name(name_node)
+
+    parents =
+      case parents_node do
+        {:list, _, p_list} -> Enum.map(p_list, &extract_symbol_name/1)
+        {:quoted, _, p_list} when is_list(p_list) -> Enum.map(p_list, &extract_symbol_name/1)
+        nil -> [:condition]
+        _ -> [extract_symbol_name(parents_node)]
+      end
+
+    slot_nodes =
+      case rest_nodes do
+        [{:list, _pos, slots} | _] -> slots
+        [slots | _] when is_list(slots) -> slots
+        _ -> []
+      end
+
+    raw_slots =
+      Enum.map(slot_nodes, fn
+        {:list, _pos, [s_name_node | s_opts]} ->
+          [extract_symbol_name(s_name_node) | Enum.map(s_opts, &extract_slot_opt_value/1)]
+
+        s_name_node ->
+          extract_symbol_name(s_name_node)
+      end)
+
+    options_nodes =
+      case rest_nodes do
+        [_slots | opts] -> opts
+        _ -> []
+      end
+
+    raw_opts =
+      Enum.map(options_nodes, fn
+        {:list, _pos, [opt_k | opt_v]} ->
+          [extract_symbol_name(opt_k) | Enum.map(opt_v, &extract_slot_opt_value/1)]
+
+        opt ->
+          extract_symbol_name(opt)
+      end)
+
+    try do
+      ExLisp.Condition.define_condition(cond_name, parents, raw_slots, raw_opts)
+    rescue
+      _ -> :ok
+    end
+
+    {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Condition}, {:atom, 1, :define_condition}},
+     [
+       {:atom, 1, cond_name},
+       ast_cons_list(Enum.map(parents, &{:atom, 1, &1})),
+       compile_raw_slots_ast(slot_nodes, local_env)
+     ]}
+  end
+
+  def compile_handler_bind([bindings_node | body_nodes], local_env) do
+    binding_pairs =
+      case bindings_node do
+        {:list, _, list} -> list
+        {:quoted, _, list} when is_list(list) -> list
+        list when is_list(list) -> list
+        _ -> []
+      end
+
+    handlers_ast =
+      Enum.map(binding_pairs, fn
+        {:list, _, [type_node, fn_node | _]} ->
+          type_name = extract_symbol_name(type_node)
+          compiled_fn = compile_expr(fn_node, local_env)
+          {:tuple, 1, [{:atom, 1, type_name}, compiled_fn]}
+
+        [type_node, fn_node | _] ->
+          type_name = extract_symbol_name(type_node)
+          compiled_fn = compile_expr(fn_node, local_env)
+          {:tuple, 1, [{:atom, 1, type_name}, compiled_fn]}
+
+        _ ->
+          nil
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    handlers_list_ast = ast_cons_list(handlers_ast)
+    body_exprs = if body_nodes == [], do: [{:atom, 1, nil}], else: Enum.map(body_nodes, &compile_expr(&1, local_env))
+    body_fun = {:fun, 1, {:clauses, [{:clause, 1, [], [], body_exprs}]}}
+
+    {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Condition}, {:atom, 1, :push_handlers}}, [handlers_list_ast, body_fun]}
+  end
+
   def compile_handler_case([expr_node | clauses], local_env) do
-    compiled_expr = compile_expr(expr_node, local_env)
+    {no_error_clause, normal_clauses} =
+      Enum.split_with(clauses, fn
+        {:list, _, [type_spec | _]} ->
+          extract_symbol_name(type_spec) in [:no_error, :_cl_no_error_, :":no-error"]
 
-    if clauses == [] do
-      compiled_expr
+        [type_spec | _] ->
+          extract_symbol_name(type_spec) in [:no_error, :_cl_no_error_, :":no-error"]
+
+        _ ->
+          false
+      end)
+
+    body_expr = compile_expr(expr_node, local_env)
+    body_fun = {:fun, 1, {:clauses, [{:clause, 1, [], [], [body_expr]}]}}
+
+    clauses_ast =
+      Enum.map(normal_clauses, fn clause ->
+        {type_spec, params_node, handler_body} =
+          case clause do
+            {:list, _, [t, p | b]} -> {t, p, b}
+            [t, p | b] -> {t, p, b}
+            {:list, _, [t]} -> {t, nil, []}
+            [t] -> {t, nil, []}
+          end
+
+        type_name = extract_symbol_name(type_spec)
+
+        err_var_name =
+          case params_node do
+            {:list, _, [v | _]} -> extract_symbol_name(v)
+            v when not is_list(v) and v != nil -> extract_symbol_name(v)
+            _ -> :_
+          end
+
+        erl_err_var = if err_var_name == :_, do: {:var, 1, :_}, else: {:var, 1, erl_var_name(err_var_name)}
+        handler_env = if err_var_name == :_, do: local_env, else: MapSet.put(local_env, err_var_name)
+        handler_exprs = if handler_body == [], do: [{:atom, 1, nil}], else: Enum.map(handler_body, &compile_expr(&1, handler_env))
+        handler_fun = {:fun, 1, {:clauses, [{:clause, 1, [erl_err_var], [], handler_exprs}]}}
+
+        {:tuple, 1, [{:atom, 1, type_name}, handler_fun]}
+      end)
+
+    clauses_list_ast = ast_cons_list(clauses_ast)
+
+    no_error_ast =
+      case no_error_clause do
+        [{:list, _, [_, params_node | noerr_body]}] ->
+          params =
+            case params_node do
+              {:list, _, ps} -> Enum.map(ps, &extract_symbol_name/1)
+              ps when is_list(ps) -> Enum.map(ps, &extract_symbol_name/1)
+              p when not is_nil(p) -> [extract_symbol_name(p)]
+              _ -> []
+            end
+
+          erl_params =
+            case params do
+              [] -> [{:var, 1, :_}]
+              [single] -> [{:var, 1, erl_var_name(single)}]
+              _ -> [{:var, 1, :_}]
+            end
+
+          noerr_env = Enum.reduce(params, local_env, &MapSet.put(&2, &1))
+          noerr_exprs = if noerr_body == [], do: [{:atom, 1, nil}], else: Enum.map(noerr_body, &compile_expr(&1, noerr_env))
+          {:fun, 1, {:clauses, [{:clause, 1, erl_params, [], noerr_exprs}]}}
+
+        _ ->
+          {:atom, 1, nil}
+      end
+
+    {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Condition}, {:atom, 1, :run_handler_case}}, [body_fun, clauses_list_ast, no_error_ast]}
+  end
+
+  def compile_restart_bind([bindings_node | body_nodes], local_env) do
+    binding_pairs =
+      case bindings_node do
+        {:list, _, list} -> list
+        {:quoted, _, list} when is_list(list) -> list
+        list when is_list(list) -> list
+        _ -> []
+      end
+
+    restarts_ast =
+      Enum.map(binding_pairs, fn
+        {:list, _, [name_node, fn_node | _]} ->
+          name = extract_symbol_name(name_node)
+          compiled_fn = compile_expr(fn_node, local_env)
+          {:map, 1, [
+            {:map_field_assoc, 1, {:atom, 1, :name}, {:atom, 1, name}},
+            {:map_field_assoc, 1, {:atom, 1, :fun}, compiled_fn}
+          ]}
+
+        [name_node, fn_node | _] ->
+          name = extract_symbol_name(name_node)
+          compiled_fn = compile_expr(fn_node, local_env)
+          {:map, 1, [
+            {:map_field_assoc, 1, {:atom, 1, :name}, {:atom, 1, name}},
+            {:map_field_assoc, 1, {:atom, 1, :fun}, compiled_fn}
+          ]}
+
+        _ ->
+          nil
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    restarts_list_ast = ast_cons_list(restarts_ast)
+    body_exprs = if body_nodes == [], do: [{:atom, 1, nil}], else: Enum.map(body_nodes, &compile_expr(&1, local_env))
+    body_fun = {:fun, 1, {:clauses, [{:clause, 1, [], [], body_exprs}]}}
+
+    {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Condition}, {:atom, 1, :push_restarts}}, [restarts_list_ast, body_fun]}
+  end
+
+  def compile_restart_case([expr_node | clauses], local_env) do
+    body_expr = compile_expr(expr_node, local_env)
+    body_fun = {:fun, 1, {:clauses, [{:clause, 1, [], [], [body_expr]}]}}
+
+    clauses_ast =
+      Enum.map(clauses, fn clause ->
+        {name_node, params_node, rest_nodes} =
+          case clause do
+            {:list, _, [n, p | r]} -> {n, p, r}
+            [n, p | r] -> {n, p, r}
+            {:list, _, [n]} -> {n, nil, []}
+            [n] -> {n, nil, []}
+          end
+
+        name = extract_symbol_name(name_node)
+        {options, handler_body} = parse_restart_case_options(rest_nodes)
+
+        params =
+          case params_node do
+            {:list, _, ps} -> Enum.map(ps, &extract_symbol_name/1)
+            ps when is_list(ps) -> Enum.map(ps, &extract_symbol_name/1)
+            nil -> []
+            p -> [extract_symbol_name(p)]
+          end
+
+        erl_params = Enum.map(params, fn p -> {:var, 1, erl_var_name(p)} end)
+        handler_env = Enum.reduce(params, local_env, &MapSet.put(&2, &1))
+        handler_exprs = if handler_body == [], do: [{:atom, 1, nil}], else: Enum.map(handler_body, &compile_expr(&1, handler_env))
+        handler_fun = {:fun, 1, {:clauses, [{:clause, 1, erl_params, [], handler_exprs}]}}
+
+        report_ast =
+          case Keyword.get(options, :report) do
+            nil -> {:atom, 1, nil}
+            rep_node when is_binary(rep_node) -> {:bin, 1, [{:bin_element, 1, {:string, 1, :erlang.binary_to_list(rep_node)}, :default, :default}]}
+            rep_node -> compile_expr(rep_node, local_env)
+          end
+
+        test_ast =
+          case Keyword.get(options, :test) do
+            nil -> {:atom, 1, nil}
+            test_node -> compile_expr(test_node, local_env)
+          end
+
+        {:map, 1, [
+          {:map_field_assoc, 1, {:atom, 1, :name}, {:atom, 1, name}},
+          {:map_field_assoc, 1, {:atom, 1, :fun}, handler_fun},
+          {:map_field_assoc, 1, {:atom, 1, :report}, report_ast},
+          {:map_field_assoc, 1, {:atom, 1, :test}, test_ast}
+        ]}
+      end)
+
+    clauses_list_ast = ast_cons_list(clauses_ast)
+
+    {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Condition}, {:atom, 1, :run_restart_case}}, [body_fun, clauses_list_ast]}
+  end
+
+  defp parse_restart_case_options(nodes) do
+    do_parse_restart_opts(nodes, [])
+  end
+
+  defp do_parse_restart_opts([], acc), do: {acc, []}
+  defp do_parse_restart_opts([{:keyword, _, kw_str}, v_node | rest], acc) do
+    norm =
+      kw_str
+      |> String.trim_leading(":")
+      |> String.downcase()
+      |> String.replace("-", "_")
+
+    if norm in ["report", "test", "interactive_function"] do
+      do_parse_restart_opts(rest, [{String.to_atom(norm), v_node} | acc])
     else
-      catch_clauses =
-        Enum.map(clauses, fn
-          {:list, _pos, [_type_spec, params_node | handler_body]} ->
-            err_var_name =
-              case params_node do
-                {:list, _pos, [v | _]} -> extract_symbol_name(v)
-                v when not is_list(v) and v != nil -> extract_symbol_name(v)
-                _ -> :_
-              end
-
-            erl_err_var =
-              if err_var_name == :_,
-                do: {:var, 1, :_},
-                else: {:var, 1, erl_var_name(err_var_name)}
-
-            handler_env =
-              if err_var_name == :_, do: local_env, else: MapSet.put(local_env, err_var_name)
-
-            compiled_handler =
-              case handler_body do
-                [] -> [{:atom, 1, nil}]
-                _ -> Enum.map(handler_body, &compile_expr(&1, handler_env))
-              end
-
-            {:clause, 1,
-             [
-               {:tuple, 1,
-                [
-                  {:var, 1, :_},
-                  erl_err_var,
-                  {:var, 1, :_}
-                ]}
-             ], [], compiled_handler}
-
-          _ ->
-            {:clause, 1,
-             [
-               {:tuple, 1, [{:var, 1, :_}, {:var, 1, :_}, {:var, 1, :_}]}
-             ], [], [{:atom, 1, nil}]}
-        end)
-
-      try_expr = {:try, 1, [compiled_expr], [], catch_clauses, []}
-      {:call, 1, {:fun, 1, {:clauses, [{:clause, 1, [], [], [try_expr]}]}}, []}
+      {acc, [{:keyword, 1, kw_str}, v_node | rest]}
     end
   end
+  defp do_parse_restart_opts([k_node, v_node | rest], acc) do
+    key_sym = extract_symbol_name(k_node)
+    norm =
+      key_sym
+      |> Atom.to_string()
+      |> String.trim_leading(":")
+      |> String.downcase()
+      |> String.replace("-", "_")
+
+    if norm in ["report", "test", "interactive_function"] do
+      do_parse_restart_opts(rest, [{String.to_atom(norm), v_node} | acc])
+    else
+      {acc, [k_node, v_node | rest]}
+    end
+  end
+  defp do_parse_restart_opts(other, acc), do: {acc, other}
 
   def compile_do([bindings_node, test_clause | body_nodes], local_env) do
     bindings = parse_do_bindings(bindings_node)

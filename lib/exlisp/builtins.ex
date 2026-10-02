@@ -767,8 +767,8 @@ defmodule ExLisp.Builtins do
 
   def divide_two([:_values_ | _] = a, b), do: divide_two(unwrap_mv_primary(a), b)
   def divide_two(a, [:_values_ | _] = b), do: divide_two(a, unwrap_mv_primary(b))
-  def divide_two(_a, 0), do: raise(ArithmeticError, "division by zero")
-  def divide_two(_a, %ExLisp.Ratio{numerator: 0}), do: raise(ArithmeticError, "division by zero")
+  def divide_two(_a, 0), do: ExLisp.Condition.error(:division_by_zero, format_control: "division by zero")
+  def divide_two(_a, %ExLisp.Ratio{numerator: 0}), do: ExLisp.Condition.error(:division_by_zero, format_control: "division by zero")
   def divide_two({:complex, r1, i1}, {:complex, r2, i2}) do
     denom = add_two(mul_two(r2, r2), mul_two(i2, i2))
     r = divide_two(add_two(mul_two(r1, r2), mul_two(i1, i2)), denom)
@@ -8196,89 +8196,39 @@ defmodule ExLisp.Builtins do
     end
   end
 
-  def error(msg) do
-    raise RuntimeError, to_string_val(msg)
+  def error(args) when is_list(args) do
+    case args do
+      [datum | rest] -> ExLisp.Condition.error(datum, rest)
+      datum -> ExLisp.Condition.error(datum, [])
+    end
   end
-
-  def error(fmt, a1) do
-    formatted =
-      if is_binary(fmt) and String.contains?(fmt, "~"),
-        do: format(nil, fmt, [a1]),
-        else: "#{to_string_val(fmt)}: #{inspect(a1)}"
-
-    raise RuntimeError, formatted
-  end
-
-  def error(fmt, a1, a2) do
-    formatted =
-      if is_binary(fmt) and String.contains?(fmt, "~"),
-        do: format(nil, fmt, [a1, a2]),
-        else: "#{to_string_val(fmt)} #{inspect(a1)} #{inspect(a2)}"
-
-    raise RuntimeError, formatted
-  end
-
-  def error(fmt, a1, a2, a3) do
-    formatted =
-      if is_binary(fmt) and String.contains?(fmt, "~"),
-        do: format(nil, fmt, [a1, a2, a3]),
-        else: "#{to_string_val(fmt)} #{inspect(a1)} #{inspect(a2)} #{inspect(a3)}"
-
-    raise RuntimeError, formatted
-  end
-
-  def error(fmt, a1, a2, a3, a4) do
-    formatted =
-      if is_binary(fmt) and String.contains?(fmt, "~"),
-        do: format(nil, fmt, [a1, a2, a3, a4]),
-        else: "#{to_string_val(fmt)} #{inspect(a1)} #{inspect(a2)} #{inspect(a3)} #{inspect(a4)}"
-
-    raise RuntimeError, formatted
-  end
-
-  def error(fmt, a1, a2, a3, a4, a5) do
-    formatted =
-      if is_binary(fmt) and String.contains?(fmt, "~"),
-        do: format(nil, fmt, [a1, a2, a3, a4, a5]),
-        else: "#{to_string_val(fmt)} #{inspect([a1, a2, a3, a4, a5])}"
-
-    raise RuntimeError, formatted
-  end
-
-  def error(fmt, a1, a2, a3, a4, a5, a6) do
-    formatted =
-      if is_binary(fmt) and String.contains?(fmt, "~"),
-        do: format(nil, fmt, [a1, a2, a3, a4, a5, a6]),
-        else: "#{to_string_val(fmt)} #{inspect([a1, a2, a3, a4, a5, a6])}"
-
-    raise RuntimeError, formatted
-  end
+  def error(datum), do: ExLisp.Condition.error(datum, [])
+  def error(datum, a1), do: ExLisp.Condition.error(datum, [a1])
+  def error(datum, a1, a2), do: ExLisp.Condition.error(datum, [a1, a2])
+  def error(datum, a1, a2, a3), do: ExLisp.Condition.error(datum, [a1, a2, a3])
+  def error(datum, a1, a2, a3, a4), do: ExLisp.Condition.error(datum, [a1, a2, a3, a4])
+  def error(datum, a1, a2, a3, a4, a5), do: ExLisp.Condition.error(datum, [a1, a2, a3, a4, a5])
+  def error(datum, a1, a2, a3, a4, a5, a6), do: ExLisp.Condition.error(datum, [a1, a2, a3, a4, a5, a6])
 
   def warn(args) when is_list(args) do
-    msg =
-      case args do
-        [fmt | rest] -> format(nil, fmt, rest)
-        _ -> "Warning"
-      end
-
-    IO.puts(:stderr, "WARNING: #{msg}")
-    nil
+    case args do
+      [datum | rest] -> ExLisp.Condition.warn(datum, rest)
+      datum -> ExLisp.Condition.warn(datum, [])
+    end
   end
-
-  def warn(msg), do: warn([msg])
+  def warn(datum), do: ExLisp.Condition.warn(datum, [])
+  def warn(datum, a1), do: ExLisp.Condition.warn(datum, [a1])
+  def warn(datum, a1, a2), do: ExLisp.Condition.warn(datum, [a1, a2])
 
   def cerror(args) when is_list(args) do
     case args do
-      [_continue_fmt, error_fmt | rest] ->
-        formatted = format(nil, error_fmt, rest)
-        raise RuntimeError, formatted
-
-      _ ->
-        raise RuntimeError, "Continuable error"
+      [continue_control, datum | rest] -> ExLisp.Condition.cerror(continue_control, datum, rest)
+      _ -> raise ArgumentError, "cerror requires at least 2 arguments"
     end
   end
-
-  def cerror(_continue_fmt, error_fmt), do: cerror([nil, error_fmt])
+  def cerror(continue_control, datum), do: ExLisp.Condition.cerror(continue_control, datum, [])
+  def cerror(continue_control, datum, a1), do: ExLisp.Condition.cerror(continue_control, datum, [a1])
+  def cerror(continue_control, datum, a1, a2), do: ExLisp.Condition.cerror(continue_control, datum, [a1, a2])
 
   # --- Symbol & package ---
 
@@ -9755,6 +9705,103 @@ defmodule ExLisp.Builtins do
   end
 
   defp parse_quit_code(_), do: 0
+
+  # --- Condition & Restart system ---
+
+  def make_condition(args) when is_list(args) do
+    case args do
+      [type | initargs] -> ExLisp.Condition.make_condition(type, initargs)
+      type -> ExLisp.Condition.make_condition(type, [])
+    end
+  end
+  def make_condition(type), do: ExLisp.Condition.make_condition(type, [])
+
+  def signal(args) when is_list(args) do
+    case args do
+      [datum | rest] -> ExLisp.Condition.signal(datum, rest)
+      datum -> ExLisp.Condition.signal(datum, [])
+    end
+  end
+  def signal(datum), do: ExLisp.Condition.signal(datum, [])
+
+  def find_restart(args) when is_list(args) do
+    case args do
+      [name, condition | _] -> ExLisp.Condition.find_restart(name, condition)
+      [name] -> ExLisp.Condition.find_restart(name)
+      name -> ExLisp.Condition.find_restart(name)
+    end
+  end
+  def find_restart(name), do: ExLisp.Condition.find_restart(name)
+  def find_restart(name, condition), do: ExLisp.Condition.find_restart(name, condition)
+
+  def compute_restarts(args \\ [])
+  def compute_restarts(args) when is_list(args) do
+    case args do
+      [condition | _] -> ExLisp.Condition.compute_restarts(condition)
+      _ -> ExLisp.Condition.compute_restarts(nil)
+    end
+  end
+  def compute_restarts(condition), do: ExLisp.Condition.compute_restarts(condition)
+
+  def invoke_restart(args) when is_list(args) do
+    case args do
+      [restart | rest_args] -> ExLisp.Condition.invoke_restart(restart, rest_args)
+      restart -> ExLisp.Condition.invoke_restart(restart, [])
+    end
+  end
+  def invoke_restart(restart), do: ExLisp.Condition.invoke_restart(restart, [])
+
+  def invoke_restart_interactively(args) when is_list(args) do
+    invoke_restart(args)
+  end
+  def invoke_restart_interactively(restart), do: invoke_restart(restart)
+
+  def abort(args \\ [])
+  def abort(args) when is_list(args) do
+    case args do
+      [condition | _] -> ExLisp.Condition.abort(condition)
+      _ -> ExLisp.Condition.abort(nil)
+    end
+  end
+  def abort(condition), do: ExLisp.Condition.abort(condition)
+
+  def continue(args \\ [])
+  def continue(args) when is_list(args) do
+    case args do
+      [condition | _] -> ExLisp.Condition.continue(condition)
+      _ -> ExLisp.Condition.continue(nil)
+    end
+  end
+  def continue(condition), do: ExLisp.Condition.continue(condition)
+
+  def muffle_warning(args \\ [])
+  def muffle_warning(args) when is_list(args) do
+    case args do
+      [condition | _] -> ExLisp.Condition.muffle_warning(condition)
+      _ -> ExLisp.Condition.muffle_warning(nil)
+    end
+  end
+  def muffle_warning(condition), do: ExLisp.Condition.muffle_warning(condition)
+
+  def store_value(args) when is_list(args) do
+    case args do
+      [val, condition | _] -> ExLisp.Condition.store_value(val, condition)
+      [val] -> ExLisp.Condition.store_value(val, nil)
+      val -> ExLisp.Condition.store_value(val, nil)
+    end
+  end
+  def store_value(val), do: ExLisp.Condition.store_value(val, nil)
+  def store_value(val, condition), do: ExLisp.Condition.store_value(val, condition)
+
+  def use_value(args) when is_list(args) do
+    case args do
+      [val, condition | _] -> ExLisp.Condition.use_value(val, condition)
+      [val] -> ExLisp.Condition.use_value(val, nil)
+      val -> ExLisp.Condition.use_value(val, nil)
+    end
+  end
+  def use_value(val), do: ExLisp.Condition.use_value(val, nil)
+  def use_value(val, condition), do: ExLisp.Condition.use_value(val, condition)
 
   # --- Time functions ---
   def get_internal_real_time do

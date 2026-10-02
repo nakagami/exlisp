@@ -391,16 +391,36 @@ defmodule ExLisp.CLOS do
     inst
   end
 
-  defp parse_initargs_kv(initargs) when is_list(initargs) do
-    Enum.chunk_every(initargs, 2)
-    |> Enum.reduce(%{}, fn
-      [k, v], acc ->
-        norm_k = k |> to_string() |> String.trim_leading(":") |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
-        Map.put(acc, norm_k, v)
-
-      _, acc ->
-        acc
+  defp parse_initargs_kv(initargs) when is_map(initargs) do
+    Enum.reduce(initargs, %{}, fn {k, v}, acc ->
+      norm_k = k |> to_string() |> String.trim_leading(":") |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
+      Map.put(acc, norm_k, v)
     end)
+  end
+
+  defp parse_initargs_kv(initargs) when is_list(initargs) do
+    cond do
+      Keyword.keyword?(initargs) or (initargs != [] and is_tuple(hd(initargs))) ->
+        Enum.reduce(initargs, %{}, fn
+          {k, v}, acc ->
+            norm_k = k |> to_string() |> String.trim_leading(":") |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
+            Map.put(acc, norm_k, v)
+
+          _, acc ->
+            acc
+        end)
+
+      true ->
+        Enum.chunk_every(initargs, 2)
+        |> Enum.reduce(%{}, fn
+          [k, v], acc ->
+            norm_k = k |> to_string() |> String.trim_leading(":") |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
+            Map.put(acc, norm_k, v)
+
+          _, acc ->
+            acc
+        end)
+    end
   end
   defp parse_initargs_kv(_), do: %{}
 
