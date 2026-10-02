@@ -629,21 +629,85 @@ defmodule CommonLispTest do
               (svref v 1)
               (aref arr 0 2)
               (array-dimensions arr)
-              (array-total-size arr)))
+              (array-dimension arr 1)
+              (array-rank arr)
+              (array-total-size arr)
+              (array-in-bounds-p arr 0 2)
+              (array-in-bounds-p arr 2 0)))
       """
 
-      assert ExLisp.eval(code) == [:t, :t, 99, 77, [2, 3], 6]
+      assert ExLisp.eval(code) == [:t, :t, 99, 77, [2, 3], 3, 2, 6, :t, nil]
     end
 
-    test "vector fill-pointer and push/pop" do
+    test "multi-dimensional row-major indexing and setf" do
       code = """
-      (let ((v (make-array 5 :fill-pointer 0 :adjustable t)))
-        (vector-push 10 v)
-        (vector-push 20 v)
-        (list (svref v 0) (svref v 1) (vector-pop v)))
+      (let ((arr (make-array '(2 3) :initial-contents '((1 2 3) (4 5 6)))))
+        (let ((idx (array-row-major-index arr 1 1))
+              (val1 (row-major-aref arr 4)))
+          (setf (row-major-aref arr 4) 99)
+          (list idx val1 (aref arr 1 1) (row-major-aref arr 4))))
       """
 
-      assert ExLisp.eval(code) == [10, 20, 20]
+      assert ExLisp.eval(code) == [4, 5, 99, 99]
+    end
+
+    test "vector fill-pointer, adjustable and vector-push-extend" do
+      code = """
+      (let ((v (make-array 2 :fill-pointer 0 :adjustable t)))
+        (vector-push 10 v)
+        (vector-push 20 v)
+        (vector-push-extend 30 v 5)
+        (list (fill-pointer v)
+              (array-has-fill-pointer-p v)
+              (adjustable-array-p v)
+              (svref v 0)
+              (svref v 1)
+              (svref v 2)
+              (vector-pop v)
+              (fill-pointer v)))
+      """
+
+      assert ExLisp.eval(code) == [3, :t, :t, 10, 20, 30, 30, 2]
+    end
+
+    test "bit vectors and bit array operations" do
+      code = """
+      (let ((b1 (make-array 4 :element-type 'bit :initial-contents '(1 0 1 0)))
+            (b2 (make-array 4 :element-type 'bit :initial-contents '(1 1 0 0))))
+        (let ((band (bit-and b1 b2))
+              (bior (bit-ior b1 b2))
+              (bxor (bit-xor b1 b2))
+              (bnot (bit-not b1)))
+          (list (bit-vector-p b1)
+                (list (aref band 0) (aref band 1) (aref band 2) (aref band 3))
+                (list (aref bior 0) (aref bior 1) (aref bior 2) (aref bior 3))
+                (list (aref bxor 0) (aref bxor 1) (aref bxor 2) (aref bxor 3))
+                (list (aref bnot 0) (aref bnot 1) (aref bnot 2) (aref bnot 3)))))
+      """
+
+      assert ExLisp.eval(code) == [
+               :t,
+               [1, 0, 0, 0],
+               [1, 1, 1, 0],
+               [0, 1, 1, 0],
+               [0, 1, 0, 1]
+             ]
+    end
+
+    test "array displacement and element type" do
+      code = """
+      (let* ((source (make-array 6 :initial-contents '(10 20 30 40 50 60)))
+             (disp (make-array '(2 2) :displaced-to source :displaced-index-offset 2)))
+        (list (aref disp 0 0)
+              (aref disp 1 1)
+              (array-element-type source)
+              (multiple-value-list (array-displacement disp))))
+      """
+
+      res = ExLisp.eval(code)
+      assert Enum.take(res, 3) == [30, 60, :t]
+      # multiple values returned
+      assert match?([{:array, _, _}, 2], List.last(res))
     end
   end
 

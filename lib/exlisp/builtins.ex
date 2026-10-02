@@ -2251,6 +2251,7 @@ defmodule ExLisp.Builtins do
     end
   end
 
+  def bit_vector_p([arr]), do: bit_vector_p(arr)
   def bit_vector_p({:array, [_], tid}) do
     case :ets.lookup(tid, :__meta__) do
       [{:__meta__, meta}] ->
@@ -2264,6 +2265,7 @@ defmodule ExLisp.Builtins do
 
   def bit_vector_p(_), do: nil
 
+  def simple_bit_vector_p([arr]), do: simple_bit_vector_p(arr)
   def simple_bit_vector_p({:array, [_], tid}) do
     case :ets.lookup(tid, :__meta__) do
       [{:__meta__, meta}] ->
@@ -2282,56 +2284,6 @@ defmodule ExLisp.Builtins do
   end
 
   def simple_bit_vector_p(_), do: nil
-
-  def array_element_type({:array, _, tid}) do
-    case :ets.lookup(tid, :__meta__) do
-      [{:__meta__, meta}] -> Map.get(meta, :element_type, :t)
-      _ -> :t
-    end
-  end
-
-  def array_element_type(s) when is_binary(s), do: :character
-  def array_element_type(_), do: :t
-
-  def array_rank({:array, dims, _}), do: Kernel.length(dims)
-  def array_rank(s) when is_binary(s), do: 1
-  def array_rank(_), do: 0
-
-  def array_displacement({:array, _, tid}) do
-    case :ets.lookup(tid, :__meta__) do
-      [{:__meta__, %{displaced_to: target, displaced_index_offset: offset}}] ->
-        [:_values_, [target, offset]]
-
-      [{:__meta__, %{displaced_to: target}}] ->
-        [:_values_, [target, 0]]
-
-      _ ->
-        [:_values_, [nil, 0]]
-    end
-  end
-
-  def array_displacement(_), do: [:_values_, [nil, 0]]
-
-  def array_row_major_index(args) when is_list(args) do
-    case args do
-      [{:array, dims, _} | indices] ->
-        flat_indices =
-          case indices do
-            [single] when is_list(single) -> single
-            _ -> indices
-          end
-
-        compute_flat_index(dims, flat_indices)
-
-      [s, idx] when is_binary(s) and is_integer(idx) ->
-        idx
-
-      _ ->
-        0
-    end
-  end
-
-  def array_row_major_index(arr, idx), do: array_row_major_index([arr, idx])
 
   def bit(arr, idx), do: aref(arr, idx)
   def bit(args) when is_list(args), do: aref(args)
@@ -7151,12 +7103,15 @@ defmodule ExLisp.Builtins do
     val
   end
 
+  def arrayp([arr]), do: arrayp(arr)
   def arrayp({:array, _, _}), do: :t
   def arrayp(_), do: nil
 
+  def vectorp([arr]), do: vectorp(arr)
   def vectorp({:array, [_], _}), do: :t
   def vectorp(_), do: nil
 
+  def simple_vector_p([arr]), do: simple_vector_p(arr)
   def simple_vector_p({:array, [_], tid}) do
     case :ets.lookup(tid, :__meta__) do
       [{:__meta__, meta}] ->
@@ -7174,14 +7129,133 @@ defmodule ExLisp.Builtins do
 
   def simple_vector_p(_), do: nil
 
+  def array_dimensions([arr]), do: array_dimensions(arr)
   def array_dimensions({:array, dims, _}), do: dims
   def array_dimensions(_), do: nil
 
+  def array_dimension([arr, axis]), do: array_dimension(arr, axis)
   def array_dimension({:array, dims, _}, axis) when is_integer(axis) do
     Enum.at(dims, axis)
   end
 
   def array_dimension(_, _), do: nil
+
+  def array_rank([arr]), do: array_rank(arr)
+  def array_rank({:array, dims, _}), do: length(dims)
+  def array_rank(_), do: 0
+
+  def array_in_bounds_p([{:array, dims, _} | indices]) do
+    flat_indices =
+      case indices do
+        [single] when is_list(single) -> single
+        _ -> indices
+      end
+
+    if length(dims) == length(flat_indices) and
+         Enum.zip(flat_indices, dims) |> Enum.all?(fn {i, d} -> is_integer(i) and i >= 0 and i < d end) do
+      :t
+    else
+      nil
+    end
+  end
+
+  def array_in_bounds_p({:array, dims, _}, indices) when is_list(indices) do
+    if length(dims) == length(indices) and
+         Enum.zip(indices, dims) |> Enum.all?(fn {i, d} -> is_integer(i) and i >= 0 and i < d end) do
+      :t
+    else
+      nil
+    end
+  end
+
+  def array_in_bounds_p({:array, [_dim], _} = arr, idx) when is_integer(idx) do
+    array_in_bounds_p(arr, [idx])
+  end
+
+  def array_in_bounds_p(_arr, _), do: nil
+
+  def array_row_major_index([{:array, dims, _} | subscripts]) do
+    flat_subs =
+      case subscripts do
+        [single] when is_list(single) -> single
+        _ -> subscripts
+      end
+
+    compute_flat_index(dims, flat_subs)
+  end
+
+  def array_row_major_index({:array, dims, _}, subscripts) when is_list(subscripts) do
+    compute_flat_index(dims, subscripts)
+  end
+
+  def array_row_major_index({:array, [_dim], _}, idx) when is_integer(idx), do: idx
+  def array_row_major_index(_, _), do: 0
+
+  def row_major_aref({:array, _dims, tid} = _arr, idx) when is_integer(idx) do
+    case :ets.lookup(tid, idx) do
+      [{^idx, val}] ->
+        val
+
+      [] ->
+        case :ets.lookup(tid, :__init__) do
+          [{:__init__, default}] ->
+            default
+
+          [] ->
+            case :ets.lookup(tid, :__displaced__) do
+              [{:__displaced__, target, offset}] ->
+                aref(target, offset + idx)
+
+              [] ->
+                case :ets.lookup(tid, :__meta__) do
+                  [{:__meta__, %{initial_element: default}}] ->
+                    default
+
+                  _ ->
+                    nil
+                end
+            end
+        end
+    end
+  end
+
+  def row_major_aref([arr, idx]), do: row_major_aref(arr, idx)
+
+  def set_row_major_aref({:array, _dims, tid} = _arr, idx, val) when is_integer(idx) do
+    case :ets.lookup(tid, :__displaced__) do
+      [{:__displaced__, {:array, _, _} = target, offset}] ->
+        set_aref(target, offset + idx, val)
+
+      _ ->
+        :ets.insert(tid, {idx, val})
+        val
+    end
+  end
+
+  def set_row_major_aref([arr, idx], val), do: set_row_major_aref(arr, idx, val)
+
+  def array_element_type({:array, _, tid}) do
+    case :ets.lookup(tid, :__meta__) do
+      [{:__meta__, %{element_type: elem_type}}] -> elem_type
+      _ -> :t
+    end
+  end
+
+  def array_element_type([arr]), do: array_element_type(arr)
+  def array_element_type(_), do: :t
+
+  def array_displacement({:array, _, tid}) do
+    case :ets.lookup(tid, :__meta__) do
+      [{:__meta__, %{displaced_to: target, displaced_index_offset: offset}}] when not is_nil(target) ->
+        [:_values_, [target, offset || 0]]
+
+      _ ->
+        [:_values_, [nil, 0]]
+    end
+  end
+
+  def array_displacement([arr]), do: array_displacement(arr)
+  def array_displacement(_), do: [:_values_, [nil, 0]]
 
   def array_total_size({:array, dims, _}) do
     Enum.reduce(dims, 1, &Kernel.*/2)
@@ -7201,10 +7275,11 @@ defmodule ExLisp.Builtins do
     end
   end
 
-  def vector_push_extend(val, {:array, [max_dim], tid} = arr) do
+  def vector_push_extend(val, {:array, [max_dim], tid} = arr, extension \\ nil) do
     case :ets.lookup(tid, :__meta__) do
       [{:__meta__, %{fill_pointer: fp, adjustable: true} = meta}] when is_integer(fp) ->
-        new_max = if fp >= max_dim, do: max(max_dim * 2, fp + 1), else: max_dim
+        ext = if is_integer(extension) and extension > 0, do: extension, else: max(max_dim, 1)
+        new_max = if fp >= max_dim, do: max_dim + ext, else: max_dim
         :ets.insert(tid, {fp, val})
         :ets.insert(tid, {:__meta__, %{meta | dimensions: [new_max], fill_pointer: fp + 1}})
         fp
@@ -7213,6 +7288,9 @@ defmodule ExLisp.Builtins do
         vector_push(val, arr)
     end
   end
+
+  def vector_push_extend([val, arr]), do: vector_push_extend(val, arr)
+  def vector_push_extend([val, arr, extension]), do: vector_push_extend(val, arr, extension)
 
   def vector_pop({:array, [_], tid}) do
     case :ets.lookup(tid, :__meta__) do
@@ -7304,6 +7382,7 @@ defmodule ExLisp.Builtins do
 
   def coerce(object, result_type), do: coerce([object, result_type])
 
+  def fill_pointer([arr]), do: fill_pointer(arr)
   def fill_pointer({:array, _, tid}) do
     case :ets.lookup(tid, :__meta__) do
       [{:__meta__, %{fill_pointer: fp}}] when is_integer(fp) -> fp
@@ -7311,6 +7390,7 @@ defmodule ExLisp.Builtins do
     end
   end
 
+  def set_fill_pointer([arr, fp]), do: set_fill_pointer(arr, fp)
   def set_fill_pointer({:array, _, tid}, fp) when is_integer(fp) do
     case :ets.lookup(tid, :__meta__) do
       [{:__meta__, meta}] ->
@@ -7322,6 +7402,7 @@ defmodule ExLisp.Builtins do
     end
   end
 
+  def array_has_fill_pointer_p([arr]), do: array_has_fill_pointer_p(arr)
   def array_has_fill_pointer_p({:array, _, tid}) do
     case :ets.lookup(tid, :__meta__) do
       [{:__meta__, %{fill_pointer: fp}}] when not is_nil(fp) -> :t
@@ -7331,6 +7412,7 @@ defmodule ExLisp.Builtins do
 
   def array_has_fill_pointer_p(_), do: nil
 
+  def adjustable_array_p([arr]), do: adjustable_array_p(arr)
   def adjustable_array_p({:array, _, tid}) do
     case :ets.lookup(tid, :__meta__) do
       [{:__meta__, %{adjustable: true}}] -> :t
@@ -7339,6 +7421,148 @@ defmodule ExLisp.Builtins do
   end
 
   def adjustable_array_p(_), do: nil
+
+  # --- Bit vector / Bit array operations ---
+
+  defp bit_op_2(op_fn, bit_arr1, bit_arr2, opt_arg) do
+    total1 = array_total_size(bit_arr1)
+    dims1 = array_dimensions(bit_arr1)
+
+    dest =
+      cond do
+        opt_arg == :t -> bit_arr1
+        match?({:array, _, _}, opt_arg) -> opt_arg
+        true -> make_array([dims1, :element_type, :bit])
+      end
+
+    for idx <- 0..(total1 - 1) do
+      b1 = row_major_aref(bit_arr1, idx) || 0
+      b2 = row_major_aref(bit_arr2, idx) || 0
+      res_bit = op_fn.(b1, b2)
+      set_row_major_aref(dest, idx, res_bit)
+    end
+
+    dest
+  end
+
+  def bit_and(a, b), do: bit_op_2(fn x, y -> Bitwise.band(x, y) end, a, b, nil)
+  def bit_and(a, b, opt) when not is_list(a), do: bit_op_2(fn x, y -> Bitwise.band(x, y) end, a, b, opt)
+  def bit_and(args) when is_list(args) do
+    case args do
+      [a, b] -> bit_and(a, b)
+      [a, b, opt] -> bit_and(a, b, opt)
+    end
+  end
+
+  def bit_ior(a, b), do: bit_op_2(fn x, y -> Bitwise.bor(x, y) end, a, b, nil)
+  def bit_ior(a, b, opt) when not is_list(a), do: bit_op_2(fn x, y -> Bitwise.bor(x, y) end, a, b, opt)
+  def bit_ior(args) when is_list(args) do
+    case args do
+      [a, b] -> bit_ior(a, b)
+      [a, b, opt] -> bit_ior(a, b, opt)
+    end
+  end
+
+  def bit_xor(a, b), do: bit_op_2(fn x, y -> Bitwise.bxor(x, y) end, a, b, nil)
+  def bit_xor(a, b, opt) when not is_list(a), do: bit_op_2(fn x, y -> Bitwise.bxor(x, y) end, a, b, opt)
+  def bit_xor(args) when is_list(args) do
+    case args do
+      [a, b] -> bit_xor(a, b)
+      [a, b, opt] -> bit_xor(a, b, opt)
+    end
+  end
+
+  def bit_eqv(a, b), do: bit_op_2(fn x, y -> if(x == y, do: 1, else: 0) end, a, b, nil)
+  def bit_eqv(a, b, opt) when not is_list(a), do: bit_op_2(fn x, y -> if(x == y, do: 1, else: 0) end, a, b, opt)
+  def bit_eqv(args) when is_list(args) do
+    case args do
+      [a, b] -> bit_eqv(a, b)
+      [a, b, opt] -> bit_eqv(a, b, opt)
+    end
+  end
+
+  def bit_nand(a, b), do: bit_op_2(fn x, y -> 1 - Bitwise.band(x, y) end, a, b, nil)
+  def bit_nand(a, b, opt) when not is_list(a), do: bit_op_2(fn x, y -> 1 - Bitwise.band(x, y) end, a, b, opt)
+  def bit_nand(args) when is_list(args) do
+    case args do
+      [a, b] -> bit_nand(a, b)
+      [a, b, opt] -> bit_nand(a, b, opt)
+    end
+  end
+
+  def bit_nor(a, b), do: bit_op_2(fn x, y -> 1 - Bitwise.bor(x, y) end, a, b, nil)
+  def bit_nor(a, b, opt) when not is_list(a), do: bit_op_2(fn x, y -> 1 - Bitwise.bor(x, y) end, a, b, opt)
+  def bit_nor(args) when is_list(args) do
+    case args do
+      [a, b] -> bit_nor(a, b)
+      [a, b, opt] -> bit_nor(a, b, opt)
+    end
+  end
+
+  def bit_andc1(a, b), do: bit_op_2(fn x, y -> Bitwise.band(1 - x, y) end, a, b, nil)
+  def bit_andc1(a, b, opt) when not is_list(a), do: bit_op_2(fn x, y -> Bitwise.band(1 - x, y) end, a, b, opt)
+  def bit_andc1(args) when is_list(args) do
+    case args do
+      [a, b] -> bit_andc1(a, b)
+      [a, b, opt] -> bit_andc1(a, b, opt)
+    end
+  end
+
+  def bit_andc2(a, b), do: bit_op_2(fn x, y -> Bitwise.band(x, 1 - y) end, a, b, nil)
+  def bit_andc2(a, b, opt) when not is_list(a), do: bit_op_2(fn x, y -> Bitwise.band(x, 1 - y) end, a, b, opt)
+  def bit_andc2(args) when is_list(args) do
+    case args do
+      [a, b] -> bit_andc2(a, b)
+      [a, b, opt] -> bit_andc2(a, b, opt)
+    end
+  end
+
+  def bit_orc1(a, b), do: bit_op_2(fn x, y -> Bitwise.bor(1 - x, y) end, a, b, nil)
+  def bit_orc1(a, b, opt) when not is_list(a), do: bit_op_2(fn x, y -> Bitwise.bor(1 - x, y) end, a, b, opt)
+  def bit_orc1(args) when is_list(args) do
+    case args do
+      [a, b] -> bit_orc1(a, b)
+      [a, b, opt] -> bit_orc1(a, b, opt)
+    end
+  end
+
+  def bit_orc2(a, b), do: bit_op_2(fn x, y -> Bitwise.bor(x, 1 - y) end, a, b, nil)
+  def bit_orc2(a, b, opt) when not is_list(a), do: bit_op_2(fn x, y -> Bitwise.bor(x, 1 - y) end, a, b, opt)
+  def bit_orc2(args) when is_list(args) do
+    case args do
+      [a, b] -> bit_orc2(a, b)
+      [a, b, opt] -> bit_orc2(a, b, opt)
+    end
+  end
+
+  def bit_not(bit_arr_or_args) when is_list(bit_arr_or_args) do
+    case bit_arr_or_args do
+      [a] -> bit_not(a, nil)
+      [a, opt] -> bit_not(a, opt)
+      _ -> nil
+    end
+  end
+
+  def bit_not(bit_arr), do: bit_not(bit_arr, nil)
+
+  def bit_not(bit_arr, opt_arg) do
+    total = array_total_size(bit_arr)
+    dims = array_dimensions(bit_arr)
+
+    dest =
+      cond do
+        opt_arg == :t -> bit_arr
+        match?({:array, _, _}, opt_arg) -> opt_arg
+        true -> make_array([dims, :element_type, :bit])
+      end
+
+    for idx <- 0..(total - 1) do
+      b = row_major_aref(bit_arr, idx) || 0
+      set_row_major_aref(dest, idx, 1 - b)
+    end
+
+    dest
+  end
 
   defp compute_flat_index(dims, indices) do
     Enum.zip(indices, dims)

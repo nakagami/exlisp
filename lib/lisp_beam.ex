@@ -3615,6 +3615,26 @@ defmodule LispBeam do
                 compile_setq([place, val_node], local_env)
             end
 
+          name when name in [:row_major_aref, :_cl_row_major_aref_, :"row-major-aref"] ->
+            case place_args do
+              [arr_node, idx_node] ->
+                arr_var = :"V_arr_#{System.unique_integer([:positive, :monotonic])}"
+                idx_var = :"V_idx_#{System.unique_integer([:positive, :monotonic])}"
+                val_var = :"V_val_#{System.unique_integer([:positive, :monotonic])}"
+
+                {:block, 1,
+                 [
+                   {:match, 1, {:var, 1, arr_var}, compile_expr(arr_node, local_env)},
+                   {:match, 1, {:var, 1, idx_var}, compile_expr(idx_node, local_env)},
+                   {:match, 1, {:var, 1, val_var}, compile_expr(val_node, local_env)},
+                   {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_row_major_aref}},
+                    [{:var, 1, arr_var}, {:var, 1, idx_var}, {:var, 1, val_var}]}
+                 ]}
+
+              _ ->
+                compile_setq([place, val_node], local_env)
+            end
+
           name when name in [:aref, :_cl_aref_, :bit, :_cl_bit_, :sbit, :_cl_sbit_] ->
             case place_args do
               [arr_node, idx_node] ->
