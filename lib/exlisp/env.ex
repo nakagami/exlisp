@@ -13,6 +13,7 @@ defmodule ExLisp.Env do
   def ensure_env do
     ensure_table(@history_table)
     ensure_table(@keywords_table)
+    ExLisp.CLOS.ensure_tables()
 
     if not :persistent_term.get(:exlisp_code_paths_initialized, false) do
       ensure_code_paths()
@@ -92,6 +93,8 @@ defmodule ExLisp.Env do
     rescue
       _ -> :ok
     end
+
+    ExLisp.CLOS.reset()
 
     :ok
   end
@@ -432,77 +435,16 @@ defmodule ExLisp.Env do
   """
   def register_method(name, types, fun)
       when is_atom(name) and is_list(types) and is_function(fun) do
+    register_method(name, nil, types, fun)
+  end
+
+  def register_method(name, qualifier, types, fun)
+      when is_atom(name) and is_list(types) and is_function(fun) do
     ensure_env()
     fun_name = normalize_name(name)
-    key = {:exlisp_generic_methods, fun_name}
-
-    current_methods =
-      case :ets.lookup(@history_table, key) do
-        [{^key, methods}] -> methods
-        _ -> []
-      end
-
-    updated_methods =
-      [{types, fun} | Enum.reject(current_methods, fn {t, _} -> t == types end)]
-      |> Enum.sort_by(fn {t_list, _} ->
-        Enum.count(t_list, fn t -> t == :t or t == :_ end)
-      end)
-
-    :ets.insert(@history_table, {key, updated_methods})
-
-    dispatcher = fn args ->
-      case find_matching_method(updated_methods, args) do
-        {:ok, method_fun} ->
-          if is_function(method_fun, length(args)) do
-            apply(method_fun, args)
-          else
-            method_fun.(args)
-          end
-
-        :error ->
-          raise RuntimeError,
-                "No applicable method for #{inspect(fun_name)} with arguments #{inspect(args)}"
-      end
-    end
-
-    closure = %ExLisp.Closure{
-      fun: dispatcher,
-      name: fun_name,
-      variadic: true
-    }
-
-    put_fun(fun_name, closure)
+    ExLisp.CLOS.register_method(fun_name, qualifier, types, fun)
     fun_name
   end
-
-  defp find_matching_method(methods, args) do
-    Enum.find_value(methods, :error, fn {types, fun} ->
-      if method_matches?(types, args) do
-        {:ok, fun}
-      else
-        nil
-      end
-    end)
-  end
-
-  defp method_matches?(types, args) do
-    if length(types) == length(args) do
-      Enum.zip(types, args)
-      |> Enum.all?(fn {type, arg} -> type_matches?(type, arg) end)
-    else
-      false
-    end
-  end
-
-  defp type_matches?(:t, _arg), do: true
-  defp type_matches?(:_, _arg), do: true
-  defp type_matches?(t, arg) when t in [:integer, :fixnum, :bignum], do: is_integer(arg)
-  defp type_matches?(:float, arg), do: is_float(arg)
-  defp type_matches?(:number, arg), do: is_number(arg) or is_struct(arg, ExLisp.Ratio)
-  defp type_matches?(t, arg) when t in [:list, :cons], do: is_list(arg)
-  defp type_matches?(t, arg) when t in [:atom, :symbol], do: is_atom(arg) and not is_nil(arg)
-  defp type_matches?(:string, arg), do: is_binary(arg)
-  defp type_matches?(_other, _arg), do: true
 
   @doc """
   Deletes a function (for fmakunbound).

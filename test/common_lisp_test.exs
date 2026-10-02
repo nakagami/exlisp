@@ -751,6 +751,155 @@ defmodule CommonLispTest do
 
       assert ExLisp.eval(code) == "Hello, World!"
     end
+
+    test "CLOS class inheritance, slot initform, initarg, and accessors" do
+      code = """
+      (progn
+        (defclass vehicle ()
+          ((speed :accessor vehicle-speed :initarg :speed :initform 0)))
+
+        (defclass car (vehicle)
+          ((wheels :reader car-wheels :initform 4)
+           (model :accessor car-model :initarg :model :initform "Generic")))
+
+        (let ((c (make-instance 'car :speed 60 :model "Sedan")))
+          (setf (vehicle-speed c) 100)
+          (list (vehicle-speed c)
+                (car-wheels c)
+                (car-model c)
+                (typep c 'car)
+                (typep c 'vehicle)
+                (if (subtypep 'car 'vehicle) t nil)
+                (class-of c))))
+      """
+
+      assert ExLisp.eval(code) == [100, 4, "Sedan", :t, :t, :t, :car]
+    end
+
+    test "CLOS method combination: :before, :after, :around, and primary" do
+      code = """
+      (progn
+        (defparameter *trace-log* '())
+        (defgeneric process-data (obj))
+
+        (defmethod process-data ((x integer))
+          (setf *trace-log* (cons "primary-integer" *trace-log*))
+          (* x 2))
+
+        (defmethod process-data :before ((x integer))
+          (setf *trace-log* (cons "before-integer" *trace-log*)))
+
+        (defmethod process-data :after ((x integer))
+          (setf *trace-log* (cons "after-integer" *trace-log*)))
+
+        (defmethod process-data :around ((x integer))
+          (setf *trace-log* (cons "around-enter" *trace-log*))
+          (let ((res (call-next-method)))
+            (setf *trace-log* (cons "around-exit" *trace-log*))
+            (+ res 100)))
+
+        (let ((val (process-data 10)))
+          (list val (reverse *trace-log*))))
+      """
+
+      assert ExLisp.eval(code) == [120, ["around-enter", "before-integer", "primary-integer", "after-integer", "around-exit"]]
+    end
+
+    test "CLOS call-next-method in class hierarchy and next-method-p" do
+      code = """
+      (progn
+        (defclass animal () ())
+        (defclass dog (animal) ())
+
+        (defgeneric speak (obj))
+
+        (defmethod speak ((a animal))
+          (list "animal" (next-method-p)))
+
+        (defmethod speak ((d dog))
+          (cons "dog" (call-next-method)))
+
+        (let ((d (make-instance 'dog))
+              (a (make-instance 'animal)))
+          (list (speak d) (speak a))))
+      """
+
+      assert ExLisp.eval(code) == [["dog", "animal", nil], ["animal", nil]]
+    end
+
+    test "CLOS (eql ...) specializers" do
+      code = """
+      (progn
+        (defgeneric handle-event (event-type data))
+        (defmethod handle-event ((type (eql :start)) data)
+          (format nil "Starting with ~a" data))
+        (defmethod handle-event ((type (eql :stop)) data)
+          (format nil "Stopping: ~a" data))
+        (defmethod handle-event (type data)
+          (format nil "Unknown event ~a: ~a" type data))
+
+        (list (handle-event :start "Engine")
+              (handle-event :stop "All")
+              (handle-event :other 42)))
+      """
+
+      assert ExLisp.eval(code) == ["Starting with Engine", "Stopping: All", "Unknown event OTHER: 42"]
+    end
+
+    test "CLOS multiple inheritance and slot existence / makunbound / reflection" do
+      code = """
+      (progn
+        (defclass base-a () ((slot-a :initarg :a :initform "A")))
+        (defclass base-b () ((slot-b :initarg :b :initform "B")))
+        (defclass child (base-a base-b) ((slot-c :initarg :c :initform "C")))
+
+        (let ((obj (make-instance 'child :a "CustomA")))
+          (list (slot-value obj 'slot-a)
+                (slot-value obj 'slot-b)
+                (slot-value obj 'slot-c)
+                (slot-exists-p obj 'slot-a)
+                (slot-exists-p obj 'slot-z)
+                (slot-boundp obj 'slot-a)
+                (progn
+                  (slot-makunbound obj 'slot-a)
+                  (slot-boundp obj 'slot-a))
+                (class-name (find-class 'child)))))
+      """
+
+      assert ExLisp.eval(code) == ["CustomA", "B", "C", :t, nil, :t, nil, :child]
+    end
+
+    test "CLOS multi-argument dispatch" do
+      code = """
+      (progn
+        (defclass shape () ())
+        (defclass circle (shape) ())
+        (defclass square (shape) ())
+
+        (defgeneric collide (s1 s2))
+
+        (defmethod collide ((c1 circle) (c2 circle))
+          "circle-circle")
+
+        (defmethod collide ((c circle) (s square))
+          "circle-square")
+
+        (defmethod collide ((s square) (c circle))
+          "square-circle")
+
+        (defmethod collide ((s1 shape) (s2 shape))
+          "generic-shapes")
+
+        (let ((c (make-instance 'circle))
+              (s (make-instance 'square)))
+          (list (collide c c)
+                (collide c s)
+                (collide s c)
+                (collide s s))))
+      """
+
+      assert ExLisp.eval(code) == ["circle-circle", "circle-square", "square-circle", "generic-shapes"]
+    end
   end
 
   describe "Common Lisp Conditions & Error Handling (handler-case, ignore-errors, warn)" do

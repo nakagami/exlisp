@@ -677,6 +677,19 @@ defmodule LispBeam do
       :defmethod ->
         compile_defmethod(args, local_env)
 
+      name when name in [:call_next_method, :_cl_call_next_method_] ->
+        case args do
+          [] ->
+            {:call, 1, {:remote, 1, {:atom, 1, ExLisp.CLOS}, {:atom, 1, :call_next_method}}, []}
+
+          _ ->
+            args_ast = ast_cons_list(Enum.map(args, &compile_expr(&1, local_env)))
+            {:call, 1, {:remote, 1, {:atom, 1, ExLisp.CLOS}, {:atom, 1, :call_next_method}}, [args_ast]}
+        end
+
+      name when name in [:next_method_p, :_cl_next_method_p_] ->
+        {:call, 1, {:remote, 1, {:atom, 1, ExLisp.CLOS}, {:atom, 1, :next_method_p}}, []}
+
       :quote ->
         case args do
           [quoted_node] -> compile_quote(quoted_node)
@@ -4987,18 +5000,138 @@ defmodule LispBeam do
     {:block, 1, exprs}
   end
 
-  def compile_defclass([name_node, _supers_node | _slot_nodes], _local_env) do
+  def compile_defclass([name_node, supers_node | rest_nodes], local_env) do
     class_name = extract_symbol_name(name_node)
-    {:atom, 1, class_name}
+
+    supers =
+      case supers_node do
+        {:list, _pos, elems} -> Enum.map(elems, &extract_symbol_name/1)
+        elems when is_list(elems) -> Enum.map(elems, &extract_symbol_name/1)
+        nil -> []
+        _ -> []
+      end
+
+    slot_nodes =
+      case rest_nodes do
+        [{:list, _pos, slots} | _] -> slots
+        [slots | _] when is_list(slots) -> slots
+        _ -> []
+      end
+
+    raw_slots =
+      Enum.map(slot_nodes, fn
+        {:list, _pos, [s_name_node | s_opts]} ->
+          [extract_symbol_name(s_name_node) | Enum.map(s_opts, &extract_slot_opt_value/1)]
+
+        s_name_node ->
+          extract_symbol_name(s_name_node)
+      end)
+
+    try do
+      ExLisp.CLOS.register_class(class_name, supers, raw_slots)
+    rescue
+      _ -> :ok
+    end
+
+    {:call, 1, {:remote, 1, {:atom, 1, ExLisp.CLOS}, {:atom, 1, :register_class}},
+     [
+       {:atom, 1, class_name},
+       ast_cons_list(Enum.map(supers, &{:atom, 1, &1})),
+       compile_raw_slots_ast(slot_nodes, local_env)
+     ]}
   end
 
-  def compile_defgeneric([name_node | _rest], _local_env) do
+  defp compile_raw_slots_ast(slot_nodes, local_env) do
+    slot_asts =
+      Enum.map(slot_nodes, fn
+        {:list, _pos, [s_name_node | s_opts]} ->
+          s_name = extract_symbol_name(s_name_node)
+          opts_ast = compile_slot_opts_ast(s_opts, local_env)
+          {:cons, 1, {:atom, 1, s_name}, opts_ast}
+
+        s_name_node ->
+          s_name = extract_symbol_name(s_name_node)
+          {:atom, 1, s_name}
+      end)
+
+    ast_cons_list(slot_asts)
+  end
+
+  defp compile_slot_opts_ast(opts, local_env) do
+    opt_asts =
+      Enum.chunk_every(opts, 2)
+      |> Enum.flat_map(fn
+        [k_node, v_node] ->
+          k_atom = extract_symbol_name(k_node)
+
+          case k_atom do
+            k when k in [:initform, :_cl_initform_] ->
+              initform_fun_ast =
+                {:fun, 1,
+                 {:clauses,
+                  [{:clause, 1, [], [], [compile_expr(v_node, local_env)]}]}}
+
+              [{:atom, 1, :initform_fun}, initform_fun_ast]
+
+            k when k in [:initarg, :_cl_initarg_] ->
+              [{:atom, 1, :initarg}, compile_expr(v_node, local_env)]
+
+            k when k in [:accessor, :_cl_accessor_] ->
+              [{:atom, 1, :accessor}, {:atom, 1, extract_symbol_name(v_node)}]
+
+            k when k in [:reader, :_cl_reader_] ->
+              [{:atom, 1, :reader}, {:atom, 1, extract_symbol_name(v_node)}]
+
+            k when k in [:writer, :_cl_writer_] ->
+              [{:atom, 1, :writer}, {:atom, 1, extract_symbol_name(v_node)}]
+
+            _ ->
+              [{:atom, 1, k_atom}, compile_expr(v_node, local_env)]
+          end
+
+        [single] ->
+          [{:atom, 1, extract_symbol_name(single)}]
+      end)
+
+    ast_cons_list(opt_asts)
+  end
+
+  defp extract_slot_opt_value(node) do
+    case node do
+      {:keyword, _, kw} -> kw
+      {:id, _, [name]} -> String.downcase(name) |> String.to_atom()
+      _ -> node
+    end
+  end
+
+  def compile_defgeneric([name_node | rest], _local_env) do
     gen_name = extract_symbol_name(name_node)
-    {:atom, 1, gen_name}
+
+    lambda_list =
+      case rest do
+        [{:list, _pos, params} | _] -> Enum.map(params, &extract_symbol_name/1)
+        [params | _] when is_list(params) -> Enum.map(params, &extract_symbol_name/1)
+        _ -> []
+      end
+
+    try do
+      ExLisp.CLOS.register_generic(gen_name, lambda_list)
+    rescue
+      _ -> :ok
+    end
+
+    {:call, 1, {:remote, 1, {:atom, 1, ExLisp.CLOS}, {:atom, 1, :register_generic}},
+     [
+       {:atom, 1, gen_name},
+       ast_cons_list(Enum.map(lambda_list, &{:atom, 1, &1}))
+     ]}
   end
 
-  def compile_defmethod([name_node, params_node | body_nodes], local_env) do
-    method_name = extract_symbol_name(name_node)
+  def compile_defmethod(args, local_env) do
+    {method_name_node, qualifier, params_node, body_nodes} =
+      extract_qualifier_and_rest(args)
+
+    method_name = extract_symbol_name(method_name_node)
 
     param_list =
       case params_node do
@@ -5007,15 +5140,8 @@ defmodule LispBeam do
         _ -> []
       end
 
-    {param_names, param_types} =
-      Enum.map(param_list, fn
-        {:list, _pos, [p, type_node | _]} ->
-          {extract_symbol_name(p), extract_symbol_name(type_node)}
-
-        p ->
-          {extract_symbol_name(p), :t}
-      end)
-      |> Enum.unzip()
+    {param_names, param_specializers_ast, raw_specializers} =
+      parse_method_parameters(param_list, local_env)
 
     new_local_env = MapSet.union(local_env, MapSet.new(param_names))
 
@@ -5028,10 +5154,92 @@ defmodule LispBeam do
     erl_params = Enum.map(param_names, fn p -> {:var, 1, erl_var_name(p)} end)
     fun_expr = {:fun, 1, {:clauses, [{:clause, 1, erl_params, [], compiled_body}]}}
 
-    types_list_ast = ast_cons_list(Enum.map(param_types, &{:atom, 1, &1}))
+    # Try registering at compile-time
+    try do
+      lambda_ast =
+        {:list, 1,
+         [
+           {:id, 1, ["lambda"]},
+           {:list, 1, Enum.map(param_names, &{:id, 1, [Atom.to_string(&1)]})}
+           | body_nodes
+         ]}
 
-    {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Env}, {:atom, 1, :register_method}},
-     [{:atom, 1, method_name}, types_list_ast, fun_expr]}
+      eval_fun = evaluate_ast(lambda_ast)
+      ExLisp.CLOS.register_method(method_name, qualifier, raw_specializers, eval_fun)
+    rescue
+      _ -> :ok
+    end
+
+    qualifier_expr = if qualifier, do: {:atom, 1, qualifier}, else: {:atom, 1, nil}
+
+    {:call, 1, {:remote, 1, {:atom, 1, ExLisp.CLOS}, {:atom, 1, :register_method}},
+     [
+       {:atom, 1, method_name},
+       qualifier_expr,
+       param_specializers_ast,
+       fun_expr
+     ]}
+  end
+
+  defp extract_qualifier_and_rest(args) do
+    case args do
+      [name_node, qual_node, params_node | body] ->
+        case extract_qualifier(qual_node) do
+          {:ok, q} -> {name_node, q, params_node, body}
+          :error -> {name_node, nil, qual_node, [params_node | body]}
+        end
+
+      [name_node, params_node | body] ->
+        {name_node, nil, params_node, body}
+
+      [name_node] ->
+        {name_node, nil, {:list, 1, []}, []}
+    end
+  end
+
+  defp extract_qualifier(node) do
+    case node do
+      {:lit, kw} when is_atom(kw) ->
+        str = kw |> Atom.to_string() |> String.trim_leading(":") |> String.downcase()
+        if str in ["before", "after", "around"], do: {:ok, String.to_atom(str)}, else: :error
+
+      {:keyword, _, kw} ->
+        str = kw |> Atom.to_string() |> String.trim_leading(":") |> String.downcase()
+        if str in ["before", "after", "around"], do: {:ok, String.to_atom(str)}, else: :error
+
+      {:id, _, [str_id]} ->
+        str = str_id |> String.trim_leading(":") |> String.downcase()
+        if str in ["before", "after", "around"], do: {:ok, String.to_atom(str)}, else: :error
+
+      _ ->
+        :error
+    end
+  end
+
+  defp parse_method_parameters(param_list, local_env) do
+    Enum.map(param_list, fn
+      {:list, _pos, [p, {:list, _, [{:id, _, [eql_name]}, val_node]} | _]}
+      when eql_name in ["eql", "EQL"] ->
+        p_name = extract_symbol_name(p)
+        val = try do evaluate_ast(val_node) rescue _ -> nil end
+        spec_ast = {:tuple, 1, [{:atom, 1, :eql}, compile_expr(val_node, local_env)]}
+        {p_name, spec_ast, {:eql, val}}
+
+      {:list, _pos, [p, type_node | _]} ->
+        p_name = extract_symbol_name(p)
+        type_name = extract_symbol_name(type_node)
+        {p_name, {:atom, 1, type_name}, type_name}
+
+      p ->
+        p_name = extract_symbol_name(p)
+        {p_name, {:atom, 1, :t}, :t}
+    end)
+    |> Enum.reduce({[], [], []}, fn {p_name, spec_ast, raw_spec}, {p_acc, spec_acc, raw_acc} ->
+      {p_acc ++ [p_name], spec_acc ++ [spec_ast], raw_acc ++ [raw_spec]}
+    end)
+    |> then(fn {p_names, spec_asts, raw_specs} ->
+      {p_names, ast_cons_list(spec_asts), raw_specs}
+    end)
   end
 
   def compile_defmacro([name_node, params_node | body_nodes], local_env) do

@@ -1843,6 +1843,9 @@ defmodule ExLisp.Builtins do
         t1 in [:bit, :boolean] ->
           true
 
+        ExLisp.CLOS.subclassp(t1, t2) == :t ->
+          true
+
         true ->
           false
       end
@@ -2215,7 +2218,11 @@ defmodule ExLisp.Builtins do
             (val in [:t, nil]) |> lisp_bool()
 
           _ ->
-            :t
+            if ExLisp.CLOS.find_class(norm_type) do
+              ExLisp.CLOS.type_matches_clos?(norm_type, val) |> lisp_bool()
+            else
+              :t
+            end
         end
     end
   end
@@ -7400,6 +7407,10 @@ defmodule ExLisp.Builtins do
     {:struct, struct_name, tid}
   end
 
+  def get_struct_slot({:instance, class, tid}, slot_name) do
+    slot_value({:instance, class, tid}, slot_name)
+  end
+
   def get_struct_slot({:struct, _name, tid}, slot_name) do
     norm_slot =
       cond do
@@ -7417,6 +7428,10 @@ defmodule ExLisp.Builtins do
   end
 
   def get_struct_slot(_other, _slot), do: nil
+
+  def set_struct_slot({:instance, class, tid}, slot_name, val) do
+    set_slot_value({:instance, class, tid}, slot_name, val)
+  end
 
   def set_struct_slot({:struct, _name, tid}, slot_name, val) do
     norm_slot =
@@ -7445,81 +7460,36 @@ defmodule ExLisp.Builtins do
   def make_instance(args) when is_list(args) do
     case args do
       [class_name | initargs] ->
-        opts = parse_lisp_keywords(initargs)
-        tid = :ets.new(:lisp_instance, [:set, :public])
-        Enum.each(opts, fn {k, v} -> :ets.insert(tid, {k, v}) end)
-
-        norm_class =
-          if is_atom(class_name), do: class_name, else: String.to_atom(to_string(class_name))
-
-        {:instance, norm_class, tid}
+        ExLisp.CLOS.make_instance(class_name, initargs)
 
       _ ->
         raise ArgumentError, "make-instance requires at least class name"
     end
   end
 
-  def make_instance(class_name), do: make_instance([class_name])
+  def make_instance(class_name), do: ExLisp.CLOS.make_instance(class_name, [])
 
-  def slot_value({:instance, _class, tid}, slot_name) do
-    norm_slot =
-      if is_atom(slot_name),
-        do: slot_name |> Atom.to_string() |> String.replace("-", "_") |> String.to_atom(),
-        else: slot_name
+  def slot_value(instance, slot_name), do: ExLisp.CLOS.slot_value(instance, slot_name)
 
-    case :ets.lookup(tid, norm_slot) do
-      [{^norm_slot, val}] -> val
-      [] -> nil
-    end
-  end
+  def set_slot_value(instance, slot_name, val), do: ExLisp.CLOS.set_slot_value(instance, slot_name, val)
 
-  def slot_value({:struct, name, tid}, slot_name) do
-    get_struct_slot({:struct, name, tid}, slot_name)
-  end
+  def slot_boundp(instance, slot_name), do: ExLisp.CLOS.slot_boundp(instance, slot_name)
 
-  def slot_value(_other, _slot), do: nil
+  def slot_makunbound(instance, slot_name), do: ExLisp.CLOS.slot_makunbound(instance, slot_name)
 
-  def set_slot_value({:instance, _class, tid}, slot_name, val) do
-    norm_slot =
-      if is_atom(slot_name),
-        do: slot_name |> Atom.to_string() |> String.replace("-", "_") |> String.to_atom(),
-        else: slot_name
+  def slot_exists_p(instance, slot_name), do: ExLisp.CLOS.slot_exists_p(instance, slot_name)
 
-    :ets.insert(tid, {norm_slot, val})
-    val
-  end
+  def class_of(obj), do: ExLisp.CLOS.class_of(obj)
 
-  def set_slot_value({:struct, name, tid}, slot_name, val) do
-    set_struct_slot({:struct, name, tid}, slot_name, val)
-  end
+  def find_class(name), do: ExLisp.CLOS.find_class(name)
 
-  def set_slot_value(_other, _slot, val), do: val
+  def class_name(class_or_name), do: ExLisp.CLOS.class_name(class_or_name)
 
-  def slot_boundp({:instance, _class, tid}, slot_name) do
-    norm_slot =
-      if is_atom(slot_name),
-        do: slot_name |> Atom.to_string() |> String.replace("-", "_") |> String.to_atom(),
-        else: slot_name
+  def subclassp(sub, super), do: ExLisp.CLOS.subclassp(sub, super)
 
-    case :ets.member(tid, norm_slot) do
-      true -> :t
-      false -> nil
-    end
-  end
+  def call_next_method(args \\ nil), do: ExLisp.CLOS.call_next_method(args)
 
-  def slot_boundp(_other, _slot), do: nil
-
-  def slot_makunbound({:instance, _class, tid} = inst, slot_name) do
-    norm_slot =
-      if is_atom(slot_name),
-        do: slot_name |> Atom.to_string() |> String.replace("-", "_") |> String.to_atom(),
-        else: slot_name
-
-    :ets.delete(tid, norm_slot)
-    inst
-  end
-
-  def slot_makunbound(other, _slot), do: other
+  def next_method_p, do: ExLisp.CLOS.next_method_p()
 
   # --- I/O & formatting ---
 
