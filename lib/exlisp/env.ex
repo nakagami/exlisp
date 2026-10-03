@@ -14,6 +14,7 @@ defmodule ExLisp.Env do
     ensure_table(@history_table)
     ensure_table(@keywords_table)
     ExLisp.CLOS.ensure_tables()
+    ExLisp.Type.ensure_tables()
 
     if not :persistent_term.get(:exlisp_code_paths_initialized, false) do
       ensure_code_paths()

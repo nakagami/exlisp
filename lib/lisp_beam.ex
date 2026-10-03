@@ -1094,7 +1094,7 @@ defmodule LispBeam do
         end
 
       name when name in [:check_type, :_cl_check_type_] ->
-        {:atom, 1, nil}
+        compile_check_type(args, local_env)
 
       name when name in [:assert, :_cl_assert_] ->
         case args do
@@ -1119,13 +1119,10 @@ defmodule LispBeam do
         end
 
       name when name in [:deftype, :_cl_deftype_] ->
-        {:atom, 1, :t}
+        compile_deftype(args, local_env)
 
       name when name in [:the, :_cl_the_] ->
-        case args do
-          [_type, value_node | _] -> compile_expr(value_node, local_env)
-          _ -> {:atom, 1, nil}
-        end
+        compile_the(args, local_env)
 
       name
       when name in [:symbol_macrolet, :"symbol-macrolet", :_cl_symbol_macrolet_] ->
@@ -1919,6 +1916,122 @@ defmodule LispBeam do
   end
 
   def compile_etypecase([], _local_env), do: {:atom, 1, nil}
+
+  def compile_check_type(args, local_env) do
+    case args do
+      [place_node, typespec_node | rest] ->
+        type_str =
+          case rest do
+            [{:lit, s} | _] when is_binary(s) -> s
+            _ -> nil
+          end
+
+        msg =
+          if type_str do
+            "The value of ~S is ~S, which is not #{type_str}"
+          else
+            "The value of ~S is ~S, which is not of type ~S"
+          end
+
+        err_args =
+          if type_str do
+            [{:list, 1, [{:id, 1, ["quote"]}, place_node]}, place_node]
+          else
+            [
+              {:list, 1, [{:id, 1, ["quote"]}, place_node]},
+              place_node,
+              {:list, 1, [{:id, 1, ["quote"]}, typespec_node]}
+            ]
+          end
+
+        ast =
+          {:list, 1,
+           [
+             {:id, 1, ["unless"]},
+             {:list, 1,
+              [
+                {:id, 1, ["typep"]},
+                place_node,
+                {:list, 1, [{:id, 1, ["quote"]}, typespec_node]}
+              ]},
+             {:list, 1, [{:id, 1, ["error"]}, {:lit, msg} | err_args]}
+           ]}
+
+        compile_expr(ast, local_env)
+
+      _ ->
+        {:atom, 1, nil}
+    end
+  end
+
+  def compile_the(args, local_env) do
+    case args do
+      [typespec_node, value_node | _] ->
+        temp_var = {:id, 1, ["__the_val_#{System.unique_integer([:positive, :monotonic])}"]}
+
+        ast =
+          {:list, 1,
+           [
+             {:id, 1, ["let*"]},
+             {:list, 1, [{:list, 1, [temp_var, value_node]}]},
+             {:list, 1,
+              [
+                {:id, 1, ["unless"]},
+                {:list, 1,
+                 [
+                   {:id, 1, ["typep"]},
+                   temp_var,
+                   {:list, 1, [{:id, 1, ["quote"]}, typespec_node]}
+                 ]},
+                {:list, 1,
+                 [
+                   {:id, 1, ["error"]},
+                   {:lit, "The value ~S is not of type ~S"},
+                   temp_var,
+                   {:list, 1, [{:id, 1, ["quote"]}, typespec_node]}
+                 ]}
+              ]},
+             temp_var
+           ]}
+
+        compile_expr(ast, local_env)
+
+      _ ->
+        {:atom, 1, nil}
+    end
+  end
+
+  def compile_deftype(args, _local_env) do
+    case args do
+      [name_node, params_node | body_nodes] ->
+        name_sym = extract_symbol_name(name_node)
+        params = extract_deftype_params(params_node)
+
+        # Register in ETS table for compiler access
+        ExLisp.Type.define_deftype(name_sym, params, body_nodes)
+
+        {:atom, 1, name_sym}
+
+      _ ->
+        {:atom, 1, nil}
+    end
+  end
+
+  defp extract_deftype_params({:list, _pos, elems}), do: Enum.map(elems, &extract_symbol_or_spec/1)
+  defp extract_deftype_params({:quoted, _pos, elems}), do: Enum.map(elems, &extract_symbol_or_spec/1)
+  defp extract_deftype_params([]), do: []
+  defp extract_deftype_params(nil), do: []
+  defp extract_deftype_params(other), do: [extract_symbol_or_spec(other)]
+
+  defp extract_symbol_or_spec({:list, _pos, [var, def_val | _]}) do
+    [extract_symbol_name(var), eval_ast_to_lit(def_val)]
+  end
+  defp extract_symbol_or_spec(node), do: extract_symbol_name(node)
+
+  defp eval_ast_to_lit({:lit, v}), do: v
+  defp eval_ast_to_lit({:id, _, [s]}), do: String.to_atom(s)
+  defp eval_ast_to_lit({:quoted, _, node}), do: eval_ast_to_lit(node)
+  defp eval_ast_to_lit(_), do: :*
 
   def compile_progn(forms, local_env) do
     case forms do
