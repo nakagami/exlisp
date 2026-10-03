@@ -971,7 +971,7 @@ defmodule LispBeam do
         compile_do(args, local_env)
 
       name when name in [:"do*", :_cl_do_star_, :do_star] ->
-        compile_do(args, local_env)
+        compile_do_star(args, local_env)
 
       :tagbody ->
         compile_tagbody(args, local_env)
@@ -4592,45 +4592,172 @@ defmodule LispBeam do
   end
   defp do_parse_restart_opts(other, acc), do: {acc, other}
 
+  defp wrap_block_nil(local_env, callback) do
+    unique_tag = :"__block_nil_#{System.unique_integer([:positive])}"
+
+    filtered_env =
+      Enum.reject(local_env, fn
+        {:__block__, nil, _} -> true
+        _ -> false
+      end)
+      |> MapSet.new()
+
+    block_env = MapSet.put(filtered_env, {:__block__, nil, unique_tag})
+    compiled_ast = callback.(block_env)
+    ret_var = :"V_ret_#{System.unique_integer([:positive])}"
+
+    {:try, 1, [compiled_ast], [],
+     [
+       {:clause, 1,
+        [
+          {:tuple, 1,
+           [
+             {:atom, 1, :throw},
+             {:tuple, 1, [{:atom, 1, :lisp_return}, {:atom, 1, unique_tag}, {:var, 1, ret_var}]},
+             {:var, 1, :_}
+           ]}
+        ], [], [{:var, 1, ret_var}]}
+     ], []}
+  end
+
   def compile_do([bindings_node, test_clause | body_nodes], local_env) do
     bindings = parse_do_bindings(bindings_node)
     {end_test_node, result_nodes} = parse_do_test_clause(test_clause)
 
-    var_names = Enum.map(bindings, &elem(&1, 0))
+    var_nodes = Enum.map(bindings, fn {v, _, _} -> to_id_node(v) end)
     init_nodes = Enum.map(bindings, &elem(&1, 1))
     step_nodes = Enum.map(bindings, &elem(&1, 2))
 
-    loop_fun_name = :"DoLoop_#{System.unique_integer([:positive, :monotonic])}"
-    loop_env = MapSet.union(local_env, MapSet.new(var_names))
-    erl_vars = Enum.map(var_names, fn v -> {:var, 1, erl_var_name(v)} end)
+    loop_fn_sym = {:id, 1, ["__do_loop_#{System.unique_integer([:positive, :monotonic])}"]}
 
-    compiled_test = compile_expr(end_test_node, loop_env)
+    let_bindings =
+      Enum.zip(var_nodes, init_nodes)
+      |> Enum.map(fn {v_node, init_node} -> {:list, 1, [v_node, init_node]} end)
 
-    compiled_result =
+    result_expr =
       case result_nodes do
         [] -> {:atom, 1, nil}
-        _ -> compile_progn(result_nodes, loop_env)
+        [single] -> single
+        _ -> {:list, 1, [{:id, 1, ["progn"]} | result_nodes]}
       end
 
-    compiled_body = Enum.map(body_nodes, &compile_expr(&1, loop_env))
-    compiled_steps = Enum.map(step_nodes, &compile_expr(&1, loop_env))
-    recur_call = {:call, 1, {:var, 1, loop_fun_name}, compiled_steps}
+    recur_call = {:list, 1, [loop_fn_sym | step_nodes]}
 
-    loop_clauses = [
-      {:clause, 1, erl_vars, [],
+    step_body =
+      case body_nodes do
+        [] ->
+          recur_call
+
+        _ ->
+          {:list, 1,
+           [
+             {:id, 1, ["progn"]},
+             {:list, 1, [{:id, 1, ["tagbody"]} | body_nodes]},
+             recur_call
+           ]}
+      end
+
+    if_expr = {:list, 1, [{:id, 1, ["if"]}, end_test_node, result_expr, step_body]}
+    fn_def = {:list, 1, [loop_fn_sym, {:list, 1, var_nodes}, if_expr]}
+    initial_call = {:list, 1, [loop_fn_sym | var_nodes]}
+
+    ast =
+      {:list, 1,
        [
-         {:case, 1, compiled_test,
+         {:id, 1, ["block"]},
+         {:atom, 1, nil},
+         {:list, 1,
           [
-            {:clause, 1, [{:atom, 1, nil}], [], compiled_body ++ [recur_call]},
-            {:clause, 1, [{:var, 1, :_}], [], [compiled_result]}
+            {:id, 1, ["let"]},
+            {:list, 1, let_bindings},
+            {:list, 1,
+             [
+               {:id, 1, ["labels"]},
+               {:list, 1, [fn_def]},
+               initial_call
+             ]}
           ]}
        ]}
-    ]
 
-    compiled_inits = Enum.map(init_nodes, &compile_expr(&1, local_env))
-    loop_call = {:call, 1, {:named_fun, 1, loop_fun_name, loop_clauses}, compiled_inits}
-    compile_block([{:atom, 1, nil}, loop_call], local_env)
+    compile_expr(ast, local_env)
   end
+
+  def compile_do_star([bindings_node, test_clause | body_nodes], local_env) do
+    bindings = parse_do_bindings(bindings_node)
+    {end_test_node, result_nodes} = parse_do_test_clause(test_clause)
+
+    var_nodes = Enum.map(bindings, fn {v, _, _} -> to_id_node(v) end)
+    init_nodes = Enum.map(bindings, &elem(&1, 1))
+    step_nodes = Enum.map(bindings, &elem(&1, 2))
+
+    loop_fn_sym = {:id, 1, ["__do_star_loop_#{System.unique_integer([:positive, :monotonic])}"]}
+
+    let_bindings =
+      Enum.zip(var_nodes, init_nodes)
+      |> Enum.map(fn {v_node, init_node} -> {:list, 1, [v_node, init_node]} end)
+
+    result_expr =
+      case result_nodes do
+        [] -> {:atom, 1, nil}
+        [single] -> single
+        _ -> {:list, 1, [{:id, 1, ["progn"]} | result_nodes]}
+      end
+
+    step_bindings =
+      Enum.zip(var_nodes, step_nodes)
+      |> Enum.map(fn {v_node, step_node} -> {:list, 1, [v_node, step_node]} end)
+
+    recur_call =
+      {:list, 1,
+       [
+         {:id, 1, ["let*"]},
+         {:list, 1, step_bindings},
+         {:list, 1, [loop_fn_sym | var_nodes]}
+       ]}
+
+    step_body =
+      case body_nodes do
+        [] ->
+          recur_call
+
+        _ ->
+          {:list, 1,
+           [
+             {:id, 1, ["progn"]},
+             {:list, 1, [{:id, 1, ["tagbody"]} | body_nodes]},
+             recur_call
+           ]}
+      end
+
+    if_expr = {:list, 1, [{:id, 1, ["if"]}, end_test_node, result_expr, step_body]}
+    fn_def = {:list, 1, [loop_fn_sym, {:list, 1, var_nodes}, if_expr]}
+    initial_call = {:list, 1, [loop_fn_sym | var_nodes]}
+
+    ast =
+      {:list, 1,
+       [
+         {:id, 1, ["block"]},
+         {:atom, 1, nil},
+         {:list, 1,
+          [
+            {:id, 1, ["let*"]},
+            {:list, 1, let_bindings},
+            {:list, 1,
+             [
+               {:id, 1, ["labels"]},
+               {:list, 1, [fn_def]},
+               initial_call
+             ]}
+          ]}
+       ]}
+
+    compile_expr(ast, local_env)
+  end
+
+  defp to_id_node({:id, _, _} = n), do: n
+  defp to_id_node(a) when is_atom(a), do: {:id, 1, [Atom.to_string(a)]}
+  defp to_id_node(s) when is_binary(s), do: {:id, 1, [s]}
+  defp to_id_node(other), do: {:id, 1, ["#{other}"]}
 
   defp parse_do_bindings({:list, _pos, elems}),
     do: elems |> Enum.reject(&(&1 in [nil, {:lit, nil}])) |> Enum.map(&parse_single_do_binding/1)
@@ -4806,47 +4933,55 @@ defmodule LispBeam do
   # --- Loops (dotimes, dolist) ---
 
   def compile_dotimes([header | body_nodes], local_env) do
-    {var_name, count_node, result_node} =
-      case header do
-        {:list, _pos, [v, c, r | _]} -> {extract_symbol_name(v), c, r}
-        {:list, _pos, [v, c]} -> {extract_symbol_name(v), c, {:atom, 1, nil}}
-        {:quoted, _pos, [v, c, r | _]} -> {extract_symbol_name(v), c, r}
-        {:quoted, _pos, [v, c]} -> {extract_symbol_name(v), c, {:atom, 1, nil}}
-        _ -> raise ArgumentError, "Invalid dotimes header: #{inspect(header)}"
+    wrap_block_nil(local_env, fn block_env ->
+      {var_name, count_node, result_node} =
+        case header do
+          {:list, _pos, [v, c, r | _]} -> {extract_symbol_name(v), c, r}
+          {:list, _pos, [v, c]} -> {extract_symbol_name(v), c, {:atom, 1, nil}}
+          {:quoted, _pos, [v, c, r | _]} -> {extract_symbol_name(v), c, r}
+          {:quoted, _pos, [v, c]} -> {extract_symbol_name(v), c, {:atom, 1, nil}}
+          _ -> raise ArgumentError, "Invalid dotimes header: #{inspect(header)}"
+        end
+
+      mutated_in_body = find_mutated_vars(body_nodes)
+
+      threaded_vars =
+        Enum.filter(mutated_in_body, fn v ->
+          (MapSet.member?(block_env, v) or MapSet.member?(block_env, {:mutated, v})) and
+            v != var_name
+        end)
+
+      if can_thread_loop?(body_nodes, threaded_vars) do
+        compile_threaded_dotimes(
+          var_name,
+          count_node,
+          result_node,
+          body_nodes,
+          threaded_vars,
+          block_env
+        )
+      else
+        compile_standard_dotimes(var_name, count_node, result_node, body_nodes, block_env)
       end
-
-    mutated_in_body = find_mutated_vars(body_nodes)
-
-    threaded_vars =
-      Enum.filter(mutated_in_body, fn v ->
-        (MapSet.member?(local_env, v) or MapSet.member?(local_env, {:mutated, v})) and
-          v != var_name
-      end)
-
-    if can_thread_loop?(body_nodes, threaded_vars) do
-      compile_threaded_dotimes(
-        var_name,
-        count_node,
-        result_node,
-        body_nodes,
-        threaded_vars,
-        local_env
-      )
-    else
-      compile_standard_dotimes(var_name, count_node, result_node, body_nodes, local_env)
-    end
+    end)
   end
 
   defp compile_standard_dotimes(var_name, count_node, result_node, body_nodes, local_env) do
     loop_fun_name = :"Loop_#{System.unique_integer([:positive, :monotonic])}"
     var_erl = erl_var_name(var_name)
     body_env = MapSet.put(local_env, var_name)
-    compiled_body = Enum.map(body_nodes, &compile_expr(&1, body_env))
+
+    compiled_body =
+      if Enum.any?(body_nodes, &is_tag?/1) do
+        [compile_tagbody(body_nodes, body_env)]
+      else
+        Enum.map(body_nodes, &compile_expr(&1, body_env))
+      end
 
     loop_clauses = [
       {:clause, 1, [{:var, 1, var_erl}, {:var, 1, :V_limit}],
        [[{:op, 1, :>=, {:var, 1, var_erl}, {:var, 1, :V_limit}}]],
-       [compile_expr(result_node, local_env)]},
+       [compile_expr(result_node, body_env)]},
       {:clause, 1, [{:var, 1, var_erl}, {:var, 1, :V_limit}], [],
        compiled_body ++
          [
@@ -4920,46 +5055,60 @@ defmodule LispBeam do
   end
 
   def compile_dolist([header | body_nodes], local_env) do
-    {var_name, list_node, result_node} =
-      case header do
-        {:list, _pos, [v, l, r | _]} -> {extract_symbol_name(v), l, r}
-        {:list, _pos, [v, l]} -> {extract_symbol_name(v), l, {:atom, 1, nil}}
-        {:quoted, _pos, [v, l, r | _]} -> {extract_symbol_name(v), l, r}
-        {:quoted, _pos, [v, l]} -> {extract_symbol_name(v), l, {:atom, 1, nil}}
-        _ -> raise ArgumentError, "Invalid dolist header: #{inspect(header)}"
+    wrap_block_nil(local_env, fn block_env ->
+      {var_name, list_node, result_node} =
+        case header do
+          {:list, _pos, [v, l, r | _]} -> {extract_symbol_name(v), l, r}
+          {:list, _pos, [v, l]} -> {extract_symbol_name(v), l, {:atom, 1, nil}}
+          {:quoted, _pos, [v, l, r | _]} -> {extract_symbol_name(v), l, r}
+          {:quoted, _pos, [v, l]} -> {extract_symbol_name(v), l, {:atom, 1, nil}}
+          _ -> raise ArgumentError, "Invalid dolist header: #{inspect(header)}"
+        end
+
+      mutated_in_body = find_mutated_vars(body_nodes)
+
+      threaded_vars =
+        Enum.filter(mutated_in_body, fn v ->
+          (MapSet.member?(block_env, v) or MapSet.member?(block_env, {:mutated, v})) and
+            v != var_name
+        end)
+
+      if can_thread_loop?(body_nodes, threaded_vars) do
+        compile_threaded_dolist(
+          var_name,
+          list_node,
+          result_node,
+          body_nodes,
+          threaded_vars,
+          block_env
+        )
+      else
+        compile_standard_dolist(var_name, list_node, result_node, body_nodes, block_env)
       end
-
-    mutated_in_body = find_mutated_vars(body_nodes)
-
-    threaded_vars =
-      Enum.filter(mutated_in_body, fn v ->
-        (MapSet.member?(local_env, v) or MapSet.member?(local_env, {:mutated, v})) and
-          v != var_name
-      end)
-
-    if can_thread_loop?(body_nodes, threaded_vars) do
-      compile_threaded_dolist(
-        var_name,
-        list_node,
-        result_node,
-        body_nodes,
-        threaded_vars,
-        local_env
-      )
-    else
-      compile_standard_dolist(var_name, list_node, result_node, body_nodes, local_env)
-    end
+    end)
   end
 
   defp compile_standard_dolist(var_name, list_node, result_node, body_nodes, local_env) do
     loop_fun_name = :"Loop_#{System.unique_integer([:positive, :monotonic])}"
     var_erl = erl_var_name(var_name)
     body_env = MapSet.put(local_env, var_name)
-    compiled_body = Enum.map(body_nodes, &compile_expr(&1, body_env))
+
+    compiled_body =
+      if Enum.any?(body_nodes, &is_tag?/1) do
+        [compile_tagbody(body_nodes, body_env)]
+      else
+        Enum.map(body_nodes, &compile_expr(&1, body_env))
+      end
+
+    compiled_result =
+      [
+        {:match, 1, {:var, 1, var_erl}, {:atom, 1, nil}},
+        compile_expr(result_node, body_env)
+      ]
 
     loop_clauses = [
-      {:clause, 1, [{nil, 1}], [], [compile_expr(result_node, local_env)]},
-      {:clause, 1, [{:atom, 1, nil}], [], [compile_expr(result_node, local_env)]},
+      {:clause, 1, [{nil, 1}], [], compiled_result},
+      {:clause, 1, [{:atom, 1, nil}], [], compiled_result},
       {:clause, 1, [{:cons, 1, {:var, 1, var_erl}, {:var, 1, :V_tail}}], [],
        compiled_body ++
          [
