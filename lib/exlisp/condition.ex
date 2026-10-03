@@ -454,16 +454,24 @@ defmodule ExLisp.Condition do
       is_function(fun, length(arg_list)) ->
         apply(fun, arg_list)
 
-      is_function(fun, 1) ->
+      is_function(fun, 1) and length(arg_list) != 1 ->
         fun.(arg_list)
 
-      is_function(fun, 0) ->
+      is_function(fun, 0) and arg_list == [] ->
         fun.()
 
       true ->
         apply(fun, arg_list)
     end
   end
+
+  @doc """
+  Returns the name of a restart object.
+  """
+  def restart_name(%{name: n}), do: n
+  def restart_name(name) when is_atom(name), do: name
+  def restart_name(%ExLisp.Symbol{name: n}), do: String.to_atom(String.downcase(n))
+  def restart_name(_), do: nil
 
   # --- High-level handler-case and restart-case runners ---
 
@@ -548,14 +556,17 @@ defmodule ExLisp.Condition do
         handler_fn = c[:fun] || c["fun"]
         report_fn = c[:report] || c["report"]
         test_fn = c[:test] || c["test"]
+        int_fn = c[:interactive] || c["interactive"]
 
         %{
           name: name,
-          fun: fn args ->
-            throw({tag, handler_fn, args})
+          fun: fn
+            args when is_list(args) -> throw({tag, handler_fn, args})
+            single -> throw({tag, handler_fn, [single]})
           end,
           report: report_fn,
-          test: test_fn
+          test: test_fn,
+          interactive: int_fn
         }
       end)
 
@@ -581,11 +592,40 @@ defmodule ExLisp.Condition do
 
   # --- Standard Restart Convenience Functions ---
 
-  def abort(condition \\ nil), do: invoke_restart(:abort, condition)
-  def continue(condition \\ nil), do: invoke_restart(:continue, condition)
-  def muffle_warning(condition \\ nil), do: invoke_restart(:muffle_warning, condition)
-  def store_value(val, _condition \\ nil), do: invoke_restart(:store_value, [val])
-  def use_value(val, _condition \\ nil), do: invoke_restart(:use_value, [val])
+  def abort(condition \\ nil) do
+    case find_restart(:abort, condition) do
+      nil -> raise RuntimeError, "No abort restart active"
+      r -> invoke_restart(r, [])
+    end
+  end
+
+  def continue(condition \\ nil) do
+    case find_restart(:continue, condition) do
+      nil -> nil
+      r -> invoke_restart(r, [])
+    end
+  end
+
+  def muffle_warning(condition \\ nil) do
+    case find_restart(:muffle_warning, condition) do
+      nil -> raise RuntimeError, "No muffle-warning restart active"
+      r -> invoke_restart(r, [])
+    end
+  end
+
+  def store_value(val, condition \\ nil) do
+    case find_restart(:store_value, condition) do
+      nil -> nil
+      r -> invoke_restart(r, [val])
+    end
+  end
+
+  def use_value(val, condition \\ nil) do
+    case find_restart(:use_value, condition) do
+      nil -> nil
+      r -> invoke_restart(r, [val])
+    end
+  end
 
   def normalize_name(name) when is_atom(name) do
     name |> Atom.to_string() |> String.downcase() |> String.replace("-", "_") |> String.to_atom()

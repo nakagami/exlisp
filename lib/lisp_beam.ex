@@ -1015,6 +1015,14 @@ defmodule LispBeam do
       name when name in [:restart_bind, :_cl_restart_bind_] ->
         compile_restart_bind(args, local_env)
 
+      name
+      when name in [
+             :with_simple_restart,
+             :_cl_with_simple_restart_,
+             :"with-simple-restart"
+           ] ->
+        compile_with_simple_restart(args, local_env)
+
       name when name in [:define_condition, :_cl_define_condition_] ->
         compile_define_condition(args, local_env)
 
@@ -4488,6 +4496,65 @@ defmodule LispBeam do
     clauses_list_ast = ast_cons_list(clauses_ast)
 
     {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Condition}, {:atom, 1, :run_restart_case}}, [body_fun, clauses_list_ast]}
+  end
+
+  def compile_with_simple_restart(args, local_env) do
+    case args do
+      [restart_spec | body_nodes] ->
+        {name_node, format_args} =
+          case restart_spec do
+            {:list, _, [n | f_args]} -> {n, f_args}
+            [n | f_args] -> {n, f_args}
+            n -> {n, []}
+          end
+
+        name_str =
+          case name_node do
+            {:id, _, [s]} -> s
+            a when is_atom(a) -> Atom.to_string(a)
+            _ -> "continue"
+          end
+
+        report_opt =
+          case format_args do
+            [] ->
+              []
+
+            [fmt_ctrl | fmt_rest] ->
+              [
+                {:keyword, 1, ":report"},
+                {:list, 1,
+                 [
+                   {:id, 1, ["lambda"]},
+                   {:list, 1, [{:id, 1, ["stream"]}]},
+                   {:list, 1, [{:id, 1, ["format"]}, {:id, 1, ["stream"]}, fmt_ctrl | fmt_rest]}
+                 ]}
+              ]
+          end
+
+        restart_clause =
+          {:list, 1,
+           [
+             {:id, 1, [name_str]},
+             {:list, 1, []}
+             | report_opt ++
+                 [
+                   {:list, 1,
+                    [{:id, 1, ["values"]}, {:lit, nil}, {:lit, :t}]}
+                 ]
+           ]}
+
+        body_expr_node =
+          case body_nodes do
+            [single] -> single
+            _ -> {:list, 1, [{:id, 1, ["progn"]} | body_nodes]}
+          end
+
+        compile_restart_case([body_expr_node, restart_clause], local_env)
+
+      _ ->
+        {:atom, 1, nil}
+    end
   end
 
   defp parse_restart_case_options(nodes) do

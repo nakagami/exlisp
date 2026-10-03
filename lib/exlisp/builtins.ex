@@ -9324,6 +9324,14 @@ defmodule ExLisp.Builtins do
   end
   def signal(datum), do: ExLisp.Condition.signal(datum, [])
 
+  def restart_name(args) when is_list(args) do
+    case args do
+      [r | _] -> ExLisp.Condition.restart_name(r)
+      r -> ExLisp.Condition.restart_name(r)
+    end
+  end
+  def restart_name(r), do: ExLisp.Condition.restart_name(r)
+
   def find_restart(args) when is_list(args) do
     case args do
       [name, condition | _] -> ExLisp.Condition.find_restart(name, condition)
