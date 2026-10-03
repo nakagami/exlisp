@@ -1530,7 +1530,7 @@ defmodule ExLisp.Builtins do
   end
 
   def symbolp(x) do
-    (is_atom(x) or is_struct(x, ExLisp.Symbol)) |> lisp_bool()
+    (is_atom(x) or is_struct(x, ExLisp.Symbol) or x == []) |> lisp_bool()
   end
 
   def keywordp(nil), do: nil
