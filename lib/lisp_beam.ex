@@ -982,6 +982,9 @@ defmodule LispBeam do
       name when name in [:with_open_file, :_cl_with_open_file_, :"with-open-file"] ->
         compile_with_open_file(args, local_env)
 
+      name when name in [:with_open_stream, :_cl_with_open_stream_, :"with-open-stream"] ->
+        compile_with_open_stream(args, local_env)
+
       name
       when name in [
              :with_input_from_string,
@@ -5077,49 +5080,6 @@ defmodule LispBeam do
     end)
   end
 
-  defp compile_with_open_file([header | body_nodes], local_env) do
-    header_elements =
-      case header do
-        {:list, _pos, elems} -> elems
-        elems when is_list(elems) -> elems
-        _ -> raise ArgumentError, "Invalid with-open-file header: #{inspect(header)}"
-      end
-
-    case header_elements do
-      [var_node, file_node | opt_nodes] ->
-        stream_var = extract_symbol_name(var_node)
-        erl_var = erl_var_name(stream_var)
-        new_env = MapSet.put(local_env, stream_var)
-
-        open_args = [file_node | opt_nodes]
-        compiled_open_args = Enum.map(open_args, &compile_expr(&1, local_env))
-        open_args_cons = ast_cons_list(compiled_open_args)
-
-        open_call =
-          {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :open}},
-           [open_args_cons]}
-
-        body_exprs =
-          case body_nodes do
-            [] -> [{:atom, 1, nil}]
-            _ -> Enum.map(body_nodes, &compile_expr(&1, new_env))
-          end
-
-        close_call =
-          {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :close}},
-           [{:var, 1, erl_var}]}
-
-        {:block, 1,
-         [
-           {:match, 1, {:var, 1, erl_var}, open_call},
-           {:try, 1, body_exprs, [], [], [close_call]}
-         ]}
-
-      _ ->
-        raise ArgumentError, "Invalid with-open-file header: #{inspect(header)}"
-    end
-  end
-
   def compile_defparameter([var_node, val_node | _rest], local_env) do
     var_name = extract_symbol_name(var_node)
     compiled_val = compile_expr(val_node, local_env)
@@ -6069,13 +6029,39 @@ defmodule LispBeam do
 
   defp rewrite_mv_form(form) do
     case form do
-      {:list, pos, [{:id, id_pos, [op_name]} | form_args]}
-      when op_name in ["gethash", "GETHASH"] ->
-        {:list, pos, [{:id, id_pos, ["gethash_mv"]} | form_args]}
+      {:list, pos, [{:id, id_pos, [op_name]} | form_args]} ->
+        normalized = op_name |> String.downcase() |> String.replace("-", "_")
 
-      {:quoted, pos, [{:id, id_pos, [op_name]} | form_args]}
-      when op_name in ["gethash", "GETHASH"] ->
-        {:quoted, pos, [{:id, id_pos, ["gethash_mv"]} | form_args]}
+        case normalized do
+          "gethash" ->
+            {:list, pos, [{:id, id_pos, ["gethash_mv"]} | form_args]}
+
+          "read_line" ->
+            {:list, pos, [{:id, id_pos, ["read_line_mv"]} | form_args]}
+
+          "parse_namestring" ->
+            {:list, pos, [{:id, id_pos, ["parse_namestring_mv"]} | form_args]}
+
+          _ ->
+            form
+        end
+
+      {:quoted, pos, [{:id, id_pos, [op_name]} | form_args]} ->
+        normalized = op_name |> String.downcase() |> String.replace("-", "_")
+
+        case normalized do
+          "gethash" ->
+            {:quoted, pos, [{:id, id_pos, ["gethash_mv"]} | form_args]}
+
+          "read_line" ->
+            {:quoted, pos, [{:id, id_pos, ["read_line_mv"]} | form_args]}
+
+          "parse_namestring" ->
+            {:quoted, pos, [{:id, id_pos, ["parse_namestring_mv"]} | form_args]}
+
+          _ ->
+            form
+        end
 
       _ ->
         form
@@ -6564,6 +6550,34 @@ defmodule LispBeam do
   end
 
   # --- ANSI Common Lisp Stream Macros ---
+
+  def compile_with_open_file(args, local_env) do
+    case args do
+      [{:list, _pos, [stream_var, filespec | options]} | body_nodes] ->
+        open_call = {:list, 1, [{:id, 1, ["open"]}, filespec | options]}
+        compile_stream_wrapper(stream_var, open_call, body_nodes, local_env)
+
+      [{:quoted, _pos, [stream_var, filespec | options]} | body_nodes] ->
+        open_call = {:list, 1, [{:id, 1, ["open"]}, filespec | options]}
+        compile_stream_wrapper(stream_var, open_call, body_nodes, local_env)
+
+      _ ->
+        {:atom, 1, nil}
+    end
+  end
+
+  def compile_with_open_stream(args, local_env) do
+    case args do
+      [{:list, _pos, [stream_var, stream_expr]} | body_nodes] ->
+        compile_stream_wrapper(stream_var, stream_expr, body_nodes, local_env)
+
+      [{:quoted, _pos, [stream_var, stream_expr]} | body_nodes] ->
+        compile_stream_wrapper(stream_var, stream_expr, body_nodes, local_env)
+
+      _ ->
+        {:atom, 1, nil}
+    end
+  end
 
   def compile_with_input_from_string(args, local_env) do
     case args do

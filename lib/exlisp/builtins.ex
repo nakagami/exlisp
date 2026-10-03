@@ -6230,14 +6230,14 @@ defmodule ExLisp.Builtins do
 
   def string(x), do: string_designator_to_string(x)
 
-  defp to_string_val(val) when is_binary(val), do: val
-  defp to_string_val(%ExLisp.Symbol{} = sym), do: symbol_name(sym)
-  defp to_string_val(val) when is_atom(val), do: symbol_name(val)
+  def to_string_val(val) when is_binary(val), do: val
+  def to_string_val(%ExLisp.Symbol{} = sym), do: symbol_name(sym)
+  def to_string_val(val) when is_atom(val), do: symbol_name(val)
 
-  defp to_string_val(val) when is_integer(val) and val >= 0 and val <= 0x10FFFF,
+  def to_string_val(val) when is_integer(val) and val >= 0 and val <= 0x10FFFF,
     do: List.to_string([val])
 
-  defp to_string_val({:array, [len], tid}) when is_integer(len) do
+  def to_string_val({:array, [len], tid}) when is_integer(len) do
     meta =
       case :ets.lookup(tid, :__meta__) do
         [{:__meta__, m}] -> m
@@ -6289,7 +6289,7 @@ defmodule ExLisp.Builtins do
     end
   end
 
-  defp to_string_val(val), do: inspect(val)
+  def to_string_val(val), do: inspect(val)
 
   def char(str, idx) when is_integer(idx) and idx >= 0 do
     cond do
@@ -7576,7 +7576,7 @@ defmodule ExLisp.Builtins do
     end)
   end
 
-  defp parse_lisp_keywords(args, allowed_keys \\ nil) do
+  def parse_lisp_keywords(args, allowed_keys \\ nil) do
     if rem(length(args), 2) != 0 do
       raise ArgumentError, "Odd number of keyword arguments: #{inspect(args)}"
     end
@@ -7743,40 +7743,6 @@ defmodule ExLisp.Builtins do
     obj
   end
 
-  def write_line(obj, stream \\ nil)
-
-  def write_line(obj, stream) when is_binary(obj) do
-    if stream && is_pid(stream), do: IO.puts(stream, obj), else: IO.puts(obj)
-    obj
-  end
-
-  def write_line(obj, _stream) do
-    raise ArgumentError, "The value #{inspect(obj)} is not of type STRING"
-  end
-
-  def write_string(obj, stream \\ nil)
-
-  def write_string(obj, stream) when is_binary(obj) do
-    if stream && is_pid(stream), do: IO.write(stream, obj), else: IO.write(obj)
-    obj
-  end
-
-  def write_string(obj, _stream) do
-    raise ArgumentError, "The value #{inspect(obj)} is not of type STRING"
-  end
-
-  def write_char(char, stream \\ nil) do
-    output =
-      cond do
-        is_binary(char) -> char
-        is_integer(char) -> <<char::utf8>>
-        true -> "#{inspect(ExLisp.to_repl_display(char))}"
-      end
-
-    if stream && is_pid(stream), do: IO.write(stream, output), else: IO.write(output)
-    char
-  end
-
   def write(args) when is_list(args) do
     case args do
       [obj | rest] ->
@@ -7800,60 +7766,6 @@ defmodule ExLisp.Builtins do
 
   def write_to_string(obj) do
     inspect(ExLisp.to_repl_display(obj))
-  end
-
-  def open(args) when is_list(args) do
-    case args do
-      [path | rest] ->
-        filename = to_string_val(path)
-        opts = parse_open_opts(rest)
-        modes = build_file_modes(opts)
-
-        case File.open(filename, modes) do
-          {:ok, pid} ->
-            pid
-
-          {:error, reason} ->
-            if opts[:direction] == :input and opts[:if_does_not_exist] == nil do
-              nil
-            else
-              raise "Error opening file #{filename}: #{inspect(reason)}"
-            end
-        end
-
-      _ ->
-        raise ArgumentError, "open requires at least 1 argument"
-    end
-  end
-
-  def open(path), do: open([path])
-
-  def close(stream) do
-    if is_pid(stream) or is_port(stream) do
-      case File.close(stream) do
-        :ok ->
-          :t
-
-        _ ->
-          try do
-            GenServer.call(stream, :close, 100)
-          rescue
-            _ ->
-              if is_pid(stream) and Process.alive?(stream) do
-                Process.exit(stream, :normal)
-              end
-          catch
-            _, _ ->
-              if is_pid(stream) and Process.alive?(stream) do
-                Process.exit(stream, :normal)
-              end
-          end
-
-          :t
-      end
-    else
-      nil
-    end
   end
 
   def eval(form) do
@@ -7889,23 +7801,6 @@ defmodule ExLisp.Builtins do
         raise "Compilation error for #{file_path}: #{inspect(reason)}"
     end
   end
-
-  def file_length(stream) do
-    if is_pid(stream) do
-      case :file.position(stream, :eof) do
-        {:ok, size} ->
-          :file.position(stream, :bof)
-          size
-
-        _ ->
-          nil
-      end
-    else
-      nil
-    end
-  end
-
-  def listen(_stream \\ nil), do: nil
 
   def read_from_string(args) when is_list(args) do
     case args do
@@ -7959,7 +7854,12 @@ defmodule ExLisp.Builtins do
             parse_read_expr(trimmed)
           end
         else
-          device = if is_pid(source), do: source, else: :stdio
+          device =
+            case source do
+              %ExLisp.Stream{device: pid} when is_pid(pid) -> pid
+              pid when is_pid(pid) -> pid
+              _ -> :stdio
+            end
 
           case read_one_s_expr(device) do
             {:ok, val} ->
@@ -7970,135 +7870,6 @@ defmodule ExLisp.Builtins do
           end
         end
     end
-  end
-
-  def read_line(args \\ []) do
-    args_list = if is_list(args), do: args, else: [args]
-
-    case args_list do
-      [] ->
-        case IO.read(:line) do
-          :eof -> nil
-          line -> String.trim_trailing(line, "\n") |> String.trim_trailing("\r")
-        end
-
-      [device | rest] ->
-        eof_error_p =
-          case rest do
-            [p | _] -> p not in [nil, nil, false]
-            _ -> false
-          end
-
-        eof_val =
-          case rest do
-            [_, val | _] -> val
-            _ -> nil
-          end
-
-        dev = if is_pid(device), do: device, else: :stdio
-
-        case IO.read(dev, :line) do
-          :eof ->
-            if eof_error_p, do: raise("End of file on stream"), else: eof_val
-
-          {:error, _} ->
-            if eof_error_p, do: raise("Read error"), else: eof_val
-
-          line ->
-            String.trim_trailing(line, "\n") |> String.trim_trailing("\r")
-        end
-    end
-  end
-
-  def read_char(args \\ []) do
-    args_list = if is_list(args), do: args, else: [args]
-
-    case args_list do
-      [] ->
-        case IO.getn("", 1) do
-          :eof ->
-            nil
-
-          char_str when is_binary(char_str) and byte_size(char_str) > 0 ->
-            char_str |> String.to_charlist() |> hd()
-
-          _ ->
-            nil
-        end
-
-      [device | rest] ->
-        eof_error_p =
-          case rest do
-            [p | _] -> p not in [nil, nil, false]
-            _ -> false
-          end
-
-        eof_val =
-          case rest do
-            [_, val | _] -> val
-            _ -> nil
-          end
-
-        dev = if is_pid(device), do: device, else: :stdio
-
-        case IO.getn(dev, "", 1) do
-          :eof ->
-            if eof_error_p, do: raise("End of file on stream"), else: eof_val
-
-          char_str when is_binary(char_str) and byte_size(char_str) > 0 ->
-            char_str |> String.to_charlist() |> hd()
-
-          _ ->
-            eof_val
-        end
-    end
-  end
-
-  def peek_char(args \\ []) do
-    case args do
-      [] -> read_char([])
-      [_peek_type | rest] -> read_char(rest)
-    end
-  end
-
-  defp parse_open_opts([]), do: [direction: :input]
-
-  defp parse_open_opts([k, v | rest]) when is_atom(k) do
-    key =
-      k
-      |> Atom.to_string()
-      |> String.trim_leading(":")
-      |> String.replace("-", "_")
-      |> String.to_atom()
-
-    [{key, v} | parse_open_opts(rest)]
-  end
-
-  defp parse_open_opts([_ | rest]), do: parse_open_opts(rest)
-
-  defp build_file_modes(opts) do
-    direction = Keyword.get(opts, :direction, :input)
-    if_exists = Keyword.get(opts, :if_exists, :supersede)
-
-    base =
-      case direction do
-        :input ->
-          [:read, :utf8]
-
-        :output ->
-          case if_exists do
-            :append -> [:append, :utf8]
-            _ -> [:write, :utf8]
-          end
-
-        :io ->
-          [:read, :write, :utf8]
-
-        _ ->
-          [:read, :utf8]
-      end
-
-    base
   end
 
   defp read_one_s_expr(device) do
@@ -8311,16 +8082,6 @@ defmodule ExLisp.Builtins do
     end
   end
 
-  def terpri do
-    IO.puts("")
-    nil
-  end
-
-  def fresh_line do
-    IO.puts("")
-    :t
-  end
-
   def format(dest, fmt_string, args \\ []) do
     fmt = to_string_val(fmt_string)
     arg_list = if is_list(args), do: args, else: [args]
@@ -8333,6 +8094,10 @@ defmodule ExLisp.Builtins do
 
       dest in [nil, false] ->
         formatted
+
+      match?(%ExLisp.Stream{}, dest) ->
+        ExLisp.Stream.write_string(formatted, dest)
+        nil
 
       is_pid(dest) or is_port(dest) ->
         IO.write(dest, formatted)
@@ -9071,51 +8836,32 @@ defmodule ExLisp.Builtins do
     :erlang.phash2(obj)
   end
 
-  def make_string_input_stream(string, arg2 \\ 0, arg3 \\ nil) do
-    str = to_string_val(string)
-
-    {start, end_pos} =
-      cond do
-        is_integer(arg2) ->
-          {arg2, arg3}
-
-        is_list(arg2) ->
-          opts = parse_lisp_keywords(arg2)
-          s = Keyword.get(opts, :start, 0)
-          e = Keyword.get(opts, :end, nil)
-          {s, e}
-
-        arg2 in [:start, :":start"] ->
-          {arg3, nil}
-
-        true ->
-          {0, nil}
-      end
-
-    s = if is_integer(start) and start > 0, do: start, else: 0
-
-    sliced =
-      if is_integer(end_pos) and end_pos >= s do
-        String.slice(str, s, end_pos - s)
-      else
-        String.slice(str, s..-1//1)
-      end
-
-    {:ok, pid} = StringIO.open(sliced)
-    pid
+  def make_string_input_stream(args) when is_list(args) do
+    case args do
+      [string, arg2, arg3 | _] -> ExLisp.Stream.make_string_input_stream(string, arg2, arg3)
+      [string, arg2] -> ExLisp.Stream.make_string_input_stream(string, arg2, nil)
+      [string] -> ExLisp.Stream.make_string_input_stream(string, 0, nil)
+      _ -> raise ArgumentError, "make-string-input-stream requires at least 1 argument"
+    end
   end
 
-  def make_string_output_stream(_opts \\ []) do
-    {:ok, pid} = StringIO.open("")
-    pid
+  def make_string_input_stream(string, arg2 \\ 0, arg3 \\ nil) do
+    ExLisp.Stream.make_string_input_stream(string, arg2, arg3)
+  end
+
+  def make_string_output_stream(opts \\ []) do
+    ExLisp.Stream.make_string_output_stream(opts)
+  end
+
+  def get_output_stream_string(args) when is_list(args) do
+    case args do
+      [stream | _] -> ExLisp.Stream.get_output_stream_string(stream)
+      _ -> ""
+    end
   end
 
   def get_output_stream_string(stream) do
-    if is_pid(stream) do
-      StringIO.flush(stream)
-    else
-      ""
-    end
+    ExLisp.Stream.get_output_stream_string(stream)
   end
 
   def boole(op, integer1, integer2)
@@ -10248,4 +9994,374 @@ defmodule ExLisp.Builtins do
     end
   end
   def set_readtable_case(rt, new_case), do: ExLisp.Readtable.set_readtable_case(rt, new_case)
+
+  # --- Streams ---
+  def streamp(args) when is_list(args), do: ExLisp.Stream.streamp(args)
+  def streamp(s), do: ExLisp.Stream.streamp(s)
+
+  def open_stream_p(args) when is_list(args), do: ExLisp.Stream.open_stream_p(args)
+  def open_stream_p(s), do: ExLisp.Stream.open_stream_p(s)
+
+  def input_stream_p(args) when is_list(args), do: ExLisp.Stream.input_stream_p(args)
+  def input_stream_p(s), do: ExLisp.Stream.input_stream_p(s)
+
+  def output_stream_p(args) when is_list(args), do: ExLisp.Stream.output_stream_p(args)
+  def output_stream_p(s), do: ExLisp.Stream.output_stream_p(s)
+
+  def interactive_stream_p(args) when is_list(args), do: ExLisp.Stream.interactive_stream_p(args)
+  def interactive_stream_p(s), do: ExLisp.Stream.interactive_stream_p(s)
+
+  def stream_element_type(args) when is_list(args), do: ExLisp.Stream.stream_element_type(args)
+  def stream_element_type(s), do: ExLisp.Stream.stream_element_type(s)
+
+  def open(args) when is_list(args) do
+    case args do
+      [filespec | opts] -> ExLisp.Stream.open(filespec, opts)
+      filespec -> ExLisp.Stream.open(filespec, [])
+    end
+  end
+  def open(filespec), do: ExLisp.Stream.open(filespec, [])
+  def open(filespec, opts), do: ExLisp.Stream.open(filespec, opts)
+
+  def close(args) when is_list(args), do: ExLisp.Stream.close(args)
+  def close(s), do: ExLisp.Stream.close(s, [])
+  def close(s, opts), do: ExLisp.Stream.close(s, opts)
+
+  def make_broadcast_stream(args \\ [])
+  def make_broadcast_stream(args) when is_list(args), do: ExLisp.Stream.make_broadcast_stream(args)
+  def make_broadcast_stream(s), do: ExLisp.Stream.make_broadcast_stream([s])
+
+  def broadcast_stream_streams(args) when is_list(args), do: ExLisp.Stream.broadcast_stream_streams(args)
+  def broadcast_stream_streams(s), do: ExLisp.Stream.broadcast_stream_streams(s)
+
+  def make_concatenated_stream(args \\ [])
+  def make_concatenated_stream(args) when is_list(args), do: ExLisp.Stream.make_concatenated_stream(args)
+  def make_concatenated_stream(s), do: ExLisp.Stream.make_concatenated_stream([s])
+
+  def concatenated_stream_streams(args) when is_list(args), do: ExLisp.Stream.concatenated_stream_streams(args)
+  def concatenated_stream_streams(s), do: ExLisp.Stream.concatenated_stream_streams(s)
+
+  def make_two_way_stream(args) when is_list(args) do
+    case args do
+      [in_s, out_s | _] -> ExLisp.Stream.make_two_way_stream(in_s, out_s)
+      _ -> raise ArgumentError, "make-two-way-stream requires 2 arguments"
+    end
+  end
+  def make_two_way_stream(in_s, out_s), do: ExLisp.Stream.make_two_way_stream(in_s, out_s)
+
+  def two_way_stream_input_stream(args) when is_list(args), do: ExLisp.Stream.two_way_stream_input_stream(args)
+  def two_way_stream_input_stream(s), do: ExLisp.Stream.two_way_stream_input_stream(s)
+
+  def two_way_stream_output_stream(args) when is_list(args), do: ExLisp.Stream.two_way_stream_output_stream(args)
+  def two_way_stream_output_stream(s), do: ExLisp.Stream.two_way_stream_output_stream(s)
+
+  def make_echo_stream(args) when is_list(args) do
+    case args do
+      [in_s, out_s | _] -> ExLisp.Stream.make_echo_stream(in_s, out_s)
+      _ -> raise ArgumentError, "make-echo-stream requires 2 arguments"
+    end
+  end
+  def make_echo_stream(in_s, out_s), do: ExLisp.Stream.make_echo_stream(in_s, out_s)
+
+  def echo_stream_input_stream(args) when is_list(args), do: ExLisp.Stream.echo_stream_input_stream(args)
+  def echo_stream_input_stream(s), do: ExLisp.Stream.echo_stream_input_stream(s)
+
+  def echo_stream_output_stream(args) when is_list(args), do: ExLisp.Stream.echo_stream_output_stream(args)
+  def echo_stream_output_stream(s), do: ExLisp.Stream.echo_stream_output_stream(s)
+
+  def make_synonym_stream(args) when is_list(args) do
+    case args do
+      [sym | _] -> ExLisp.Stream.make_synonym_stream(sym)
+      _ -> raise ArgumentError, "make-synonym-stream requires 1 symbol argument"
+    end
+  end
+  def make_synonym_stream(sym), do: ExLisp.Stream.make_synonym_stream(sym)
+
+  def synonym_stream_symbol(args) when is_list(args), do: ExLisp.Stream.synonym_stream_symbol(args)
+  def synonym_stream_symbol(s), do: ExLisp.Stream.synonym_stream_symbol(s)
+
+  def read_char, do: ExLisp.Stream.read_char(nil, :t, nil)
+  def read_char(args) when is_list(args) do
+    case args do
+      [s, e, v | _] -> ExLisp.Stream.read_char(s, e, v)
+      [s, e] -> ExLisp.Stream.read_char(s, e, nil)
+      [s] -> ExLisp.Stream.read_char(s, :t, nil)
+      [] -> ExLisp.Stream.read_char(nil, :t, nil)
+    end
+  end
+  def read_char(s), do: ExLisp.Stream.read_char(s, :t, nil)
+  def read_char(s, e), do: ExLisp.Stream.read_char(s, e, nil)
+  def read_char(s, e, v), do: ExLisp.Stream.read_char(s, e, v)
+
+  def unread_char(args) when is_list(args) do
+    case args do
+      [c, s | _] -> ExLisp.Stream.unread_char(c, s)
+      [c] -> ExLisp.Stream.unread_char(c, nil)
+      _ -> nil
+    end
+  end
+  def unread_char(c), do: ExLisp.Stream.unread_char(c, nil)
+  def unread_char(c, s), do: ExLisp.Stream.unread_char(c, s)
+
+  def peek_char, do: ExLisp.Stream.peek_char(nil, nil, :t, nil)
+  def peek_char(args) when is_list(args) do
+    case args do
+      [t, s, e, v | _] -> ExLisp.Stream.peek_char(t, s, e, v)
+      [t, s, e] -> ExLisp.Stream.peek_char(t, s, e, nil)
+      [t, s] -> ExLisp.Stream.peek_char(t, s, :t, nil)
+      [t] -> ExLisp.Stream.peek_char(t, nil, :t, nil)
+      [] -> ExLisp.Stream.peek_char(nil, nil, :t, nil)
+    end
+  end
+  def peek_char(t), do: ExLisp.Stream.peek_char(t, nil, :t, nil)
+  def peek_char(t, s), do: ExLisp.Stream.peek_char(t, s, :t, nil)
+  def peek_char(t, s, e), do: ExLisp.Stream.peek_char(t, s, e, nil)
+  def peek_char(t, s, e, v), do: ExLisp.Stream.peek_char(t, s, e, v)
+
+  def read_line, do: ExLisp.Stream.read_line(nil, :t, nil)
+  def read_line(args) when is_list(args) do
+    case args do
+      [s, e, v | _] -> ExLisp.Stream.read_line(s, e, v)
+      [s, e] -> ExLisp.Stream.read_line(s, e, nil)
+      [s] -> ExLisp.Stream.read_line(s, :t, nil)
+      [] -> ExLisp.Stream.read_line(nil, :t, nil)
+    end
+  end
+  def read_line(s), do: ExLisp.Stream.read_line(s, :t, nil)
+  def read_line(s, e), do: ExLisp.Stream.read_line(s, e, nil)
+  def read_line(s, e, v), do: ExLisp.Stream.read_line(s, e, v)
+
+  def read_line_mv, do: ExLisp.Stream.read_line_mv(nil, :t, nil)
+  def read_line_mv(args) when is_list(args) do
+    case args do
+      [s, e, v | _] -> ExLisp.Stream.read_line_mv(s, e, v)
+      [s, e] -> ExLisp.Stream.read_line_mv(s, e, nil)
+      [s] -> ExLisp.Stream.read_line_mv(s, :t, nil)
+      [] -> ExLisp.Stream.read_line_mv(nil, :t, nil)
+    end
+  end
+  def read_line_mv(s), do: ExLisp.Stream.read_line_mv(s, :t, nil)
+  def read_line_mv(s, e), do: ExLisp.Stream.read_line_mv(s, e, nil)
+  def read_line_mv(s, e, v), do: ExLisp.Stream.read_line_mv(s, e, v)
+
+  def read_sequence(args) when is_list(args) do
+    case args do
+      [seq, s | opts] -> ExLisp.Stream.read_sequence(seq, s, opts)
+      _ -> raise ArgumentError, "read-sequence requires at least 2 arguments"
+    end
+  end
+  def read_sequence(seq, s), do: ExLisp.Stream.read_sequence(seq, s, [])
+  def read_sequence(seq, s, opts), do: ExLisp.Stream.read_sequence(seq, s, opts)
+
+  def write_char(args) when is_list(args) do
+    case args do
+      [c, s | _] -> ExLisp.Stream.write_char(c, s)
+      [c] -> ExLisp.Stream.write_char(c, nil)
+      _ -> nil
+    end
+  end
+  def write_char(c), do: ExLisp.Stream.write_char(c, nil)
+  def write_char(c, s), do: ExLisp.Stream.write_char(c, s)
+
+  def write_string(args) when is_list(args) do
+    case args do
+      [str, s | opts] -> ExLisp.Stream.write_string(str, s, opts)
+      [str] -> ExLisp.Stream.write_string(str, nil, [])
+      _ -> ""
+    end
+  end
+  def write_string(str), do: ExLisp.Stream.write_string(str, nil, [])
+  def write_string(str, s), do: ExLisp.Stream.write_string(str, s, [])
+  def write_string(str, s, opts), do: ExLisp.Stream.write_string(str, s, opts)
+
+  def write_line(args) when is_list(args) do
+    case args do
+      [str, s | opts] -> ExLisp.Stream.write_line(str, s, opts)
+      [str] -> ExLisp.Stream.write_line(str, nil, [])
+      _ -> ""
+    end
+  end
+  def write_line(str), do: ExLisp.Stream.write_line(str, nil, [])
+  def write_line(str, s), do: ExLisp.Stream.write_line(str, s, [])
+  def write_line(str, s, opts), do: ExLisp.Stream.write_line(str, s, opts)
+
+  def write_sequence(args) when is_list(args) do
+    case args do
+      [seq, s | opts] -> ExLisp.Stream.write_sequence(seq, s, opts)
+      _ -> raise ArgumentError, "write-sequence requires at least 2 arguments"
+    end
+  end
+  def write_sequence(seq, s), do: ExLisp.Stream.write_sequence(seq, s, [])
+  def write_sequence(seq, s, opts), do: ExLisp.Stream.write_sequence(seq, s, opts)
+
+  def terpri, do: ExLisp.Stream.terpri(nil)
+  def terpri([]), do: ExLisp.Stream.terpri(nil)
+  def terpri([s | _]), do: ExLisp.Stream.terpri(s)
+  def terpri(s), do: ExLisp.Stream.terpri(s)
+
+  def fresh_line, do: ExLisp.Stream.fresh_line(nil)
+  def fresh_line([]), do: ExLisp.Stream.fresh_line(nil)
+  def fresh_line([s | _]), do: ExLisp.Stream.fresh_line(s)
+  def fresh_line(s), do: ExLisp.Stream.fresh_line(s)
+
+  def finish_output, do: ExLisp.Stream.finish_output(nil)
+  def finish_output([]), do: ExLisp.Stream.finish_output(nil)
+  def finish_output([s | _]), do: ExLisp.Stream.finish_output(s)
+  def finish_output(s), do: ExLisp.Stream.finish_output(s)
+
+  def force_output, do: ExLisp.Stream.force_output(nil)
+  def force_output([]), do: ExLisp.Stream.force_output(nil)
+  def force_output([s | _]), do: ExLisp.Stream.force_output(s)
+  def force_output(s), do: ExLisp.Stream.force_output(s)
+
+  def clear_output, do: ExLisp.Stream.clear_output(nil)
+  def clear_output([]), do: ExLisp.Stream.clear_output(nil)
+  def clear_output([s | _]), do: ExLisp.Stream.clear_output(s)
+  def clear_output(s), do: ExLisp.Stream.clear_output(s)
+
+  def listen, do: ExLisp.Stream.listen(nil)
+  def listen([]), do: ExLisp.Stream.listen(nil)
+  def listen([s | _]), do: ExLisp.Stream.listen(s)
+  def listen(s), do: ExLisp.Stream.listen(s)
+
+  def clear_input, do: ExLisp.Stream.clear_input(nil)
+  def clear_input([]), do: ExLisp.Stream.clear_input(nil)
+  def clear_input([s | _]), do: ExLisp.Stream.clear_input(s)
+  def clear_input(s), do: ExLisp.Stream.clear_input(s)
+
+  def file_position(args) when is_list(args) do
+    case args do
+      [s, pos | _] -> ExLisp.Stream.file_position(s, pos)
+      [s] -> ExLisp.Stream.file_position(s, nil)
+      _ -> nil
+    end
+  end
+  def file_position(s), do: ExLisp.Stream.file_position(s, nil)
+  def file_position(s, pos), do: ExLisp.Stream.file_position(s, pos)
+
+  def file_length(args) when is_list(args), do: ExLisp.Stream.file_length(args)
+  def file_length(s), do: ExLisp.Stream.file_length(s)
+
+  # --- Pathnames ---
+  def pathname(args) when is_list(args), do: ExLisp.Pathname.pathname(args)
+  def pathname(p), do: ExLisp.Pathname.pathname(p)
+
+  def pathnamep(args) when is_list(args), do: ExLisp.Pathname.pathnamep(args)
+  def pathnamep(p), do: ExLisp.Pathname.pathnamep(p)
+
+  def make_pathname(args \\ []), do: ExLisp.Pathname.make_pathname(args)
+
+  def pathname_host(args) when is_list(args), do: ExLisp.Pathname.pathname_host(args)
+  def pathname_host(p), do: ExLisp.Pathname.pathname_host(p)
+
+  def pathname_device(args) when is_list(args), do: ExLisp.Pathname.pathname_device(args)
+  def pathname_device(p), do: ExLisp.Pathname.pathname_device(p)
+
+  def pathname_directory(args) when is_list(args), do: ExLisp.Pathname.pathname_directory(args)
+  def pathname_directory(p), do: ExLisp.Pathname.pathname_directory(p)
+
+  def pathname_name(args) when is_list(args), do: ExLisp.Pathname.pathname_name(args)
+  def pathname_name(p), do: ExLisp.Pathname.pathname_name(p)
+
+  def pathname_type(args) when is_list(args), do: ExLisp.Pathname.pathname_type(args)
+  def pathname_type(p), do: ExLisp.Pathname.pathname_type(p)
+
+  def pathname_version(args) when is_list(args), do: ExLisp.Pathname.pathname_version(args)
+  def pathname_version(p), do: ExLisp.Pathname.pathname_version(p)
+
+  def namestring(args) when is_list(args), do: ExLisp.Pathname.namestring(args)
+  def namestring(p), do: ExLisp.Pathname.namestring(p)
+
+  def file_namestring(args) when is_list(args), do: ExLisp.Pathname.file_namestring(args)
+  def file_namestring(p), do: ExLisp.Pathname.file_namestring(p)
+
+  def directory_namestring(args) when is_list(args), do: ExLisp.Pathname.directory_namestring(args)
+  def directory_namestring(p), do: ExLisp.Pathname.directory_namestring(p)
+
+  def host_namestring(args) when is_list(args), do: ExLisp.Pathname.host_namestring(args)
+  def host_namestring(p), do: ExLisp.Pathname.host_namestring(p)
+
+  def enough_namestring(args) when is_list(args) do
+    case args do
+      [p, d | _] -> ExLisp.Pathname.enough_namestring(p, d)
+      [p] -> ExLisp.Pathname.enough_namestring(p, nil)
+      _ -> ""
+    end
+  end
+  def enough_namestring(p), do: ExLisp.Pathname.enough_namestring(p, nil)
+  def enough_namestring(p, d), do: ExLisp.Pathname.enough_namestring(p, d)
+
+  def parse_namestring(args) when is_list(args), do: ExLisp.Pathname.parse_namestring(args)
+  def parse_namestring(thing), do: ExLisp.Pathname.parse_namestring(thing)
+
+  def parse_namestring_mv(args) when is_list(args), do: ExLisp.Pathname.parse_namestring_mv(args)
+  def parse_namestring_mv(thing), do: ExLisp.Pathname.parse_namestring_mv(thing)
+
+  def merge_pathnames(args) when is_list(args), do: ExLisp.Pathname.merge_pathnames(args)
+  def merge_pathnames(p), do: ExLisp.Pathname.merge_pathnames(p, nil, :newest)
+  def merge_pathnames(p, def_p), do: ExLisp.Pathname.merge_pathnames(p, def_p, :newest)
+  def merge_pathnames(p, def_p, def_v), do: ExLisp.Pathname.merge_pathnames(p, def_p, def_v)
+
+  def truename(args) when is_list(args) do
+    case args do
+      [filespec | _] -> ExLisp.Pathname.truename(filespec)
+      _ -> raise ArgumentError, "truename requires 1 argument"
+    end
+  end
+  def truename(filespec), do: ExLisp.Pathname.truename(filespec)
+
+  def probe_file(args) when is_list(args) do
+    case args do
+      [filespec | _] -> ExLisp.Pathname.probe_file(filespec)
+      _ -> nil
+    end
+  end
+  def probe_file(filespec), do: ExLisp.Pathname.probe_file(filespec)
+
+  def file_author(args) when is_list(args) do
+    case args do
+      [filespec | _] -> ExLisp.Pathname.file_author(filespec)
+      _ -> nil
+    end
+  end
+  def file_author(filespec), do: ExLisp.Pathname.file_author(filespec)
+
+  def file_write_date(args) when is_list(args) do
+    case args do
+      [filespec | _] -> ExLisp.Pathname.file_write_date(filespec)
+      _ -> nil
+    end
+  end
+  def file_write_date(filespec), do: ExLisp.Pathname.file_write_date(filespec)
+
+  def directory, do: ExLisp.Pathname.directory("*")
+  def directory(args) when is_list(args) do
+    case args do
+      [spec | _] -> ExLisp.Pathname.directory(spec)
+      _ -> ExLisp.Pathname.directory("*")
+    end
+  end
+  def directory(spec), do: ExLisp.Pathname.directory(spec)
+
+  def user_homedir_pathname, do: ExLisp.Pathname.user_homedir_pathname()
+  def user_homedir_pathname(_), do: ExLisp.Pathname.user_homedir_pathname()
+
+  def wild_pathname_p(args) when is_list(args) do
+    case args do
+      [p, field | _] -> ExLisp.Pathname.wild_pathname_p(p, field)
+      [p] -> ExLisp.Pathname.wild_pathname_p(p, nil)
+      _ -> nil
+    end
+  end
+  def wild_pathname_p(p), do: ExLisp.Pathname.wild_pathname_p(p, nil)
+  def wild_pathname_p(p, field), do: ExLisp.Pathname.wild_pathname_p(p, field)
+
+  def pathname_match_p(args) when is_list(args) do
+    case args do
+      [p, wild | _] -> ExLisp.Pathname.pathname_match_p(p, wild)
+      _ -> nil
+    end
+  end
+  def pathname_match_p(p, wild), do: ExLisp.Pathname.pathname_match_p(p, wild)
 end
+
