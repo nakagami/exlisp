@@ -429,6 +429,10 @@ defmodule ExLisp.LispParser do
 
   defp read_token_chars([], acc), do: {Enum.reverse(acc), []}
 
+  defp read_token_chars([?\\, c | rest], acc) do
+    read_token_chars(rest, [c | acc])
+  end
+
   defp read_token_chars([c | _] = chars, acc)
        when c in [?\s, ?\t, ?\n, ?\r, ?(, ?), ?[, ?], ?{, ?}, ?\", ?;, ?`, ?,] do
     {Enum.reverse(acc), chars}

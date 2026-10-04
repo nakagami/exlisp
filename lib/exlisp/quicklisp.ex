@@ -98,6 +98,39 @@ defmodule ExLisp.Quicklisp do
     end
   end
 
+  @doc """
+  Uninstalls the specified system/project and removes its cached installation directory.
+  """
+  def uninstall(system) do
+    ensure_dist()
+    {systems_map, releases_map} = load_indices()
+    sys_name = normalize_system_name(system)
+
+    case lookup_system_entry(systems_map, sys_name) do
+      nil ->
+        nil
+
+      %{project: project_name} ->
+        case Map.get(releases_map, project_name) do
+          nil ->
+            nil
+
+          %{prefix: prefix} ->
+            path = Path.join(software_dir(), prefix)
+            if File.dir?(path) do
+              File.rm_rf!(path)
+            end
+
+            # Unmark loaded
+            ensure_loaded_table()
+            :ets.delete(@loaded_table, sys_name)
+            :ets.delete(@loaded_table, String.replace(sys_name, "_", "-"))
+            :ets.delete(@loaded_table, String.replace(sys_name, "-", "_"))
+            :t
+        end
+    end
+  end
+
   # --- Internal processing ---
 
   defp do_quickload(sys_name, systems_map, releases_map, opts) do
@@ -147,10 +180,11 @@ defmodule ExLisp.Quicklisp do
                 found
             end
 
-          # 3. Recursively load dependencies
+          # 3. Recursively load defsystem dependencies and regular dependencies
+          defsys_deps = (primary_sys_def[:defsystem_depends_on] || []) |> Enum.reject(&skip_dependency?/1)
           deps = primary_sys_def.depends_on |> Enum.reject(&skip_dependency?/1)
 
-          Enum.each(deps, fn dep_sys ->
+          Enum.each(defsys_deps ++ deps, fn dep_sys ->
             do_quickload(dep_sys, systems_map, releases_map, opts)
           end)
 
@@ -197,9 +231,10 @@ defmodule ExLisp.Quicklisp do
           found
       end
 
+    defsys_deps = (primary_sys_def[:defsystem_depends_on] || []) |> Enum.reject(&skip_dependency?/1)
     deps = primary_sys_def.depends_on |> Enum.reject(&skip_dependency?/1)
 
-    Enum.each(deps, fn dep_sys ->
+    Enum.each(defsys_deps ++ deps, fn dep_sys ->
       do_quickload(dep_sys, systems_map, releases_map, opts)
     end)
 

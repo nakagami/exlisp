@@ -9193,6 +9193,71 @@ defmodule ExLisp.Builtins do
 
   def where_is_system(system), do: ExLisp.Quicklisp.where_is_system(system)
 
+  # --- Documentation ---
+
+  def documentation(args) when is_list(args) do
+    case args do
+      [x, doc_type | _] -> documentation(x, doc_type)
+      [x] -> documentation(x, :function)
+      _ -> nil
+    end
+  end
+
+  def documentation(x, doc_type) do
+    key = ExLisp.Env.normalize_name(x)
+    doc_k = ExLisp.Env.normalize_name(doc_type)
+
+    case get_symbol_prop(key, :"documentation_#{doc_k}") do
+      nil -> get_symbol_prop(key, :documentation)
+      doc -> doc
+    end
+  end
+
+  def set_documentation(x, doc_type, string) do
+    key = ExLisp.Env.normalize_name(x)
+    doc_k = ExLisp.Env.normalize_name(doc_type)
+    set_symbol_prop(key, :"documentation_#{doc_k}", string)
+    set_symbol_prop(key, :documentation, string)
+    string
+  end
+
+  def ql_uninstall(args) when is_list(args) do
+    case args do
+      [system | _] -> ExLisp.Quicklisp.uninstall(system)
+      system -> ExLisp.Quicklisp.uninstall(system)
+    end
+  end
+
+  def ql_uninstall(system), do: ExLisp.Quicklisp.uninstall(system)
+
+  def asdf_find_system(args) when is_list(args) do
+    case args do
+      [system | _] -> ExLisp.ASDF.find_system(system)
+      system -> ExLisp.ASDF.find_system(system)
+    end
+  end
+
+  def asdf_find_system(system), do: ExLisp.ASDF.find_system(system)
+
+  def asdf_system_source_directory(args) when is_list(args) do
+    case args do
+      [system | _] -> ExLisp.ASDF.system_source_directory(system)
+      system -> ExLisp.ASDF.system_source_directory(system)
+    end
+  end
+
+  def asdf_system_source_directory(system), do: ExLisp.ASDF.system_source_directory(system)
+
+  def asdf_system_relative_pathname(args) when is_list(args) do
+    case args do
+      [system, path | _] -> ExLisp.ASDF.system_relative_pathname(system, path)
+      _ -> nil
+    end
+  end
+
+  def asdf_system_relative_pathname(system, path),
+    do: ExLisp.ASDF.system_relative_pathname(system, path)
+
   # --- Hex.pm ---
 
   def hex_install(args) when is_list(args) do

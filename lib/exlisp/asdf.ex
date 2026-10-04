@@ -36,6 +36,7 @@ defmodule ExLisp.ASDF do
         name: sys_name,
         version: opts[:version],
         depends_on: opts[:depends_on] || [],
+        defsystem_depends_on: opts[:defsystem_depends_on] || [],
         components: opts[:components] || [],
         pathname: opts[:pathname],
         serial: opts[:serial] || false
@@ -50,7 +51,13 @@ defmodule ExLisp.ASDF do
   defp extract_defsystem(_), do: :error
 
   defp parse_defsystem_options(args) do
-    parse_options_kv(args, %{depends_on: [], components: [], serial: false, pathname: nil})
+    parse_options_kv(args, %{
+      depends_on: [],
+      defsystem_depends_on: [],
+      components: [],
+      serial: false,
+      pathname: nil
+    })
   end
 
   defp parse_options_kv([], acc), do: acc
@@ -67,6 +74,10 @@ defmodule ExLisp.ASDF do
       :depends_on ->
         deps = extract_list_of_names(v_node)
         parse_options_kv(rest, Map.put(acc, :depends_on, deps))
+
+      k when k in [:defsystem_depends_on, :"defsystem-depends-on"] ->
+        deps = extract_list_of_names(v_node)
+        parse_options_kv(rest, Map.put(acc, :defsystem_depends_on, deps))
 
       :components ->
         comps = parse_components(v_node)
@@ -98,20 +109,69 @@ defmodule ExLisp.ASDF do
   defp parse_options_kv([_single | rest], acc), do: parse_options_kv(rest, acc)
 
   defp extract_list_of_names({:list, _pos, elems}) do
-    Enum.map(elems, &normalize_name/1) |> Enum.reject(&(&1 == nil or &1 == ""))
+    Enum.flat_map(elems, &extract_single_dep/1)
   end
 
   defp extract_list_of_names({:quoted, _pos, elems}) do
-    Enum.map(elems, &normalize_name/1) |> Enum.reject(&(&1 == nil or &1 == ""))
+    extract_list_of_names(elems)
   end
 
   defp extract_list_of_names(elems) when is_list(elems) do
-    Enum.map(elems, &normalize_name/1) |> Enum.reject(&(&1 == nil or &1 == ""))
+    Enum.flat_map(elems, &extract_single_dep/1)
   end
 
   defp extract_list_of_names(single) do
-    case normalize_name(single) do
+    extract_single_dep(single)
+  end
+
+  defp extract_single_dep({:list, _pos, [{:id, _, [op]} | rest]})
+       when op in ["feature", "FEATURE", ":feature"] do
+    case rest do
+      [feat_expr, dep_form | _] ->
+        if ExLisp.LispParser.feature_matches?(feat_expr) do
+          extract_list_of_names(dep_form)
+        else
+          []
+        end
+
+      _ ->
+        []
+    end
+  end
+
+  defp extract_single_dep({:list, _pos, [{:lit, :feature} | rest]}) do
+    case rest do
+      [feat_expr, dep_form | _] ->
+        if ExLisp.LispParser.feature_matches?(feat_expr) do
+          extract_list_of_names(dep_form)
+        else
+          []
+        end
+
+      _ ->
+        []
+    end
+  end
+
+  defp extract_single_dep({:list, _pos, [{:id, _, [op]} | [first | _]]})
+       when op in ["require", "REQUIRE", ":require"] do
+    case normalize_name(first) do
       nil -> []
+      name -> [name]
+    end
+  end
+
+  defp extract_single_dep({:list, _pos, [{:lit, :require} | [first | _]]}) do
+    case normalize_name(first) do
+      nil -> []
+      name -> [name]
+    end
+  end
+
+  defp extract_single_dep(node) do
+    case normalize_name(node) do
+      nil -> []
+      "" -> []
       name -> [name]
     end
   end
@@ -148,13 +208,15 @@ defmodule ExLisp.ASDF do
   defp parse_components(_), do: []
 
   defp parse_single_component({:list, _pos, [type_node, name_node | rest_opts]}) do
-    type =
+    type_str =
       case type_node do
-        {:lit, t} when is_atom(t) -> t
-        {:id, _, [t]} -> String.downcase(t) |> String.to_atom()
-        t when is_atom(t) -> t
-        _ -> nil
+        {:lit, t} when is_atom(t) -> Atom.to_string(t)
+        {:id, _, [t]} -> t
+        t when is_atom(t) -> Atom.to_string(t)
+        _ -> ""
       end
+      |> String.downcase()
+      |> String.replace_prefix(":", "")
 
     name = normalize_name(name_node)
     opts = parse_component_opts(rest_opts)
@@ -164,15 +226,15 @@ defmodule ExLisp.ASDF do
          not ExLisp.LispParser.feature_matches?(opts[:if_feature]) do
       []
     else
-      case type do
-        :file ->
+      cond do
+        type_str in ["file", "cl-source-file", "asdf:cl-source-file", "asdf/cl-source-file:cl-source-file", "asdf.cl-source-file"] ->
           [{:file, path_name, opts[:depends_on] || []}]
 
-        :module ->
+        type_str in ["module", "asdf:module"] ->
           sub_comps = opts[:components] || []
           [{:module, path_name, sub_comps, opts[:depends_on] || []}]
 
-        _static_or_other ->
+        true ->
           []
       end
     end
@@ -229,7 +291,14 @@ defmodule ExLisp.ASDF do
   defp flatten_components(components, prefix) do
     Enum.flat_map(components, fn
       {:file, name, _deps} ->
-        rel_path = if prefix == "", do: "#{name}.lisp", else: Path.join(prefix, "#{name}.lisp")
+        file_name =
+          if String.ends_with?(name, ".lisp") or String.ends_with?(name, ".lsp") do
+            name
+          else
+            "#{name}.lisp"
+          end
+
+        rel_path = if prefix == "", do: file_name, else: Path.join(prefix, file_name)
         [rel_path]
 
       {:module, mod_name, sub_comps, _deps} ->
@@ -272,6 +341,62 @@ defmodule ExLisp.ASDF do
 
     ExLisp.Package.set_current_package(prev_pkg)
     :ok
+  end
+
+  @doc """
+  Finds the system definition for the given system designator.
+  """
+  def find_system(system) do
+    sys_name = normalize_name(system)
+
+    case ExLisp.Quicklisp.where_is_system(sys_name) do
+      nil ->
+        cwd = File.cwd!()
+        asd_path = Path.join(cwd, "#{sys_name}.asd")
+
+        if File.exists?(asd_path) do
+          defs = parse_asd(asd_path)
+          Map.get(defs, sys_name) || Map.values(defs) |> List.first()
+        else
+          nil
+        end
+
+      dir ->
+        case Path.wildcard(Path.join(dir, "*.asd")) do
+          [asd_path | _] ->
+            defs = parse_asd(asd_path)
+            Map.get(defs, sys_name) || Map.values(defs) |> List.first()
+
+          [] ->
+            nil
+        end
+    end
+  end
+
+  @doc """
+  Returns the source directory of the specified system.
+  """
+  def system_source_directory(system) do
+    sys_name = normalize_name(system)
+
+    case ExLisp.Quicklisp.where_is_system(sys_name) do
+      nil ->
+        cwd = File.cwd!()
+        if File.exists?(Path.join(cwd, "#{sys_name}.asd")), do: cwd, else: nil
+
+      dir ->
+        dir
+    end
+  end
+
+  @doc """
+  Returns the pathname of a file relative to the specified system's source directory.
+  """
+  def system_relative_pathname(system, rel_path) do
+    case system_source_directory(system) do
+      nil -> nil
+      dir -> Path.join(dir, to_string(rel_path))
+    end
   end
 
   @doc """

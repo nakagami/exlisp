@@ -47,6 +47,9 @@ defmodule QuicklispTest do
     assert ExLisp.eval("(clamp -5 0 10)") == 0
     assert ExLisp.eval("(clamp 15 0 10)") == 10
 
+    # ASDF query functions
+    assert ExLisp.eval("(asdf:system-source-directory :alexandria)") != nil
+
     # Load split-sequence
     assert ExLisp.eval("(ql:quickload :split-sequence)") != nil
 
@@ -57,5 +60,18 @@ defmodule QuicklispTest do
              "foo",
              "bar"
            ]
+
+    # Load anaphora
+    assert ExLisp.eval("(ql:quickload :anaphora)") != nil
+    assert ExLisp.eval("(anaphora:aif (+ 1 2) (+ it 10) 0)") == 13
+    assert ExLisp.eval("(anaphora:awhen (+ 2 3) (+ it 5))") == 10
+
+    # Load trivial-types
+    assert ExLisp.eval("(ql:quickload :trivial-types)") != nil
+    assert ExLisp.eval("(typep \"hello\" 'trivial-types:string-designator)") == :t
+
+    # Quicklisp utilities
+    assert is_list(ExLisp.eval("(ql:system-apropos \"alexandria\")"))
+    assert ExLisp.eval("(ql:where-is-system :alexandria)") != nil
   end
 end

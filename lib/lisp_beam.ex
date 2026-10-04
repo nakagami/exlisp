@@ -5995,6 +5995,12 @@ defmodule LispBeam do
             {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :invoke_fn}},
              [{:var, 1, erl_var_name(op_name)}, erl_args_cons]}
 
+          match?({:remote, _, _}, normalize_remote_op(op)) ->
+            {:remote, mod, fun} = normalize_remote_op(op)
+
+            {:call, 1, {:remote, 1, {:atom, 1, mod}, {:atom, 1, fun}},
+             Enum.map(args, &compile_expr(&1, local_env))}
+
           match?({:ok, _}, BuiltinFunction.lookup(op)) ->
             {:ok, builtin_op} = BuiltinFunction.lookup(op)
             BuiltinFunction.compile(builtin_op, args, &compile_expr(&1, local_env))
@@ -6009,12 +6015,6 @@ defmodule LispBeam do
 
             {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Env}, {:atom, 1, :call_fun}},
              [{:atom, 1, op_name}, erl_args_cons]}
-
-          match?({:remote, _, _}, normalize_remote_op(op)) ->
-            {:remote, mod, fun} = normalize_remote_op(op)
-
-            {:call, 1, {:remote, 1, {:atom, 1, mod}, {:atom, 1, fun}},
-             Enum.map(args, &compile_expr(&1, local_env))}
 
           true ->
             compiled_args = Enum.map(args, &compile_expr(&1, local_env))
@@ -6269,7 +6269,12 @@ defmodule LispBeam do
       if length(parts) >= 2 do
         fun = List.last(parts) |> String.to_atom()
         mod = Enum.drop(parts, -1) |> build_module_atom()
-        {:remote, mod, fun}
+
+        if valid_remote_module?(mod) do
+          {:remote, mod, fun}
+        else
+          {:unsupported, atom}
+        end
       else
         {:unsupported, atom}
       end

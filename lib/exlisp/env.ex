@@ -374,6 +374,27 @@ defmodule ExLisp.Env do
     fun_name = normalize_name(name)
     key = {:exlisp_fun, fun_name}
     :persistent_term.put(key, fun)
+
+    name_str = Atom.to_string(fun_name)
+    h_name = String.replace(name_str, "_", "-") |> String.to_atom()
+    u_name = String.replace(name_str, "-", "_") |> String.to_atom()
+    :persistent_term.put({:exlisp_fun, h_name}, fun)
+    :persistent_term.put({:exlisp_fun, u_name}, fun)
+
+    try do
+      curr_pkg = ExLisp.Package.current_package()
+      if curr_pkg != nil and not String.contains?(name_str, ".") and not String.contains?(name_str, ":") do
+        pkg_name = to_string(curr_pkg) |> String.downcase()
+        pkg_h = String.replace(pkg_name, "_", "-")
+        :persistent_term.put({:exlisp_fun, :"#{pkg_name}.#{fun_name}"}, fun)
+        :persistent_term.put({:exlisp_fun, :"#{pkg_name}:#{fun_name}"}, fun)
+        :persistent_term.put({:exlisp_fun, :"#{pkg_h}.#{h_name}"}, fun)
+        :persistent_term.put({:exlisp_fun, :"#{pkg_h}:#{h_name}"}, fun)
+      end
+    rescue
+      _ -> :ok
+    end
+
     fun_name
   end
 
@@ -383,23 +404,43 @@ defmodule ExLisp.Env do
   def get_fun(name) do
     fun_name = normalize_name(name)
 
-    case :persistent_term.get({:exlisp_fun, fun_name}, :__not_found__) do
-      :__not_found__ ->
-        case lookup_global_module_fun(fun_name) do
-          {:ok, fun} ->
-            fun
+    candidates = symbol_lookup_candidates(fun_name)
 
-          :error ->
-            case BuiltinFunction.lookup(fun_name) do
-              {:ok, canonical} ->
-                ExLisp.Closure.new(
-                  fn args -> ExLisp.Builtins.dispatch_builtin(canonical, args) end,
-                  canonical
-                )
+    found_fun =
+      Enum.find_value(candidates, fn cand ->
+        case :persistent_term.get({:exlisp_fun, cand}, :__not_found__) do
+          :__not_found__ -> nil
+          f -> f
+        end
+      end)
 
-              :error ->
-                raise RuntimeError, "Undefined function: #{fun_name}"
+    case found_fun do
+      nil ->
+        case Enum.find_value(candidates, fn cand ->
+               case lookup_global_module_fun(cand) do
+                 {:ok, f} -> f
+                 :error -> nil
+               end
+             end) do
+          nil ->
+            case Enum.find_value(candidates, fn cand ->
+                   case BuiltinFunction.lookup(cand) do
+                     {:ok, canonical} ->
+                       ExLisp.Closure.new(
+                         fn args -> ExLisp.Builtins.dispatch_builtin(canonical, args) end,
+                         canonical
+                       )
+
+                     :error ->
+                       nil
+                   end
+                 end) do
+              nil -> raise RuntimeError, "Undefined function: #{fun_name}"
+              builtin_closure -> builtin_closure
             end
+
+          mod_fun ->
+            mod_fun
         end
 
       fun ->
@@ -430,15 +471,18 @@ defmodule ExLisp.Env do
   """
   def has_fun?(name) do
     fun_name = normalize_name(name)
+    candidates = symbol_lookup_candidates(fun_name)
 
-    if :persistent_term.get({:exlisp_fun, fun_name}, :__not_found__) != :__not_found__ do
-      true
-    else
-      case lookup_global_module_fun(fun_name) do
-        {:ok, _} -> true
-        :error -> BuiltinFunction.builtin?(fun_name)
+    Enum.any?(candidates, fn cand ->
+      if :persistent_term.get({:exlisp_fun, cand}, :__not_found__) != :__not_found__ do
+        true
+      else
+        case lookup_global_module_fun(cand) do
+          {:ok, _} -> true
+          :error -> BuiltinFunction.builtin?(cand)
+        end
       end
-    end
+    end)
   end
 
   @doc """
@@ -482,10 +526,28 @@ defmodule ExLisp.Env do
   """
   def delete_fun(name) do
     fun_name = normalize_name(name)
-    key = {:exlisp_fun, fun_name}
+    candidates = symbol_lookup_candidates(fun_name)
+
+    Enum.each(candidates, fn cand ->
+      try do
+        :persistent_term.erase({:exlisp_fun, cand})
+      rescue
+        _ -> :ok
+      end
+    end)
 
     try do
-      :persistent_term.erase(key)
+      curr_pkg = ExLisp.Package.current_package()
+      if curr_pkg != nil do
+        name_str = Atom.to_string(fun_name)
+        pkg_name = to_string(curr_pkg) |> String.downcase()
+        pkg_h = String.replace(pkg_name, "_", "-")
+        h_name = String.replace(name_str, "_", "-")
+        :persistent_term.erase({:exlisp_fun, :"#{pkg_name}.#{fun_name}"})
+        :persistent_term.erase({:exlisp_fun, :"#{pkg_name}:#{fun_name}"})
+        :persistent_term.erase({:exlisp_fun, :"#{pkg_h}.#{h_name}"})
+        :persistent_term.erase({:exlisp_fun, :"#{pkg_h}:#{h_name}"})
+      end
     rescue
       _ -> :ok
     end
@@ -504,6 +566,27 @@ defmodule ExLisp.Env do
     macro_name = normalize_name(name)
     key = {:exlisp_macro, macro_name}
     :persistent_term.put(key, macro_fun)
+
+    name_str = Atom.to_string(macro_name)
+    h_name = String.replace(name_str, "_", "-") |> String.to_atom()
+    u_name = String.replace(name_str, "-", "_") |> String.to_atom()
+    :persistent_term.put({:exlisp_macro, h_name}, macro_fun)
+    :persistent_term.put({:exlisp_macro, u_name}, macro_fun)
+
+    try do
+      curr_pkg = ExLisp.Package.current_package()
+      if curr_pkg != nil and not String.contains?(name_str, ".") and not String.contains?(name_str, ":") do
+        pkg_name = to_string(curr_pkg) |> String.downcase()
+        pkg_h = String.replace(pkg_name, "_", "-")
+        :persistent_term.put({:exlisp_macro, :"#{pkg_name}.#{macro_name}"}, macro_fun)
+        :persistent_term.put({:exlisp_macro, :"#{pkg_name}:#{macro_name}"}, macro_fun)
+        :persistent_term.put({:exlisp_macro, :"#{pkg_h}.#{h_name}"}, macro_fun)
+        :persistent_term.put({:exlisp_macro, :"#{pkg_h}:#{h_name}"}, macro_fun)
+      end
+    rescue
+      _ -> :ok
+    end
+
     macro_name
   end
 
@@ -512,9 +595,18 @@ defmodule ExLisp.Env do
   """
   def get_macro(name) do
     macro_name = normalize_name(name)
+    candidates = symbol_lookup_candidates(macro_name)
 
-    case :persistent_term.get({:exlisp_macro, macro_name}, :__not_found__) do
-      :__not_found__ ->
+    found_macro =
+      Enum.find_value(candidates, fn cand ->
+        case :persistent_term.get({:exlisp_macro, cand}, :__not_found__) do
+          :__not_found__ -> nil
+          m -> m
+        end
+      end)
+
+    case found_macro do
+      nil ->
         raise RuntimeError, "Undefined macro: #{macro_name}"
 
       macro_fun ->
@@ -527,7 +619,57 @@ defmodule ExLisp.Env do
   """
   def has_macro?(name) do
     macro_name = normalize_name(name)
-    :persistent_term.get({:exlisp_macro, macro_name}, :__not_found__) != :__not_found__
+    candidates = symbol_lookup_candidates(macro_name)
+
+    Enum.any?(candidates, fn cand ->
+      :persistent_term.get({:exlisp_macro, cand}, :__not_found__) != :__not_found__
+    end)
+  end
+
+  defp symbol_lookup_candidates(sym) when is_atom(sym) do
+    str = Atom.to_string(sym)
+    str_h = String.replace(str, "_", "-")
+    str_u = String.replace(str, "-", "_")
+
+    cands =
+      cond do
+        String.contains?(str, ".") ->
+          [pkg, name] = String.split(str, ".", parts: 2)
+          pkg_h = String.replace(pkg, "_", "-")
+          pkg_u = String.replace(pkg, "-", "_")
+          name_h = String.replace(name, "_", "-")
+          name_u = String.replace(name, "-", "_")
+
+          [
+            sym,
+            String.to_atom(str_h),
+            String.to_atom(str_u),
+            String.to_atom("#{pkg}:#{name}"),
+            String.to_atom("#{pkg_h}:#{name_h}"),
+            String.to_atom("#{pkg_u}:#{name_u}")
+          ]
+
+        String.contains?(str, ":") ->
+          [pkg, name] = String.split(str, ":", parts: 2)
+          pkg_h = String.replace(pkg, "_", "-")
+          pkg_u = String.replace(pkg, "-", "_")
+          name_h = String.replace(name, "_", "-")
+          name_u = String.replace(name, "-", "_")
+
+          [
+            sym,
+            String.to_atom(str_h),
+            String.to_atom(str_u),
+            String.to_atom("#{pkg}.#{name}"),
+            String.to_atom("#{pkg_h}.#{name_h}"),
+            String.to_atom("#{pkg_u}.#{name_u}")
+          ]
+
+        true ->
+          [sym, String.to_atom(str_h), String.to_atom(str_u)]
+      end
+
+    cands |> Enum.uniq()
   end
 
   @doc """

@@ -40,6 +40,20 @@ defmodule ExLisp.Type do
     end
 
     :ets.insert(@deftype_table, {norm_name, {lambda_list, expander_fun}})
+
+    try do
+      curr_pkg = ExLisp.Package.current_package()
+      name_str = Atom.to_string(norm_name)
+      if curr_pkg != nil and not String.contains?(name_str, ".") and not String.contains?(name_str, ":") do
+        pkg_name = to_string(curr_pkg) |> String.downcase() |> String.replace("-", "_")
+        :ets.insert(@deftype_table, {:"#{pkg_name}_#{norm_name}", {lambda_list, expander_fun}})
+        :ets.insert(@deftype_table, {:"#{pkg_name}.#{norm_name}", {lambda_list, expander_fun}})
+        :ets.insert(@deftype_table, {:"#{pkg_name}:#{norm_name}", {lambda_list, expander_fun}})
+      end
+    rescue
+      _ -> :ok
+    end
+
     norm_name
   end
 
@@ -131,12 +145,12 @@ defmodule ExLisp.Type do
     norm = normalize_type_name(name)
     ensure_tables()
 
-    case :ets.lookup(@deftype_table, norm) do
-      [{^norm, {_params, expander_fun}}] ->
+    case lookup_deftype(norm) do
+      {:ok, {_params, expander_fun}} ->
         expanded = expander_fun.([])
         expand_type(expanded, depth + 1)
 
-      _ ->
+      :error ->
         norm
     end
   end
@@ -149,17 +163,43 @@ defmodule ExLisp.Type do
     norm_head = normalize_type_name(head)
     ensure_tables()
 
-    case :ets.lookup(@deftype_table, norm_head) do
-      [{^norm_head, {_params, expander_fun}}] ->
+    case lookup_deftype(norm_head) do
+      {:ok, {_params, expander_fun}} ->
         expanded = expander_fun.(args)
         expand_type(expanded, depth + 1)
 
-      _ ->
+      :error ->
         [norm_head | Enum.map(args, &expand_type_arg(&1, depth))]
     end
   end
 
   def expand_type(other, _depth), do: other
+
+  defp lookup_deftype(norm) do
+    candidates =
+      case Atom.to_string(norm) do
+        str ->
+          cond do
+            String.contains?(str, ".") ->
+              [_, base] = String.split(str, ".", parts: 2)
+              [norm, String.to_atom(base)]
+
+            String.contains?(str, ":") ->
+              [_, base] = String.split(str, ":", parts: 2)
+              [norm, String.to_atom(base)]
+
+            true ->
+              [norm]
+          end
+      end
+
+    Enum.find_value(candidates, :error, fn cand ->
+      case :ets.lookup(@deftype_table, cand) do
+        [{^cand, entry}] -> {:ok, entry}
+        _ -> nil
+      end
+    end)
+  end
 
   defp expand_type_arg(arg, depth) do
     cond do
