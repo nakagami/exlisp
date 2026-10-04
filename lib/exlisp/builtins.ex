@@ -5135,13 +5135,7 @@ defmodule ExLisp.Builtins do
             _ -> :t
           end
 
-        elem_type = ExLisp.Type.normalize_type_name(raw_elem_type)
-
-        if elem_type in [:character, :base_char, :standard_char] do
-          List.to_string(list)
-        else
-          make_array([Kernel.length(list), :initial_contents, list, :element_type, raw_elem_type])
-        end
+        make_array([Kernel.length(list), :initial_contents, list, :element_type, raw_elem_type])
 
       true ->
         raise ArgumentError, "copy-seq: #{inspect(seq)} is not a sequence"
@@ -6762,6 +6756,7 @@ defmodule ExLisp.Builtins do
     end
   end
 
+  def array_element_type(seq) when is_binary(seq), do: :character
   def array_element_type([arr]), do: array_element_type(arr)
   def array_element_type(_), do: :t
 

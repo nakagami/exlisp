@@ -39,5 +39,8 @@ defmodule ExLisp.SequencesAndListsTest do
     assert ExLisp.eval("(make-sequence 'list 3 7)") == [7, 7, 7]
     assert ExLisp.eval("(merge 'list '(1 3 5) '(2 4 6) #'<)") == [1, 2, 3, 4, 5, 6]
     assert ExLisp.eval("(copy-seq '(1 2 3))") == [1, 2, 3]
+    assert ExLisp.eval("(copy-seq \"abc\")") == "abc"
+    assert ExLisp.eval("(array-element-type \"abc\")") == :character
+    assert ExLisp.eval("(let ((a (make-array 3 :element-type 'base-char :initial-contents '(#\\a #\\b #\\c)))) (array-element-type (copy-seq a)))") == :base_char
   end
 end
