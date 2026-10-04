@@ -114,4 +114,44 @@ defmodule ExLisp.ControlAndDataFlowTest do
     ExLisp.eval("(makunbound '*dyn-b*)")
     assert ExLisp.eval("(boundp '*dyn-b*)") == nil
   end
+
+  test "tagbody and go with symbols and integers" do
+    code_tagbody = """
+    (let ((acc '()))
+      (tagbody
+         (setq acc (cons 1 acc))
+         (go 3)
+       2
+         (setq acc (cons 2 acc))
+         (go end)
+       3
+         (setq acc (cons 3 acc))
+         (go 2)
+       end)
+      (reverse acc))
+    """
+
+    assert ExLisp.eval(code_tagbody) == [1, 3, 2]
+  end
+
+  test "prog and prog* basic and flow control" do
+    code_prog = """
+    (prog ((x 1) (acc 0))
+     loop
+      (setq acc (+ acc x))
+      (setq x (1+ x))
+      (if (<= x 5)
+          (go loop))
+      (return acc))
+    """
+
+    assert ExLisp.eval(code_prog) == 15
+
+    code_prog_star = """
+    (prog* ((x 2) (y (* x 3)))
+      (return (+ x y)))
+    """
+
+    assert ExLisp.eval(code_prog_star) == 8
+  end
 end

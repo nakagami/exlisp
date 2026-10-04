@@ -701,22 +701,39 @@ defmodule ExLisp.Loop do
 
     initial_call = {:list, {1, 1}, [loop_fn_name | all_inits]}
 
-    labels_form =
+    macrolet_form =
       {:list, {1, 1},
        [
-         symbol_node(:labels),
-         {:list, {1, 1}, [fn_def]},
-         initial_call
+         symbol_node(:macrolet),
+         {:list, {1, 1},
+          [
+            {:list, {1, 1},
+             [
+               symbol_node(:loop_finish),
+               {:list, {1, 1}, []},
+               {:list, {1, 1},
+                [
+                  symbol_node(:quote),
+                  {:list, {1, 1}, [symbol_node(:return_from), lit_node(nil), final_with_finally]}
+                ]}
+             ]}
+          ]},
+         {:list, {1, 1},
+          [
+            symbol_node(:labels),
+            {:list, {1, 1}, [fn_def]},
+            initial_call
+          ]}
        ]}
 
     # If initially clause exists, wrap in progn
     top_body =
       case parsed.initially do
         [] ->
-          labels_form
+          macrolet_form
 
         init_forms ->
-          {:list, {1, 1}, [symbol_node(:progn) | init_forms ++ [labels_form]]}
+          {:list, {1, 1}, [symbol_node(:progn) | init_forms ++ [macrolet_form]]}
       end
 
     # Outermost let* (with bindings + initial bindings) and block nil

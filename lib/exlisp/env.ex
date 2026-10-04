@@ -286,6 +286,36 @@ defmodule ExLisp.Env do
     end
   end
 
+  @doc """
+  Dynamically binds variables (for progv).
+  """
+  def progv(symbols, values, fun) when is_function(fun, 0) do
+    sym_list =
+      case symbols do
+        list when is_list(list) ->
+          Enum.map(list, fn
+            sym when is_atom(sym) -> normalize_name(sym)
+            %ExLisp.Symbol{name: name} -> normalize_name(name)
+            str when is_binary(str) -> normalize_name(str)
+            other -> normalize_name(other)
+          end)
+
+        _ ->
+          []
+      end
+
+    val_list =
+      case values do
+        list when is_list(list) -> list
+        _ -> []
+      end
+
+    padded_vals = val_list ++ Stream.repeatedly(fn -> nil end) |> Enum.take(length(sym_list))
+    bindings = Enum.zip(sym_list, padded_vals)
+
+    with_special_bindings(bindings, fun)
+  end
+
   defp lookup_global_module_var(var_name) do
     mod = ExLisp.Global
 

@@ -176,4 +176,12 @@ defmodule ExLisp.IterationTest do
         skip))
     """) == 8
   end
+
+  test "loop with loop-finish" do
+    assert ExLisp.eval("""
+    (loop for x in '(1 2 3 4 5)
+          do (when (= x 4) (loop-finish))
+          collect (* x 10))
+    """) == [10, 20, 30]
+  end
 end

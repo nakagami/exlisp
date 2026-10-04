@@ -859,7 +859,7 @@ defmodule LispBeam do
       :progn ->
         compile_progn(args, local_env)
 
-      :prog ->
+      name when name in [:prog, :_cl_prog_] ->
         case args do
           [bindings | body] ->
             {decls, tagbody_body} = split_declarations(body)
@@ -955,10 +955,10 @@ defmodule LispBeam do
       :loop ->
         compile_loop(args, local_env)
 
-      :block ->
+      name when name in [:block, :_cl_block_] ->
         compile_block(args, local_env)
 
-      :return ->
+      name when name in [:return, :_cl_return_] ->
         compile_return(args, local_env)
 
       name when name in [:return_from, :_cl_return_from_] ->
@@ -967,16 +967,16 @@ defmodule LispBeam do
       name when name in [:unwind_protect, :_cl_unwind_protect_, :"unwind-protect"] ->
         compile_unwind_protect(args, local_env)
 
-      :do ->
+      name when name in [:do, :_cl_do_] ->
         compile_do(args, local_env)
 
       name when name in [:"do*", :_cl_do_star_, :do_star] ->
         compile_do_star(args, local_env)
 
-      :tagbody ->
+      name when name in [:tagbody, :_cl_tagbody_] ->
         compile_tagbody(args, local_env)
 
-      :go ->
+      name when name in [:go, :_cl_go_] ->
         compile_go(args, local_env)
 
       name when name in [:with_open_file, :_cl_with_open_file_, :"with-open-file"] ->
@@ -4133,29 +4133,38 @@ defmodule LispBeam do
 
   defp to_atom_symbol(node) do
     case node do
+      nil ->
+        nil
+
       {:atom, _, a} ->
         a
 
+      {:lit, nil} ->
+        nil
+
       {:lit, a} when is_atom(a) ->
-        a
+        a |> Atom.to_string() |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
 
       {:lit, i} when is_integer(i) ->
         String.to_atom("tag_#{i}")
 
-      {:id, _, [s]} ->
-        s |> String.downcase() |> String.to_atom()
+      {:symbol, _, a} when is_atom(a) ->
+        a |> Atom.to_string() |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
+
+      {:id, _, [s]} when is_binary(s) ->
+        s |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
 
       {:id, _, parts} when is_list(parts) ->
-        Enum.join(parts, ".") |> String.downcase() |> String.to_atom()
+        Enum.join(parts, ".") |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
 
       a when is_atom(a) ->
-        a
+        a |> Atom.to_string() |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
 
       i when is_integer(i) ->
         String.to_atom("tag_#{i}")
 
       s when is_binary(s) ->
-        s |> String.downcase() |> String.to_atom()
+        s |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
 
       _ ->
         String.to_atom("#{inspect(node)}")
@@ -6356,6 +6365,28 @@ defmodule LispBeam do
     end
   end
 
+  def compile_progv(args, local_env) do
+    case args do
+      [syms_node, vals_node | body_nodes] ->
+        syms_compiled = compile_expr(syms_node, local_env)
+        vals_compiled = compile_expr(vals_node, local_env)
+
+        compiled_body =
+          case body_nodes do
+            [] -> [{:atom, 1, nil}]
+            _ -> Enum.map(body_nodes, &compile_expr(&1, local_env))
+          end
+
+        body_fun = {:fun, 1, {:clauses, [{:clause, 1, [], [], compiled_body}]}}
+
+        {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Env}, {:atom, 1, :progv}},
+         [syms_compiled, vals_compiled, body_fun]}
+
+      _ ->
+        {:atom, 1, nil}
+    end
+  end
+
   defp rewrite_mv_form(form) do
     case form do
       {:list, pos, [{:id, id_pos, [op_name]} | form_args]} ->
@@ -6693,24 +6724,6 @@ defmodule LispBeam do
   defp is_list_node?({:quoted, _, _}), do: true
   defp is_list_node?(l) when is_list(l), do: true
   defp is_list_node?(_), do: false
-
-  def compile_progv([syms_node, vals_node | body_nodes], local_env) do
-    body_fn =
-      {:fun, 1,
-       {:clauses,
-        [
-          {:clause, 1, [], [],
-           case body_nodes do
-             [] -> [{:atom, 1, nil}]
-             _ -> Enum.map(body_nodes, &compile_expr(&1, local_env))
-           end}
-        ]}}
-
-    {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :progv_eval}},
-     [compile_expr(syms_node, local_env), compile_expr(vals_node, local_env), body_fn]}
-  end
-
-  def compile_progv(_, _local_env), do: {:atom, 1, nil}
 
   def compile_psetq(args, local_env) do
     pairs = Enum.chunk_every(args, 2)
