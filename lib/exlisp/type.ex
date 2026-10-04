@@ -244,7 +244,12 @@ defmodule ExLisp.Type do
   defp do_typep(val, :bit), do: val in [0, 1]
 
   defp do_typep(val, type) when type in [:string, :simple_string, :base_string, :simple_base_string] do
-    is_binary(val)
+    is_binary(val) or
+      (match?({:array, [_], _}, val) and
+         case type do
+           t when t in [:string, :base_string] -> ExLisp.Builtins.stringp(val) == :t
+           t when t in [:simple_string, :simple_base_string] -> ExLisp.Builtins.simple_string_p(val) == :t
+         end)
   end
 
   defp do_typep(val, :pathname), do: match?(%ExLisp.Pathname{}, val)
@@ -281,27 +286,42 @@ defmodule ExLisp.Type do
 
   defp do_typep(val, :sequence) do
     is_list(val) or is_binary(val) or is_tuple(val) or
+      match?({:array, [_], _}, val) or match?({:bit_vector, _}, val) or
       (is_map(val) and Map.get(val, :__struct__) in [ExLisp.Array, ExLisp.Vector])
   end
 
   defp do_typep(val, type) when type in [:vector, :simple_vector] do
     is_binary(val) or is_tuple(val) or
       (is_map(val) and Map.get(val, :__struct__) == ExLisp.Vector) or
-      (is_list(val) and val != [] and hd(val) == :vector)
+      (is_list(val) and val != [] and hd(val) == :vector) or
+      match?({:bit_vector, _}, val) or
+      (match?({:array, [_], _}, val) and
+         (type == :vector or ExLisp.Builtins.simple_vector_p(val) == :t))
   end
 
   defp do_typep(val, type) when type in [:bit_vector, :simple_bit_vector] do
     case val do
-      {:bit_vector, bits} when is_list(bits) -> true
-      b when is_binary(b) -> false
-      _ -> false
+      {:bit_vector, bits} when is_list(bits) ->
+        true
+
+      {:array, [_], _} ->
+        if type == :bit_vector do
+          ExLisp.Builtins.bit_vector_p(val) == :t
+        else
+          ExLisp.Builtins.simple_bit_vector_p(val) == :t
+        end
+
+      _ ->
+        false
     end
   end
 
   defp do_typep(val, type) when type in [:array, :simple_array] do
-    is_binary(val) or is_tuple(val) or
+    is_binary(val) or is_tuple(val) or match?({:bit_vector, _}, val) or
       (is_map(val) and Map.get(val, :__struct__) in [ExLisp.Array, ExLisp.Vector]) or
-      (is_list(val) and val != [] and hd(val) in [:vector, :array])
+      (is_list(val) and val != [] and hd(val) in [:vector, :array]) or
+      (match?({:array, _, _}, val) and
+         (type == :array or simple_array_type_check(val)))
   end
 
   defp do_typep(val, :hash_table) do
@@ -312,7 +332,9 @@ defmodule ExLisp.Type do
   end
 
   defp do_typep(val, type) when type in [:function, :compiled_function] do
-    is_function(val)
+    is_function(val) or match?(%ExLisp.Closure{}, val) or
+      (is_atom(val) and val not in [nil, :t, :nil, :false, :true] and
+         (BuiltinFunction.builtin?(val) or ExLisp.Env.has_fun?(val)))
   end
 
   defp do_typep(val, :package), do: match?(%ExLisp.Package{}, val)
@@ -440,10 +462,10 @@ defmodule ExLisp.Type do
     end
   end
 
-  defp do_typep(val, [:string | rest]) do
-    if is_binary(val) do
+  defp do_typep(val, [t | rest]) when t in [:string, :simple_string, :base_string, :simple_base_string] do
+    if do_typep(val, t) do
       case rest do
-        [len | _] when is_integer(len) -> String.length(val) == len
+        [len | _] when is_integer(len) -> ExLisp.Builtins.length(val) == len
         _ -> true
       end
     else
@@ -451,8 +473,23 @@ defmodule ExLisp.Type do
     end
   end
 
-  defp do_typep(val, [:simple_string | rest]) do
-    do_typep(val, [:string | rest])
+  defp do_typep(val, [t | rest]) when t in [:bit_vector, :simple_bit_vector] do
+    if do_typep(val, t) do
+      case rest do
+        [len | _] when is_integer(len) -> ExLisp.Builtins.length(val) == len
+        _ -> true
+      end
+    else
+      false
+    end
+  end
+
+  defp do_typep(val, [:function | _]) do
+    do_typep(val, :function)
+  end
+
+  defp do_typep(val, [:compiled_function | _]) do
+    do_typep(val, :compiled_function)
   end
 
   defp do_typep(val, [:vector | rest]) do
@@ -497,7 +534,18 @@ defmodule ExLisp.Type do
   end
 
   defp do_typep(val, [:simple_array | rest]) do
-    do_typep(val, [:array | rest])
+    if do_typep(val, :simple_array) do
+      case rest do
+        [elem_t, dims | _] ->
+          check_array_elem_and_dims(val, elem_t, dims)
+        [elem_t] ->
+          check_array_elem_and_dims(val, elem_t, :*)
+        _ ->
+          true
+      end
+    else
+      false
+    end
   end
 
   # CLOS Class check
@@ -511,6 +559,21 @@ defmodule ExLisp.Type do
   end
 
   defp do_typep(_val, _type), do: false
+
+  defp simple_array_type_check({:array, _, tid}) do
+    case :ets.lookup(tid, :__meta__) do
+      [{:__meta__, meta}] ->
+        fp = Map.get(meta, :fill_pointer, nil)
+        adj = Map.get(meta, :adjustable, false)
+        disp = Map.get(meta, :displaced_to, nil)
+        fp == nil and not adj and disp == nil
+
+      _ ->
+        true
+    end
+  end
+
+  defp simple_array_type_check(_), do: true
 
   defp check_range(num, []) when is_number(num), do: true
   defp check_range(num, [low]) when is_number(num), do: check_bound_low(num, low)
@@ -632,6 +695,10 @@ defmodule ExLisp.Type do
 
         t1 in [:simple_string, :base_string, :simple_base_string] and
             t2 in [:string, :vector, :array, :sequence] ->
+          true
+
+        t1 in [:bit_vector, :simple_bit_vector] and
+            t2 in [:vector, :array, :sequence] ->
           true
 
         t1 == :string and t2 in [:vector, :array, :sequence] ->
