@@ -1079,6 +1079,8 @@ defmodule BuiltinFunction do
     :"sb_ext::exit" => {:quit, :quit},
 
     # Internal helpers
+    :_cl_set_char_update_seq_ => {:set_char_update_seq, :set_char_update_seq},
+    :set_char_update_seq => {:set_char_update_seq, :set_char_update_seq},
     :_cl_set_elt_update_seq_ => {:set_elt_update_seq, :set_elt_update_seq},
     :set_elt_update_seq => {:set_elt_update_seq, :set_elt_update_seq},
     :_cl_set_subseq_update_seq_ => {:set_subseq_update_seq, :set_subseq_update_seq},

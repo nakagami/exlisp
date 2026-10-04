@@ -679,87 +679,334 @@ defmodule ExLisp.Type do
     t1 = expand_type(type1)
     t2 = expand_type(type2)
 
-    is_sub =
-      cond do
-        t1 == t2 ->
-          true
-
-        t2 in [:t, :common] ->
-          true
-
-        t1 in [:nil, :null, nil] and t2 in [:list, :sequence, :symbol, :atom, :t] ->
-          true
-
-        t1 == :null and t2 in [:list, :sequence, :symbol, :atom, :t] ->
-          true
-
-        t1 in [:simple_string, :base_string, :simple_base_string] and
-            t2 in [:string, :vector, :array, :sequence] ->
-          true
-
-        t1 in [:bit_vector, :simple_bit_vector] and
-            t2 in [:vector, :array, :sequence] ->
-          true
-
-        t1 == :string and t2 in [:vector, :array, :sequence] ->
-          true
-
-        t1 == :simple_vector and t2 in [:vector, :array, :sequence] ->
-          true
-
-        t1 == :vector and t2 in [:array, :sequence] ->
-          true
-
-        t1 == :cons and t2 in [:list, :sequence] ->
-          true
-
-        t1 == :list and t2 == :sequence ->
-          true
-
-        t1 in [:fixnum, :bignum] and t2 in [:integer, :rational, :real, :number] ->
-          true
-
-        t1 == :integer and t2 in [:rational, :real, :number] ->
-          true
-
-        t1 == :ratio and t2 in [:rational, :real, :number] ->
-          true
-
-        t1 == :rational and t2 in [:real, :number] ->
-          true
-
-        t1 == :float and t2 in [:real, :number] ->
-          true
-
-        t1 in [:bit, :boolean] ->
-          true
-
-        match?([:and | _], t1) ->
-          [:and | sub_types] = t1
-          Enum.all?(sub_types, fn st ->
-            case subtypep(st, t2) do
-              [:_values_, [:t, _]] -> true
-              _ -> false
-            end
-          end)
-
-        match?([:or | _], t2) ->
-          [:or | sup_types] = t2
-          Enum.any?(sup_types, fn st ->
-            case subtypep(t1, st) do
-              [:_values_, [:t, _]] -> true
-              _ -> false
-            end
-          end)
-
-        is_atom(t1) and is_atom(t2) and ExLisp.CLOS.subclassp(t1, t2) == :t ->
-          true
-
-        true ->
-          false
-      end
-
+    is_sub = is_subtype_internal?(t1, t2)
     [:_values_, [ExLisp.Builtins.lisp_bool(is_sub), :t]]
+  end
+
+  defp is_subtype_internal?(t1, t2) do
+    t1_norm = normalize_type_for_sub(t1)
+    t2_norm = normalize_type_for_sub(t2)
+
+    cond do
+      t1_norm == t2_norm ->
+        true
+
+      t2_norm in [:t, :common, :*] ->
+        true
+
+      t1_norm in [:nil, :null, nil] and t2_norm in [:list, :sequence, :symbol, :atom, :t, :common] ->
+        true
+
+      t1_norm == :null and t2_norm in [:list, :sequence, :symbol, :atom, :t, :common] ->
+        true
+
+      # Simple string types
+      t1_norm in [:simple_string, :simple_base_string] and
+          (t2_norm in [:string, :vector, :array, :sequence, :simple_array, :base_string, :simple_string] or
+             match?([st | _] when st in [:simple_array, :array, :vector, :string], t2_norm)) ->
+        case t2_norm do
+          :simple_array ->
+            true
+
+          [:simple_array, elem, dims] ->
+            elem_match?(elem, :character) and dims_match?(dims, 1)
+
+          [:simple_array, elem] ->
+            elem_match?(elem, :character)
+
+          [:simple_array] ->
+            true
+
+          [:array, elem, dims] ->
+            elem_match?(elem, :character) and dims_match?(dims, 1)
+
+          [:array, elem] ->
+            elem_match?(elem, :character)
+
+          [:array] ->
+            true
+
+          [:vector, elem, size] ->
+            elem_match?(elem, :character) and size_match?(size, :*)
+
+          [:vector, elem] ->
+            elem_match?(elem, :character)
+
+          [:vector] ->
+            true
+
+          [:string, _] ->
+            true
+
+          [:string] ->
+            true
+
+          _ ->
+            t2_norm in [:string, :vector, :array, :sequence, :simple_array, :base_string, :simple_string]
+        end
+
+      t1_norm in [:base_string, :string] and
+          (t2_norm in [:string, :vector, :array, :sequence] or
+             match?([st | _] when st in [:array, :vector, :string], t2_norm)) ->
+        case t2_norm do
+          [:array, elem, dims] ->
+            elem_match?(elem, :character) and dims_match?(dims, 1)
+
+          [:array, elem] ->
+            elem_match?(elem, :character)
+
+          [:array] ->
+            true
+
+          [:vector, elem, size] ->
+            elem_match?(elem, :character) and size_match?(size, :*)
+
+          [:vector, elem] ->
+            elem_match?(elem, :character)
+
+          [:vector] ->
+            true
+
+          [:string, _] ->
+            true
+
+          [:string] ->
+            true
+
+          _ ->
+            t2_norm in [:string, :vector, :array, :sequence]
+        end
+
+      t1_norm in [:bit_vector, :simple_bit_vector] and
+          (t2_norm in [:vector, :array, :sequence] or
+             (t1_norm == :simple_bit_vector and t2_norm == :simple_array) or
+             match?([st | _] when st in [:simple_array, :array, :vector, :bit_vector], t2_norm)) ->
+        case t2_norm do
+          :simple_array when t1_norm == :simple_bit_vector ->
+            true
+
+          [:simple_array, elem, dims] when t1_norm == :simple_bit_vector ->
+            elem_match?(elem, :bit) and dims_match?(dims, 1)
+
+          [:simple_array, elem] when t1_norm == :simple_bit_vector ->
+            elem_match?(elem, :bit)
+
+          [:simple_array] when t1_norm == :simple_bit_vector ->
+            true
+
+          [:array, elem, dims] ->
+            elem_match?(elem, :bit) and dims_match?(dims, 1)
+
+          [:array, elem] ->
+            elem_match?(elem, :bit)
+
+          [:array] ->
+            true
+
+          [:vector, elem, size] ->
+            elem_match?(elem, :bit) and size_match?(size, :*)
+
+          [:vector, elem] ->
+            elem_match?(elem, :bit)
+
+          [:vector] ->
+            true
+
+          _ ->
+            t2_norm in [:bit_vector, :vector, :array, :sequence]
+        end
+
+      t1_norm == :simple_vector and
+          (t2_norm in [:vector, :array, :sequence, :simple_array] or
+             match?([st | _] when st in [:simple_array, :array, :vector], t2_norm)) ->
+        case t2_norm do
+          :simple_array ->
+            true
+
+          [:simple_array, elem, dims] ->
+            elem_match?(elem, :t) and dims_match?(dims, 1)
+
+          [:simple_array, elem] ->
+            elem_match?(elem, :t)
+
+          [:simple_array] ->
+            true
+
+          [:array, elem, dims] ->
+            elem_match?(elem, :t) and dims_match?(dims, 1)
+
+          [:array, elem] ->
+            elem_match?(elem, :t)
+
+          [:array] ->
+            true
+
+          [:vector, elem, size] ->
+            elem_match?(elem, :t) and size_match?(size, :*)
+
+          [:vector, elem] ->
+            elem_match?(elem, :t)
+
+          [:vector] ->
+            true
+
+          _ ->
+            t2_norm in [:vector, :array, :sequence, :simple_array]
+        end
+
+      t1_norm == :vector and
+          (t2_norm in [:array, :sequence] or match?([:array | _], t2_norm)) ->
+        case t2_norm do
+          [:array, elem, dims] ->
+            elem in [:*, :_] and dims_match?(dims, 1)
+
+          [:array, elem] ->
+            elem in [:*, :_]
+
+          [:array] ->
+            true
+
+          _ ->
+            t2_norm in [:array, :sequence]
+        end
+
+      t1_norm in [:standard_char, :base_char, :extended_char] and t2_norm == :character ->
+        true
+
+      t1_norm == :standard_char and t2_norm == :base_char ->
+        true
+
+      t1_norm == :cons and t2_norm in [:list, :sequence] ->
+        true
+
+      t1_norm == :list and t2_norm == :sequence ->
+        true
+
+      t1_norm in [:fixnum, :bignum] and t2_norm in [:integer, :rational, :real, :number] ->
+        true
+
+      t1_norm == :integer and t2_norm in [:rational, :real, :number] ->
+        true
+
+      t1_norm == :ratio and t2_norm in [:rational, :real, :number] ->
+        true
+
+      t1_norm == :rational and t2_norm in [:real, :number] ->
+        true
+
+      t1_norm in [:short_float, :single_float, :double_float, :long_float] and
+          t2_norm in [:float, :real, :number] ->
+        true
+
+      t1_norm == :float and t2_norm in [:real, :number] ->
+        true
+
+      t1_norm in [:bit, :boolean] ->
+        if t1_norm == :bit,
+          do: t2_norm in [:integer, :rational, :real, :number],
+          else: t2_norm in [:symbol, :atom]
+
+      match?([:and | _], t1_norm) ->
+        [:and | sub_types] = t1_norm
+        Enum.all?(sub_types, &is_subtype_internal?(&1, t2_norm))
+
+      match?([:or | _], t2_norm) ->
+        [:or | sup_types] = t2_norm
+        Enum.any?(sup_types, &is_subtype_internal?(t1_norm, &1))
+
+      # Compound type vs Compound type
+      match?([_ | _], t1_norm) and match?([_ | _], t2_norm) ->
+        check_compound_subtype(t1_norm, t2_norm)
+
+      is_atom(t1_norm) and is_atom(t2_norm) and ExLisp.CLOS.subclassp(t1_norm, t2_norm) == :t ->
+        true
+
+      true ->
+        false
+    end
+  end
+
+  defp normalize_type_for_sub(t) do
+    case t do
+      atom when is_atom(atom) -> normalize_type_name(atom)
+      str when is_binary(str) -> normalize_type_name(str)
+      %ExLisp.Symbol{name: n} -> normalize_type_name(n)
+
+      [head | rest] ->
+        [normalize_type_for_sub(head) | Enum.map(rest, &normalize_type_for_sub/1)]
+
+      other ->
+        other
+    end
+  end
+
+  defp elem_match?(spec_elem, target_elem) do
+    spec_elem in [:*, :_, :t] or spec_elem == target_elem or
+      (target_elem in [:character, :base_char] and
+         spec_elem in [:character, :base_char, :standard_char]) or
+      is_subtype_internal?(target_elem, spec_elem)
+  end
+
+  defp dims_match?(dims, rank) do
+    case dims do
+      :* -> true
+      :_ -> true
+      r when is_integer(r) -> r == rank
+      [d] -> d in [:*, :_] or d == rank
+      l when is_list(l) -> length(l) == rank
+      _ -> true
+    end
+  end
+
+  defp size_match?(size, expected) do
+    size in [:*, :_] or size == expected
+  end
+
+  defp check_compound_subtype([head1 | args1], [head2 | args2]) do
+    cond do
+      head1 in [:simple_array, :array] and head2 == :array ->
+        case {args1, args2} do
+          {[e1, d1 | _], [e2, d2 | _]} -> elem_match?(e2, e1) and dims_subtype?(d1, d2)
+          {[e1 | _], [e2 | _]} -> elem_match?(e2, e1)
+          {_, []} -> true
+          _ -> false
+        end
+
+      head1 == :simple_array and head2 == :simple_array ->
+        case {args1, args2} do
+          {[e1, d1 | _], [e2, d2 | _]} -> elem_match?(e2, e1) and dims_subtype?(d1, d2)
+          {[e1 | _], [e2 | _]} -> elem_match?(e2, e1)
+          {_, []} -> true
+          _ -> false
+        end
+
+      head1 == :vector and head2 in [:vector, :array] ->
+        case {args1, args2} do
+          {[e1, s1 | _], [e2, d2 | _]} -> elem_match?(e2, e1) and dims_subtype?(s1, d2)
+          {[e1 | _], [e2 | _]} -> elem_match?(e2, e1)
+          {_, []} -> true
+          _ -> false
+        end
+
+      head1 in [:string, :simple_string, :base_string, :simple_base_string] and
+          head2 in [:string, :vector, :array, :simple_array] ->
+        true
+
+      true ->
+        false
+    end
+  end
+
+  defp dims_subtype?(d1, d2) do
+    case {d1, d2} do
+      {_, :*} -> true
+      {_, :_} -> true
+      {r1, r2} when is_integer(r1) and is_integer(r2) -> r1 == r2
+      {[r1], r2} when is_integer(r2) -> r1 in [:*, :_] or r1 == r2
+      {r1, [r2]} when is_integer(r1) -> r2 in [:*, :_] or r1 == r2
+      {[s1], [s2]} -> s2 in [:*, :_] or s1 == s2
+      _ -> true
+    end
   end
 
   @doc """

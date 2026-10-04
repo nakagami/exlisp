@@ -5129,13 +5129,19 @@ defmodule ExLisp.Builtins do
         list = seq_to_list(seq)
         {:array, _, tid} = seq
 
-        elem_type =
+        raw_elem_type =
           case :ets.lookup(tid, :__meta__) do
             [{:__meta__, %{element_type: et}}] -> et
             _ -> :t
           end
 
-        make_array([Kernel.length(list), :initial_contents, list, :element_type, elem_type])
+        elem_type = ExLisp.Type.normalize_type_name(raw_elem_type)
+
+        if elem_type in [:character, :base_char, :standard_char] do
+          List.to_string(list)
+        else
+          make_array([Kernel.length(list), :initial_contents, list, :element_type, raw_elem_type])
+        end
 
       true ->
         raise ArgumentError, "copy-seq: #{inspect(seq)} is not a sequence"
@@ -5358,7 +5364,16 @@ defmodule ExLisp.Builtins do
         to_string_val(val)
 
       true ->
-        raise ArgumentError, "Not a string designator: #{inspect(val)}"
+        ExLisp.Condition.error(:type_error, [
+          :datum,
+          val,
+          :expected_type,
+          :string_designator,
+          :format_control,
+          "Not a string designator: ~S",
+          :format_arguments,
+          [val]
+        ])
     end
   end
 
@@ -5765,7 +5780,7 @@ defmodule ExLisp.Builtins do
   def to_string_val(val) when is_integer(val) and val >= 0 and val <= 0x10FFFF,
     do: List.to_string([val])
 
-  def to_string_val({:array, [len], tid}) when is_integer(len) do
+  def to_string_val({:array, [len], tid} = arr) when is_integer(len) do
     meta =
       case :ets.lookup(tid, :__meta__) do
         [{:__meta__, m}] -> m
@@ -5778,41 +5793,23 @@ defmodule ExLisp.Builtins do
         _ -> len
       end
 
-    init_elem = Map.get(meta, :initial_element, ?\s)
-
     if actual_len <= 0 do
       ""
     else
       try do
         0..(actual_len - 1)//1
         |> Enum.map(fn idx ->
-          case :ets.lookup(tid, idx) do
-            [{^idx, char_code}]
-            when is_integer(char_code) and char_code >= 0 and char_code <= 0x10FFFF ->
-              char_code
+          val = aref([arr, idx])
 
-            [{^idx, <<char_code::utf8>>}] ->
-              char_code
-
-            [{^idx, other}] ->
-              throw({:not_char, other})
-
-            _ ->
-              cond do
-                is_integer(init_elem) and init_elem >= 0 and init_elem <= 0x10FFFF ->
-                  init_elem
-
-                is_binary(init_elem) and byte_size(init_elem) > 0 ->
-                  hd(String.to_charlist(init_elem))
-
-                true ->
-                  ?\s
-              end
+          cond do
+            is_integer(val) and val >= 0 and val <= 0x10FFFF -> val
+            is_binary(val) and byte_size(val) > 0 -> hd(String.to_charlist(val))
+            true -> throw({:not_char, val})
           end
         end)
         |> List.to_string()
       catch
-        _, _ -> inspect({:array, [len], tid})
+        _, _ -> inspect(arr)
       end
     end
   end
@@ -6538,17 +6535,8 @@ defmodule ExLisp.Builtins do
     end
   end
 
-  def set_aref({:array, [_dim], tid}, index, val) when is_integer(index) do
-    :ets.insert(tid, {index, val})
-    val
-  end
-
   def set_aref(arr, indices, val) do
     case arr do
-      {:array, [_dim], tid} when is_integer(indices) ->
-        :ets.insert(tid, {indices, val})
-        val
-
       {:array, dims, tid} ->
         flat_idx =
           case {dims, indices} do

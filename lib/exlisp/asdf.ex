@@ -37,6 +37,7 @@ defmodule ExLisp.ASDF do
         version: opts[:version],
         depends_on: opts[:depends_on] || [],
         components: opts[:components] || [],
+        pathname: opts[:pathname],
         serial: opts[:serial] || false
       }
 
@@ -49,7 +50,7 @@ defmodule ExLisp.ASDF do
   defp extract_defsystem(_), do: :error
 
   defp parse_defsystem_options(args) do
-    parse_options_kv(args, %{depends_on: [], components: [], serial: false})
+    parse_options_kv(args, %{depends_on: [], components: [], serial: false, pathname: nil})
   end
 
   defp parse_options_kv([], acc), do: acc
@@ -70,6 +71,10 @@ defmodule ExLisp.ASDF do
       :components ->
         comps = parse_components(v_node)
         parse_options_kv(rest, Map.put(acc, :components, comps))
+
+      :pathname ->
+        path_str = normalize_name(v_node)
+        parse_options_kv(rest, Map.put(acc, :pathname, path_str))
 
       :serial ->
         serial_val = v_node in [{:lit, :t}, {:lit, true}, :t, true]
@@ -111,6 +116,19 @@ defmodule ExLisp.ASDF do
     end
   end
 
+  defp normalize_name({:list, _pos, [{:id, _, [op]} | [first | _]]})
+       when op in ["version", "VERSION", ":version"] do
+    normalize_name(first)
+  end
+
+  defp normalize_name({:list, _pos, [{:lit, :version} | [first | _]]}) do
+    normalize_name(first)
+  end
+
+  defp normalize_name([op | [first | _]]) when op in [:version, "version", ":version"] do
+    normalize_name(first)
+  end
+
   defp normalize_name({:id, _pos, [name]}), do: String.downcase(name)
   defp normalize_name({:id, _pos, parts}), do: Enum.join(parts, ".") |> String.downcase()
   defp normalize_name({:lit, val}) when is_atom(val), do: Atom.to_string(val) |> String.downcase()
@@ -140,6 +158,7 @@ defmodule ExLisp.ASDF do
 
     name = normalize_name(name_node)
     opts = parse_component_opts(rest_opts)
+    path_name = opts[:pathname] || name
 
     if Map.has_key?(opts, :if_feature) and
          not ExLisp.LispParser.feature_matches?(opts[:if_feature]) do
@@ -147,11 +166,11 @@ defmodule ExLisp.ASDF do
     else
       case type do
         :file ->
-          [{:file, name, opts[:depends_on] || []}]
+          [{:file, path_name, opts[:depends_on] || []}]
 
         :module ->
           sub_comps = opts[:components] || []
-          [{:module, name, sub_comps, opts[:depends_on] || []}]
+          [{:module, path_name, sub_comps, opts[:depends_on] || []}]
 
         _static_or_other ->
           []
@@ -180,6 +199,10 @@ defmodule ExLisp.ASDF do
         deps = extract_list_of_names(v_node)
         parse_component_opts_kv(rest, Map.put(acc, :depends_on, deps))
 
+      :pathname ->
+        path_str = normalize_name(v_node)
+        parse_component_opts_kv(rest, Map.put(acc, :pathname, path_str))
+
       k when k in [:if_feature, :"if-feature"] ->
         parse_component_opts_kv(rest, Map.put(acc, :if_feature, v_node))
 
@@ -199,7 +222,8 @@ defmodule ExLisp.ASDF do
   """
   def get_load_order(system_info) do
     components = system_info.components
-    flatten_components(components, "")
+    prefix = system_info[:pathname] || ""
+    flatten_components(components, prefix)
   end
 
   defp flatten_components(components, prefix) do

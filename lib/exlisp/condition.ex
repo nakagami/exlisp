@@ -318,6 +318,8 @@ defmodule ExLisp.Condition do
   end
 
   def coerce_to_condition(datum, args, default_type) do
+    init_condition_hierarchy()
+
     cond do
       is_condition?(datum) ->
         datum

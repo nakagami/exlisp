@@ -51,7 +51,10 @@
     replace-list.1 replace-list.2 replace-list.3 replace-list.4 replace-list.5 replace-list.6 replace-list.8 replace-list.9 replace-list.10 replace-list.11 replace-list.12 replace-list.13 replace-list.14 replace-list.15 replace-list.16 replace-list.17 replace-list.18 replace-list.19 replace-list.20 replace-string.1 replace-string.2 replace-string.3 replace-string.4 replace-string.5 replace-string.6 replace-string.8 replace-string.9 replace-string.10 replace-string.11 replace-string.12 replace-string.13 replace-string.14 replace-string.15 replace-string.16 replace-string.17 replace-string.18 replace-string.19 replace-string.21
     sort-vector.4 sort-vector.10 sort-string.1 sort-string.2 stable-sort-vector.4 stable-sort-vector.10 stable-sort-string.1 stable-sort-string.2
     subseq-list.6 subseq-vector.1 subseq-vector.2 subseq-vector.3 subseq-vector.4 subseq-vector.5 subseq-vector.6 subseq-bit-vector.1 subseq-bit-vector.2 subseq-bit-vector.3
-    substitute-string.19 substitute-string.20 substitute-string.21 substitute-string.22 substitute-string.23))
+    substitute-string.19 substitute-string.20 substitute-string.21 substitute-string.22 substitute-string.23
+    nstring-upcase.1 nstring-upcase.2 nstring-upcase.13
+    nstring-downcase.1 nstring-downcase.2 nstring-downcase.13
+    nstring-capitalize.1 nstring-capitalize.2 nstring-capitalize.4 nstring-capitalize.14))
 
 (defun %values-equal (actual-list expected-list)
   (if (and (null actual-list) (null expected-list))
