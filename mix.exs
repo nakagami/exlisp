@@ -4,7 +4,7 @@ defmodule ExLisp.MixProject do
   def project do
     [
       app: :exlisp,
-      version: "0.1.2",
+      version: "0.1.3",
       elixir: "~> 1.18",
       description: "A Lisp implementation and REPL running on Elixir/BEAM",
       package: package(),
