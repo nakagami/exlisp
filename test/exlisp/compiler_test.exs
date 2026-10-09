@@ -61,5 +61,38 @@ defmodule ExLisp.CompilerTest do
       assert apply(MyMathModule, :add_offset, [5]) == 15
       assert apply(MyMathModule, :get_var, [:offset]) == 10
     end
+
+    test "compiles direct sibling calls and predicates with inlining" do
+      code = """
+      (defun is_zero (x) (zerop x))
+      (defun is_pos (x) (plusp x))
+      (defun is_neg (x) (minusp x))
+      (defun is_ev (x) (evenp x))
+      (defun is_odd (x) (oddp x))
+      (defun double_val (x) (* x 2))
+      (defun quad_val (x) (double_val (double_val x)))
+      (defun count_down (n acc)
+        (if (zerop n)
+            acc
+            (count_down (- n 1) (+ acc n))))
+      """
+
+      {:ok, mod, _binary} =
+        Compiler.compile_string(code, module: OptimizedModuleTest, write_beam: false)
+
+      assert apply(mod, :is_zero, [0]) == :t
+      assert apply(mod, :is_zero, [5]) == nil
+      assert apply(mod, :is_pos, [10]) == :t
+      assert apply(mod, :is_pos, [-1]) == nil
+      assert apply(mod, :is_neg, [-5]) == :t
+      assert apply(mod, :is_neg, [5]) == nil
+      assert apply(mod, :is_ev, [4]) == :t
+      assert apply(mod, :is_ev, [5]) == nil
+      assert apply(mod, :is_odd, [5]) == :t
+      assert apply(mod, :is_odd, [4]) == nil
+
+      assert apply(mod, :quad_val, [3]) == 12
+      assert apply(mod, :count_down, [10, 0]) == 55
+    end
   end
 end

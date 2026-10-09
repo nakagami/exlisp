@@ -141,9 +141,18 @@ defmodule ExLisp.Compiler do
         ]
 
     # Function forms
+    sibling_fn_set =
+      Enum.map(funs, fn {fname, fparams, _} ->
+        {:direct_module_fn, fname, length(fparams)}
+      end)
+      |> MapSet.new()
+
     fun_forms =
       Enum.map(funs, fn {name, param_names, body_nodes} ->
-        local_env = MapSet.new(param_names)
+        local_env =
+          MapSet.new(param_names)
+          |> MapSet.union(sibling_fn_set)
+
         compiled_body = Enum.map(body_nodes, &LispBeam.compile_expr(&1, local_env))
         erl_params = Enum.map(param_names, fn p -> {:var, 1, LispBeam.erl_var_name(p)} end)
 

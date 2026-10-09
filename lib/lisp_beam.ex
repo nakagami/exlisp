@@ -847,6 +847,125 @@ defmodule LispBeam do
             compile_regular_op(op, args, local_env)
         end
 
+      name when name in [:zerop, :_cl_zerop_] ->
+        case args do
+          [arg] ->
+            c_arg = compile_expr(arg, local_env)
+            v = :"V_zp_#{System.unique_integer([:positive, :monotonic])}"
+
+            {:case, 1, c_arg,
+             [
+               {:clause, 1, [{:integer, 1, 0}], [], [{:atom, 1, :t}]},
+               {:clause, 1, [{:float, 1, 0.0}], [], [{:atom, 1, :t}]},
+               {:clause, 1, [{:var, 1, v}],
+                [[{:op, 1, :"=:=", {:var, 1, v}, {:integer, 1, 0}}]],
+                [{:atom, 1, :t}]},
+               {:clause, 1, [{:var, 1, v}],
+                [[{:op, 1, :"=:=", {:var, 1, v}, {:float, 1, 0.0}}]],
+                [{:atom, 1, :t}]},
+               {:clause, 1, [{:var, 1, :_}], [], [{:atom, 1, nil}]}
+             ]}
+
+          _ ->
+            compile_regular_op(op, args, local_env)
+        end
+
+      name when name in [:plusp, :_cl_plusp_] ->
+        case args do
+          [arg] ->
+            c_arg = compile_expr(arg, local_env)
+            v = :"V_pp_#{System.unique_integer([:positive, :monotonic])}"
+
+            {:case, 1, c_arg,
+             [
+               {:clause, 1, [{:var, 1, v}],
+                [[
+                  {:call, 1, {:atom, 1, :is_number}, [{:var, 1, v}]},
+                  {:op, 1, :>, {:var, 1, v}, {:integer, 1, 0}}
+                ]],
+                [{:atom, 1, :t}]},
+               {:clause, 1, [{:var, 1, v}], [],
+                [
+                  {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :plusp}},
+                   [{:var, 1, v}]}
+                ]}
+             ]}
+
+          _ ->
+            compile_regular_op(op, args, local_env)
+        end
+
+      name when name in [:minusp, :_cl_minusp_] ->
+        case args do
+          [arg] ->
+            c_arg = compile_expr(arg, local_env)
+            v = :"V_mp_#{System.unique_integer([:positive, :monotonic])}"
+
+            {:case, 1, c_arg,
+             [
+               {:clause, 1, [{:var, 1, v}],
+                [[
+                  {:call, 1, {:atom, 1, :is_number}, [{:var, 1, v}]},
+                  {:op, 1, :<, {:var, 1, v}, {:integer, 1, 0}}
+                ]],
+                [{:atom, 1, :t}]},
+               {:clause, 1, [{:var, 1, v}], [],
+                [
+                  {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :minusp}},
+                   [{:var, 1, v}]}
+                ]}
+             ]}
+
+          _ ->
+            compile_regular_op(op, args, local_env)
+        end
+
+      name when name in [:evenp, :_cl_evenp_] ->
+        case args do
+          [arg] ->
+            c_arg = compile_expr(arg, local_env)
+            v = :"V_ep_#{System.unique_integer([:positive, :monotonic])}"
+
+            {:case, 1, c_arg,
+             [
+               {:clause, 1, [{:var, 1, v}],
+                [[
+                  {:call, 1, {:atom, 1, :is_integer}, [{:var, 1, v}]},
+                  {:op, 1, :"=:=",
+                   {:op, 1, :band, {:var, 1, v}, {:integer, 1, 1}},
+                   {:integer, 1, 0}}
+                ]],
+                [{:atom, 1, :t}]},
+               {:clause, 1, [{:var, 1, :_}], [], [{:atom, 1, nil}]}
+             ]}
+
+          _ ->
+            compile_regular_op(op, args, local_env)
+        end
+
+      name when name in [:oddp, :_cl_oddp_] ->
+        case args do
+          [arg] ->
+            c_arg = compile_expr(arg, local_env)
+            v = :"V_op_#{System.unique_integer([:positive, :monotonic])}"
+
+            {:case, 1, c_arg,
+             [
+               {:clause, 1, [{:var, 1, v}],
+                [[
+                  {:call, 1, {:atom, 1, :is_integer}, [{:var, 1, v}]},
+                  {:op, 1, :"=:=",
+                   {:op, 1, :band, {:var, 1, v}, {:integer, 1, 1}},
+                   {:integer, 1, 1}}
+                ]],
+                [{:atom, 1, :t}]},
+               {:clause, 1, [{:var, 1, :_}], [], [{:atom, 1, nil}]}
+             ]}
+
+          _ ->
+            compile_regular_op(op, args, local_env)
+        end
+
       :when ->
         compile_when(args, local_env)
 
@@ -5980,6 +6099,11 @@ defmodule LispBeam do
 
       true ->
         cond do
+          is_atom(op_name) and
+              MapSet.member?(local_env, {:direct_module_fn, op_name, length(args)}) ->
+            compiled_args = Enum.map(args, &compile_expr(&1, local_env))
+            {:call, 1, {:atom, 1, op_name}, compiled_args}
+
           is_atom(op_name) and MapSet.member?(local_env, {:direct_fn, op_name}) ->
             compiled_args = Enum.map(args, &compile_expr(&1, local_env))
             {:call, 1, {:var, 1, erl_var_name(op_name)}, compiled_args}

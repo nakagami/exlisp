@@ -548,6 +548,15 @@ defmodule CommonLispTest do
       # Indirection (~?) and arg jump (~*)
       assert ExLisp.eval(~S'(format nil "~? is ~a" "<~a>" (list 42) "answer")') == "<42> is answer"
       assert ExLisp.eval(~S'(format nil "~a ~*~a" 1 2 3)') == "1 3"
+
+      # Justification (~< ~>)
+      assert ExLisp.eval(~S'(format nil "~10<foo~>")') == "foo       "
+      assert ExLisp.eval(~S'(format nil "~10@<foo~>")') == "       foo"
+      assert ExLisp.eval(~S'(format nil "~10:@<foo~>")') == "   foo    "
+      assert ExLisp.eval(~S'(format nil "~10<foo~;bar~>")') == "foo    bar"
+      assert ExLisp.eval(~S'(format nil "~10:<foo~;bar~>")') == "  foo  bar"
+      assert ExLisp.eval(~S'(format nil "~10@<foo~;bar~>")') == "foo  bar  "
+      assert ExLisp.eval(~S'(format nil "~12:@<foo~;bar~>")') == "  foo  bar  "
     end
 
     test "write-line, write-string, and write-char" do

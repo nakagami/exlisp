@@ -13,6 +13,7 @@ defmodule ExLisp.CLFormat do
   - ~{ ... ~} (Iteration: list, sublists, remaining args, max iterations)
   - ~^ (Escape / termination check)
   - ~( ... ~) (Case conversion: downcase, capitalize, upcase)
+  - ~< ... ~> (Justification: layout fields / columns / margins)
   """
 
   @doc """
@@ -55,6 +56,10 @@ defmodule ExLisp.CLFormat do
       # --- Case conversion: ~( ... ~) ---
       [?( | after_paren] ->
         handle_case_conversion(after_paren, colons, ats, args, all_args, acc, ctx)
+
+      # --- Justification: ~< ... ~> ---
+      [?< | after_angle] ->
+        handle_justification(after_angle, params, colons, ats, args, all_args, acc, ctx)
 
       # --- Escape: ~^ ---
       [?^ | after_caret] ->
@@ -530,6 +535,134 @@ defmodule ExLisp.CLFormat do
     case String.next_grapheme(str) do
       {first, rest} -> String.upcase(first) <> String.downcase(rest)
       nil -> str
+    end
+  end
+
+  # --- Justification: ~< ... ~> ---
+
+  defp handle_justification(after_angle, params, colons, ats, args, all_args, acc, ctx) do
+    {clauses, rest_after_close} = extract_matching_clauses(after_angle, ?<, ?>)
+
+    mincol = case params do [mc | _] when is_integer(mc) and mc >= 0 -> mc; _ -> 0 end
+    colinc = case params do [_, ci | _] when is_integer(ci) and ci > 0 -> ci; _ -> 1 end
+    minpad = case params do [_, _, mp | _] when is_integer(mp) and mp >= 0 -> mp; _ -> 0 end
+    padchar =
+      case params do
+        [_, _, _, pc | _] when is_integer(pc) -> <<pc::utf8>>
+        [_, _, _, pc | _] when is_binary(pc) and byte_size(pc) > 0 -> String.first(pc)
+        _ -> " "
+      end
+
+    {formatted_clauses, new_args} =
+      Enum.reduce(clauses, {[], args}, fn clause, {c_acc, cur_args} ->
+        clause_str =
+          case clause do
+            {:default, s} -> s
+            s when is_binary(s) -> s
+            _ -> ""
+          end
+
+        {out, rem_args} = format_internal(clause_str, cur_args, all_args, ctx)
+        {[out | c_acc], rem_args}
+      end)
+
+    field_strings = Enum.reverse(formatted_clauses)
+    justified_str = justify_fields(field_strings, mincol, colinc, minpad, padchar, colons, ats)
+
+    new_acc = Enum.reverse(String.to_charlist(justified_str)) ++ acc
+    do_format_chars(rest_after_close, new_args, all_args, new_acc, ctx)
+  end
+
+  defp justify_fields([], mincol, colinc, _minpad, padchar, _colons, _ats) do
+    len = if mincol > 0, do: mincol, else: 0
+    target_len = if len < mincol, do: mincol, else: ceil_colinc(len, mincol, colinc)
+    String.duplicate(padchar, target_len)
+  end
+
+  defp justify_fields([single], mincol, colinc, minpad, padchar, colons, ats) do
+    text_len = String.length(single)
+    min_needed = text_len + minpad
+    target_width = ceil_colinc(min_needed, mincol, colinc)
+    pad_total = max(0, target_width - text_len)
+
+    cond do
+      colons and ats ->
+        left_pad = div(pad_total, 2)
+        right_pad = pad_total - left_pad
+        String.duplicate(padchar, left_pad) <> single <> String.duplicate(padchar, right_pad)
+
+      ats ->
+        String.duplicate(padchar, pad_total) <> single
+
+      true ->
+        single <> String.duplicate(padchar, pad_total)
+    end
+  end
+
+  defp justify_fields(fields, mincol, colinc, minpad, padchar, colons, ats) do
+    num_fields = length(fields)
+    text_len = Enum.reduce(fields, 0, fn f, sum -> sum + String.length(f) end)
+
+    num_gaps =
+      cond do
+        colons and ats -> num_fields + 1
+        colons -> num_fields
+        ats -> num_fields
+        true -> max(1, num_fields - 1)
+      end
+
+    min_total_pad = num_gaps * minpad
+    needed_len = text_len + min_total_pad
+    target_width = ceil_colinc(needed_len, mincol, colinc)
+    total_pad = max(min_total_pad, target_width - text_len)
+
+    base_pad = div(total_pad, num_gaps)
+    extra_pad = rem(total_pad, num_gaps)
+
+    gap_pads =
+      Enum.map(0..(num_gaps - 1), fn idx ->
+        pad_size = if idx < extra_pad, do: base_pad + 1, else: base_pad
+        String.duplicate(padchar, pad_size)
+      end)
+
+    cond do
+      colons and ats ->
+        [first_pad | rest_pads] = gap_pads
+        interleaved =
+          Enum.zip(fields, rest_pads)
+          |> Enum.map(fn {f, p} -> f <> p end)
+          |> Enum.join("")
+
+        first_pad <> interleaved
+
+      colons ->
+        Enum.zip(gap_pads, fields)
+        |> Enum.map(fn {p, f} -> p <> f end)
+        |> Enum.join("")
+
+      ats ->
+        Enum.zip(fields, gap_pads)
+        |> Enum.map(fn {f, p} -> f <> p end)
+        |> Enum.join("")
+
+      true ->
+        [last_field | rev_init_fields] = Enum.reverse(fields)
+        init_fields = Enum.reverse(rev_init_fields)
+
+        Enum.zip(init_fields, gap_pads)
+        |> Enum.map(fn {f, p} -> f <> p end)
+        |> Enum.join("")
+        |> Kernel.<>(last_field)
+    end
+  end
+
+  defp ceil_colinc(needed, mincol, colinc) do
+    if needed <= mincol do
+      mincol
+    else
+      extra = needed - mincol
+      steps = div(extra + colinc - 1, colinc)
+      mincol + steps * colinc
     end
   end
 

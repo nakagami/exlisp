@@ -125,4 +125,34 @@ defmodule BitwiseMathCharsTest do
     assert ExLisp.eval("(logbitp 2 4)") == :t
     assert ExLisp.eval("(logbitp 1 4)") == nil
   end
+
+  test "hyperbolic functions" do
+    assert_in_delta ExLisp.eval("(sinh 0)"), 0.0, 0.0001
+    assert_in_delta ExLisp.eval("(cosh 0)"), 1.0, 0.0001
+    assert_in_delta ExLisp.eval("(tanh 0)"), 0.0, 0.0001
+    assert_in_delta ExLisp.eval("(asinh 0)"), 0.0, 0.0001
+    assert_in_delta ExLisp.eval("(acosh 1)"), 0.0, 0.0001
+    assert_in_delta ExLisp.eval("(atanh 0)"), 0.0, 0.0001
+    assert_in_delta ExLisp.eval("(tanh 1.0)"), :math.tanh(1.0), 0.0001
+  end
+
+  test "complex and 2-arg atan functions" do
+    assert_in_delta ExLisp.eval("(atan 1 1)"), :math.pi() / 4, 0.0001
+    assert_in_delta ExLisp.eval("(atan 0 -1)"), :math.pi(), 0.0001
+    assert ExLisp.eval("(conjugate #c(3 4))") == {:complex, 3, -4}
+    assert ExLisp.eval("(conjugate 5)") == 5
+    assert_in_delta ExLisp.eval("(phase #c(0 1))"), :math.pi() / 2, 0.0001
+    assert_in_delta ExLisp.eval("(phase 5)"), 0.0, 0.0001
+    assert_in_delta ExLisp.eval("(abs #c(3 4))"), 5.0, 0.0001
+    assert ExLisp.eval("(signum #c(0 0))") == {:complex, 0, 0}
+    assert ExLisp.eval("(signum 5)") == 1
+    assert ExLisp.eval("(signum -3)") == -1
+    assert ExLisp.eval("(signum 0)") == 0
+    assert ExLisp.eval("(signum 2/3)") == 1
+    assert ExLisp.eval("(signum -2/3)") == -1
+
+    {:complex, r, i} = ExLisp.eval("(cis 0)")
+    assert_in_delta r, 1.0, 0.0001
+    assert_in_delta i, 0.0, 0.0001
+  end
 end

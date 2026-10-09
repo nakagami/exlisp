@@ -833,7 +833,40 @@ defmodule ExLisp.Builtins do
   def abs(%ExLisp.Ratio{numerator: n, denominator: d}),
     do: %ExLisp.Ratio{numerator: Kernel.abs(n), denominator: d}
 
+  def abs({:complex, r, i}), do: :math.sqrt(r * r + i * i)
+  def abs([x]), do: abs(unwrap_mv_primary(x))
   def abs(x) when is_number(x), do: Kernel.abs(x)
+
+  def signum({:complex, r, i}) do
+    mag = :math.sqrt(r * r + i * i)
+    if mag == 0, do: {:complex, 0, 0}, else: {:complex, r / mag, i / mag}
+  end
+
+  def signum(%ExLisp.Ratio{numerator: n, denominator: _d}) do
+    cond do
+      n > 0 -> 1
+      n < 0 -> -1
+      true -> 0
+    end
+  end
+
+  def signum([x]), do: signum(unwrap_mv_primary(x))
+
+  def signum(x) when is_integer(x) do
+    cond do
+      x > 0 -> 1
+      x < 0 -> -1
+      true -> 0
+    end
+  end
+
+  def signum(x) when is_float(x) do
+    cond do
+      x > 0.0 -> 1.0
+      x < 0.0 -> -1.0
+      true -> 0.0
+    end
+  end
 
   def min([first | rest]), do: Enum.reduce(rest, first, &min/2)
   def min([]), do: raise(ArgumentError, "min requires at least 1 argument")
@@ -1017,6 +1050,33 @@ defmodule ExLisp.Builtins do
   def asin(x) when is_number(x), do: :math.asin(x)
   def acos(x) when is_number(x), do: :math.acos(x)
   def atan(x) when is_number(x), do: :math.atan(x)
+  def atan([y, x]), do: atan(unwrap_mv_primary(y), unwrap_mv_primary(x))
+  def atan([y]), do: atan(unwrap_mv_primary(y))
+  def atan(y, x) when is_number(y) and is_number(x), do: :math.atan2(y, x)
+
+  def sinh(x) when is_number(x), do: :math.sinh(x)
+  def cosh(x) when is_number(x), do: :math.cosh(x)
+  def tanh(x) when is_number(x), do: :math.tanh(x)
+  def asinh(x) when is_number(x), do: :math.asinh(x)
+  def acosh(x) when is_number(x), do: :math.acosh(x)
+  def atanh(x) when is_number(x), do: :math.atanh(x)
+
+  def cis(x) when is_number(x), do: {:complex, :math.cos(x), :math.sin(x)}
+  def cis([x]), do: cis(unwrap_mv_primary(x))
+
+  def conjugate({:complex, r, i}), do: {:complex, r, -i}
+  def conjugate(x) when is_number(x), do: x
+  def conjugate(%ExLisp.Ratio{} = r), do: r
+  def conjugate([x]), do: conjugate(unwrap_mv_primary(x))
+
+  def phase({:complex, r, i}), do: :math.atan2(i, r)
+  def phase(x) when is_number(x) do
+    if x < 0, do: :math.pi(), else: 0.0
+  end
+  def phase(%ExLisp.Ratio{numerator: n}) do
+    if n < 0, do: :math.pi(), else: 0.0
+  end
+  def phase([x]), do: phase(unwrap_mv_primary(x))
 
   def gcd([]), do: 0
   def gcd([x]), do: Kernel.abs(unwrap_mv_primary(x))
@@ -8400,42 +8460,6 @@ defmodule ExLisp.Builtins do
 
   def logtest(integer1, integer2) when is_integer(integer1) and is_integer(integer2) do
     if band(integer1, integer2) != 0, do: :t, else: nil
-  end
-
-  def signum(%ExLisp.Ratio{numerator: n}) do
-    cond do
-      n > 0 -> 1
-      n < 0 -> -1
-      true -> 0
-    end
-  end
-
-  def signum({:complex, r, i}) do
-    if r == 0 and i == 0 do
-      {:complex, 0, 0}
-    else
-      # z / abs(z)
-      abs_val = :math.sqrt(r * r + i * i)
-      {:complex, r / abs_val, i / abs_val}
-    end
-  end
-
-  def signum([number]), do: signum(number)
-
-  def signum(number) when is_integer(number) do
-    cond do
-      number > 0 -> 1
-      number < 0 -> -1
-      true -> 0
-    end
-  end
-
-  def signum(number) when is_float(number) do
-    cond do
-      number > 0.0 -> 1.0
-      number < 0.0 -> -1.0
-      true -> 0.0
-    end
   end
 
   def parse_integer(args) when is_list(args) do
