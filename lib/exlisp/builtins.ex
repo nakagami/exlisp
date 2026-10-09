@@ -14,7 +14,10 @@ defmodule ExLisp.Builtins do
       ceil: 1,
       abs: 1,
       trunc: 1,
-      rem: 2
+      rem: 2,
+      send: 2,
+      spawn: 1,
+      spawn: 3
     ]
 
   import Bitwise
@@ -9971,5 +9974,304 @@ defmodule ExLisp.Builtins do
     end
   end
   def pathname_match_p(p, wild), do: ExLisp.Pathname.pathname_match_p(p, wild)
+
+  # --- Concurrency & BEAM/OTP ---
+
+  def spawn(args) when is_list(args) do
+    case args do
+      [f] when is_function(f, 0) ->
+        Kernel.spawn(f)
+
+      [%ExLisp.Closure{fun: f}] when is_function(f, 0) ->
+        Kernel.spawn(f)
+
+      [%ExLisp.Closure{fun: f} | call_args] when is_list(call_args) ->
+        Kernel.spawn(fn ->
+          f.(call_args)
+        end)
+
+      [f | call_args] when is_function(f) and is_list(call_args) ->
+        Kernel.spawn(fn ->
+          if :erlang.fun_info(f, :arity) == {:arity, length(call_args)} do
+            apply(f, call_args)
+          else
+            f.(call_args)
+          end
+        end)
+
+      [sym | call_args] when is_atom(sym) ->
+        fun = ExLisp.Env.get_fun(sym)
+        if fun do
+          spawn([fun | call_args])
+        else
+          raise ArgumentError, "Undefined function for spawn: #{inspect(sym)}"
+        end
+
+      _ ->
+        raise ArgumentError, "Invalid arguments to spawn: #{inspect(args)}"
+    end
+  end
+
+  def spawn(f) when is_function(f, 0), do: Kernel.spawn(f)
+  def spawn(%ExLisp.Closure{fun: f}) when is_function(f, 0), do: Kernel.spawn(f)
+  def spawn(sym) when is_atom(sym) do
+    fun = ExLisp.Env.get_fun(sym)
+    if fun do
+      spawn(fun)
+    else
+      raise ArgumentError, "Undefined function for spawn: #{inspect(sym)}"
+    end
+  end
+
+  def send(pid, msg) when is_pid(pid) do
+    Kernel.send(pid, msg)
+    msg
+  end
+
+  def send([pid, msg]), do: send(pid, msg)
+
+  def self, do: Kernel.self()
+  def self([]), do: Kernel.self()
+
+  def receive_msg do
+    receive do
+      msg -> msg
+    end
+  end
+
+  def receive_msg(args) when is_list(args) do
+    case args do
+      [timeout, default_val | _] -> receive_msg(timeout, default_val)
+      [timeout] -> receive_msg(timeout, nil)
+      [] -> receive_msg()
+    end
+  end
+
+  def receive_msg(timeout, default_val) do
+    case timeout do
+      :infinity ->
+        receive do
+          msg -> msg
+        end
+
+      n when is_number(n) ->
+        ms = Kernel.trunc(n)
+        receive do
+          msg -> msg
+        after
+          ms -> default_val
+        end
+
+      _ ->
+        receive do
+          msg -> msg
+        end
+    end
+  end
+
+  def process_alive_p(pid) when is_pid(pid) do
+    if Process.alive?(pid), do: :t, else: nil
+  end
+
+  def process_alive_p([pid]), do: process_alive_p(pid)
+  def process_alive_p(_), do: nil
+
+  def pidp([x]), do: pidp(x)
+  def pidp(x) when is_pid(x), do: :t
+  def pidp(_), do: nil
+
+  def sleep(seconds) when is_number(seconds) do
+    Process.sleep(Kernel.trunc(seconds * 1000))
+    nil
+  end
+
+  def sleep([seconds]), do: sleep(seconds)
+
+  # --- REPL / DX Utilities ---
+
+  def time_eval(fun) when is_function(fun, 0) do
+    {:reductions, r0} = :erlang.process_info(Kernel.self(), :reductions)
+    {:memory, m0} = :erlang.process_info(Kernel.self(), :memory)
+    start_time = :erlang.monotonic_time(:microsecond)
+
+    res = fun.()
+
+    end_time = :erlang.monotonic_time(:microsecond)
+    {:reductions, r1} = :erlang.process_info(Kernel.self(), :reductions)
+    {:memory, m1} = :erlang.process_info(Kernel.self(), :memory)
+
+    elapsed_sec = (end_time - start_time) / 1_000_000.0
+    reductions = max(0, r1 - r0)
+    mem_diff = max(0, m1 - m0)
+
+    IO.puts("""
+    Evaluation took:
+      #{:erlang.float_to_binary(elapsed_sec, decimals: 6)} seconds of real time
+      #{reductions} reductions
+      #{mem_diff} bytes of process memory
+    """)
+
+    res
+  end
+
+  def room do
+    mem = :erlang.memory()
+    total = Keyword.get(mem, :total, 0)
+    procs = Keyword.get(mem, :processes, 0)
+    atom = Keyword.get(mem, :atom, 0)
+    binary = Keyword.get(mem, :binary, 0)
+    code = Keyword.get(mem, :code, 0)
+    ets = Keyword.get(mem, :ets, 0)
+
+    IO.puts("""
+    Memory usage:
+      Total:      #{total} bytes (#{Float.round(total / 1024 / 1024, 2)} MB)
+      Processes:  #{procs} bytes
+      Atoms:      #{atom} bytes
+      Binary:     #{binary} bytes
+      Code:       #{code} bytes
+      ETS:        #{ets} bytes
+    """)
+
+    nil
+  end
+
+  def room([]), do: room()
+
+  def describe(args) when is_list(args) do
+    case args do
+      [obj | _] -> describe(obj)
+      obj -> describe(obj)
+    end
+  end
+
+  def describe(obj) do
+    IO.puts(do_describe(obj))
+    nil
+  end
+
+  defp do_describe(obj) when is_atom(obj) do
+    is_bound = ExLisp.Env.has_var?(obj)
+    is_fn = ExLisp.Env.has_fun?(obj) or BuiltinFunction.builtin?(obj)
+    is_macro = ExLisp.Env.has_macro?(obj)
+    doc_fn = documentation(obj, :function)
+    doc_var = documentation(obj, :variable)
+
+    """
+    Symbol: #{inspect(obj)}
+      Bound variable: #{if is_bound, do: "YES (value: #{inspect(ExLisp.Env.get_var(obj))})", else: "NO"}
+      #{if doc_var, do: "  Variable doc: #{doc_var}\n", else: ""}Function:       #{if is_fn, do: "YES", else: "NO"}
+      #{if doc_fn, do: "  Function doc: #{doc_fn}\n", else: ""}Macro:          #{if is_macro, do: "YES", else: "NO"}
+    """
+    |> String.trim_trailing()
+  end
+
+  defp do_describe(obj) when is_function(obj) do
+    info = :erlang.fun_info(obj)
+    name = Keyword.get(info, :name)
+    arity = Keyword.get(info, :arity)
+    "Function: #{inspect(obj)}\n  Name: #{name}\n  Arity: #{arity}"
+  end
+
+  defp do_describe(%ExLisp.Closure{name: name, fun: fun}) do
+    info = if is_function(fun), do: :erlang.fun_info(fun), else: []
+    arity = Keyword.get(info, :arity)
+    "ExLisp Closure: #{inspect(name)}\n  Arity: #{arity}"
+  end
+
+  defp do_describe(obj) when is_pid(obj) do
+    alive = if Process.alive?(obj), do: "alive", else: "dead"
+    "PID: #{inspect(obj)} (#{alive})"
+  end
+
+  defp do_describe(%ExLisp.Ratio{numerator: n, denominator: d}) do
+    "Ratio: #{n}/#{d} (float: #{n / d})"
+  end
+
+  defp do_describe({:complex, r, i}) do
+    "Complex number: #{r} + #{i}i"
+  end
+
+  defp do_describe(obj) when is_integer(obj) do
+    "Integer: #{obj} (hex: #{Integer.to_string(obj, 16)}, binary: #{Integer.to_string(obj, 2)})"
+  end
+
+  defp do_describe(obj) when is_float(obj) do
+    "Float: #{obj}"
+  end
+
+  defp do_describe(obj) when is_binary(obj) do
+    "String: #{inspect(obj)} (length: #{String.length(obj)})"
+  end
+
+  defp do_describe(obj) when is_list(obj) do
+    "List of length #{length(obj)}: #{inspect(obj)}"
+  end
+
+  defp do_describe(obj) when is_map(obj) do
+    "Map/Hash-Table with #{map_size(obj)} entries: #{inspect(obj)}"
+  end
+
+  defp do_describe(obj) do
+    "Object: #{inspect(obj)}"
+  end
+
+  def apropos_list(args) when is_list(args) do
+    case args do
+      [query | _] -> apropos_list(query)
+      query -> apropos_list(query)
+    end
+  end
+
+  def apropos_list(query) do
+    q_str = to_string_val(query) |> String.downcase()
+
+    all_terms =
+      for {{tag, name}, _} <- :persistent_term.get(),
+          tag in [:exlisp_var, :exlisp_fun, :exlisp_macro],
+          is_atom(name) do
+        name
+      end
+
+    all_builtins = BuiltinFunction.builtins()
+
+    (all_terms ++ all_builtins)
+    |> Enum.uniq()
+    |> Enum.filter(fn sym ->
+      s = sym |> Atom.to_string() |> String.downcase()
+      String.contains?(s, q_str)
+    end)
+    |> Enum.sort()
+  end
+
+  def apropos(args) when is_list(args) do
+    case args do
+      [query | _] -> apropos(query)
+      query -> apropos(query)
+    end
+  end
+
+  def apropos(query) do
+    syms = apropos_list(query)
+
+    if syms == [] do
+      IO.puts("No matching symbols found for #{inspect(query)}.")
+    else
+      IO.puts("Matching symbols for #{inspect(query)}:")
+      for sym <- syms do
+        kinds = []
+        kinds = if ExLisp.Env.has_var?(sym), do: ["variable" | kinds], else: kinds
+        kinds = if ExLisp.Env.has_fun?(sym), do: ["function" | kinds], else: kinds
+        kinds = if ExLisp.Env.has_macro?(sym), do: ["macro" | kinds], else: kinds
+        kinds = if BuiltinFunction.builtin?(sym), do: ["builtin" | kinds], else: kinds
+        kinds_str = if kinds == [], do: "symbol", else: Enum.join(Enum.reverse(kinds), ", ")
+        doc = documentation(sym, :function) || documentation(sym, :variable)
+        doc_str = if doc, do: " - #{doc}", else: ""
+        IO.puts("  #{Atom.to_string(sym) |> String.upcase()} [#{kinds_str}]#{doc_str}")
+      end
+    end
+
+    nil
+  end
 end
 
