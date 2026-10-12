@@ -74,25 +74,64 @@ defmodule BitwiseMathCharsTest do
     assert ExLisp.eval("(char-name #\\Newline)") == "Newline"
     assert ExLisp.eval("(char-name #\\Tab)") == "Tab"
     assert ExLisp.eval("(char-name #\\a)") == nil
+    assert ExLisp.eval("(char-name #\\あ)") == "HIRAGANA_LETTER_A"
+    assert ExLisp.eval("(char-name #\\ア)") == "KATAKANA_LETTER_A"
 
-    assert ExLisp.eval("(name-char \"Space\")") == ?\s
-    assert ExLisp.eval("(name-char \"newline\")") == ?\n
-    assert ExLisp.eval("(name-char \"TAB\")") == ?\t
+    assert ExLisp.eval("(name-char \"Space\")") == ExLisp.Character.new(?\s)
+    assert ExLisp.eval("(name-char \"newline\")") == ExLisp.Character.new(?\n)
+    assert ExLisp.eval("(name-char \"TAB\")") == ExLisp.Character.new(?\t)
+    assert ExLisp.eval("(name-char \"HIRAGANA_LETTER_A\")") == ExLisp.Character.new(?あ)
+    assert ExLisp.eval("(name-char \"HIRAGANA LETTER A\")") == ExLisp.Character.new(?あ)
+    assert ExLisp.eval("(name-char \"hiragana_letter_a\")") == ExLisp.Character.new(?あ)
     assert ExLisp.eval("(name-char \"unknown\")") == nil
+
+    # Japanese hiragana character literal evaluation and inspection
+    assert ExLisp.eval("#\\あ") == ExLisp.Character.new(?あ)
+    assert inspect(ExLisp.eval("#\\あ")) == "#\\HIRAGANA_LETTER_A"
+    assert ExLisp.eval("#\\HIRAGANA_LETTER_A") == ExLisp.Character.new(?あ)
+    assert inspect(ExLisp.eval("#\\HIRAGANA_LETTER_A")) == "#\\HIRAGANA_LETTER_A"
   end
 
   test "digit-char" do
-    assert ExLisp.eval("(digit-char 7)") == ?7
-    assert ExLisp.eval("(digit-char 12 16)") == ?C
+    assert ExLisp.eval("(digit-char 7)") == ExLisp.Character.new(?7)
+    assert ExLisp.eval("(digit-char 12 16)") == ExLisp.Character.new(?C)
     assert ExLisp.eval("(digit-char 10 10)") == nil
-    assert ExLisp.eval("(digit-char 35 36)") == ?Z
+    assert ExLisp.eval("(digit-char 35 36)") == ExLisp.Character.new(?Z)
     assert ExLisp.eval("(digit-char 36 36)") == nil
+  end
+
+  test "character type, aref on strings, and Elixir interop" do
+    assert ExLisp.eval("(aref \"ABC\" 1)") == ExLisp.Character.new(?B)
+    assert inspect(ExLisp.eval("(aref \"ABC\" 1)")) == "#\\B"
+    assert ExLisp.eval("(char \"ABC\" 0)") == ExLisp.Character.new(?A)
+    assert ExLisp.eval("(characterp (aref \"ABC\" 1))") == :t
+    assert ExLisp.eval("(characterp #\\B)") == :t
+    assert ExLisp.eval("(characterp 66)") == nil
+    assert ExLisp.eval("(characterp \"B\")") == nil
+    assert ExLisp.eval("(typep (aref \"ABC\" 1) 'character)") == :t
+    assert ExLisp.eval("(char-code (aref \"ABC\" 1))") == 66
+    assert ExLisp.eval("(code-char 66)") == ExLisp.Character.new(?B)
+    assert ExLisp.eval("(char= (aref \"ABC\" 1) #\\B)") == :t
+    assert ExLisp.eval("(char-equal (aref \"ABC\" 1) #\\b)") == :t
+    assert ExLisp.eval("(format nil \"~C\" (aref \"ABC\" 1))") == "B"
+    assert ExLisp.eval("(format nil \"~A\" (aref \"ABC\" 1))") == "B"
+    assert ExLisp.eval("(format nil \"~S\" (aref \"ABC\" 1))") == "#\\B"
+    assert ExLisp.eval("(coerce '(#\\A #\\B #\\C) 'string)") == "ABC"
+
+    # Elixir interoperability
+    ch = ExLisp.eval("(aref \"ABC\" 1)")
+    assert to_string(ch) == "B"
+    assert String.Chars.to_string(ch) == "B"
+    assert List.Chars.to_charlist(ch) == ~c"B"
+    assert ExLisp.eval("(String.Chars.to_string (aref \"abc\" 1))") == "b"
+    assert ExLisp.eval("(String.upcase (String.Chars.to_string (aref \"abc\" 1)))") == "B"
+    assert ExLisp.eval("(String.upcase (string (aref \"abc\" 1)))") == "B"
   end
 
   test "char-int and int-char" do
     assert ExLisp.eval("(char-int #\\A)") == 65
-    assert ExLisp.eval("(int-char 65)") == ?A
-    assert ExLisp.eval("(int-char (char-int #\\z))") == ?z
+    assert ExLisp.eval("(int-char 65)") == ExLisp.Character.new(?A)
+    assert ExLisp.eval("(int-char (char-int #\\z))") == ExLisp.Character.new(?z)
   end
 
   test "realp predicate" do

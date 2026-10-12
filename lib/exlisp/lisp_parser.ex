@@ -371,32 +371,11 @@ defmodule ExLisp.LispParser do
     {name_chars, rest} = read_token_chars(chars, [])
     name = List.to_string(name_chars)
 
-    case String.downcase(name) do
-      "newline" ->
-        tokenize_chars(rest, line, [{:char, line, ?\n} | acc])
+    case ExLisp.Character.name_to_code(name) do
+      code when is_integer(code) ->
+        tokenize_chars(rest, line, [{:char, line, code} | acc])
 
-      "space" ->
-        tokenize_chars(rest, line, [{:char, line, ?\s} | acc])
-
-      "tab" ->
-        tokenize_chars(rest, line, [{:char, line, ?\t} | acc])
-
-      "page" ->
-        tokenize_chars(rest, line, [{:char, line, 12} | acc])
-
-      "rubout" ->
-        tokenize_chars(rest, line, [{:char, line, 127} | acc])
-
-      "return" ->
-        tokenize_chars(rest, line, [{:char, line, ?\r} | acc])
-
-      "linefeed" ->
-        tokenize_chars(rest, line, [{:char, line, ?\n} | acc])
-
-      "backspace" ->
-        tokenize_chars(rest, line, [{:char, line, 8} | acc])
-
-      _ ->
+      nil ->
         if String.length(name) == 1 do
           <<c::utf8>> = name
           tokenize_chars(rest, line, [{:char, line, c} | acc])
@@ -703,7 +682,10 @@ defmodule ExLisp.LispParser do
   defp parse_expr([{:float, _line, val} | rest]), do: {:ok, {:lit, val}, rest}
   defp parse_expr([{:ratio, _line, val} | rest]), do: {:ok, {:lit, val}, rest}
   defp parse_expr([{:string, _line, val} | rest]), do: {:ok, {:lit, val}, rest}
-  defp parse_expr([{:char, _line, val} | rest]), do: {:ok, {:lit, val}, rest}
+  defp parse_expr([{:char, _line, val} | rest]) do
+    char_val = if match?(%ExLisp.Character{}, val), do: val, else: ExLisp.Character.new(val)
+    {:ok, {:lit, char_val}, rest}
+  end
   defp parse_expr([{:keyword, line, nil} | rest]), do: {:ok, {:keyword, line, nil}, rest}
   defp parse_expr([{:keyword, _line, val} | rest]), do: {:ok, {:lit, val}, rest}
   defp parse_expr([{nil, _line} | rest]), do: {:ok, {:lit, nil}, rest}

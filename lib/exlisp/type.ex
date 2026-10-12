@@ -254,7 +254,7 @@ defmodule ExLisp.Type do
   defp do_typep(val, :keyword), do: is_atom(val) and ExLisp.Env.keyword?(val)
 
   defp do_typep(val, type) when type in [:character, :base_char, :standard_char, :extended_char] do
-    is_integer(val) and val >= 0 and val <= 0x10FFFF
+    match?(%ExLisp.Character{}, val)
   end
 
   defp do_typep(val, :number) do

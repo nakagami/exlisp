@@ -88,7 +88,14 @@ defmodule PathnameAndStreamTest do
                 (list c1 c2 c3 c4 line missing-p))))
           (close s)))
       """
-      assert ExLisp.eval(code) == [?a, 10, ?a, 10, "hello world", :t]
+      assert ExLisp.eval(code) == [
+               ExLisp.Character.new(?a),
+               ExLisp.Character.new(10),
+               ExLisp.Character.new(?a),
+               ExLisp.Character.new(10),
+               "hello world",
+               :t
+             ]
     end
 
     test "write-char, write-string, write-line, terpri, fresh-line" do

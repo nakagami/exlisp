@@ -388,6 +388,11 @@ defmodule LispBeam do
   end
 
   # AST literal
+  def compile_expr({:lit, %ExLisp.Character{code: code}}, _local_env) do
+    {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Character}, {:atom, 1, :new}},
+     [{:integer, 1, code}]}
+  end
+
   def compile_expr({:lit, %ExLisp.Ratio{numerator: num, denominator: den}}, _local_env) do
     {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Ratio}, {:atom, 1, :new}},
      [{:integer, 1, num}, {:integer, 1, den}]}
@@ -1560,6 +1565,18 @@ defmodule LispBeam do
 
   def compile_quote(ast) do
     case ast do
+      {:lit, %ExLisp.Character{code: code}} ->
+        {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Character}, {:atom, 1, :new}},
+         [{:integer, 1, code}]}
+
+      {:lit, _pos, %ExLisp.Character{code: code}} ->
+        {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Character}, {:atom, 1, :new}},
+         [{:integer, 1, code}]}
+
+      %ExLisp.Character{code: code} ->
+        {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Character}, {:atom, 1, :new}},
+         [{:integer, 1, code}]}
+
       {:lit, val} when is_integer(val) ->
         {:integer, 1, val}
 

@@ -497,14 +497,14 @@ defmodule CommonLispTest do
 
       assert ExLisp.eval("(concatenate 'string \"foo\" \"bar\")") == "foobar"
       assert ExLisp.eval("(subseq \"hello world\" 0 5)") == "hello"
-      assert ExLisp.eval("(char \"hello\" 1)") == ?e
+      assert ExLisp.eval("(char \"hello\" 1)") == ExLisp.Character.new(?e)
     end
 
     test "character operations" do
       assert ExLisp.eval("(char= (char \"a\" 0) (char \"a\" 0))") == :t
       assert ExLisp.eval("(char-equal (char \"A\" 0) (char \"a\" 0))") == :t
       assert ExLisp.eval("(char-code (char \"A\" 0))") == 65
-      assert ExLisp.eval("(code-char 65)") == 65
+      assert ExLisp.eval("(code-char 65)") == ExLisp.Character.new(65)
       assert ExLisp.eval("(alpha-char-p (char \"a\" 0))") == :t
       assert ExLisp.eval("(digit-char-p (char \"5\" 0))") == 5
       assert ExLisp.eval("(alphanumericp (char \"x\" 0))") == :t
@@ -571,7 +571,7 @@ defmodule CommonLispTest do
              end) == "Hello world!"
 
       assert capture_io(fn ->
-               assert ExLisp.eval("(write-char (code-char 65))") == 65
+               assert ExLisp.eval("(write-char (code-char 65))") == ExLisp.Character.new(65)
              end) == "A"
 
       assert_raise ArgumentError, fn ->

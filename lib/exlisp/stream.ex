@@ -489,44 +489,55 @@ defmodule ExLisp.Stream do
   def read_char(stream \\ nil, eof_error_p \\ :t, eof_value \\ nil, _recursive_p \\ nil) do
     s = resolve_input_stream(stream)
 
-    case s do
-      %__MODULE__{type: :concatenated, extra: %{streams: []}} ->
-        handle_eof(eof_error_p, eof_value)
+    raw_res =
+      case s do
+        %__MODULE__{type: :concatenated, extra: %{streams: []}} ->
+          handle_eof(eof_error_p, eof_value)
 
-      %__MODULE__{type: :concatenated, extra: %{streams: [head_s | tail_s]}} = concat_s ->
-        case read_char(head_s, nil, :eof) do
-          :eof ->
-            read_char(%{concat_s | extra: %{streams: tail_s}}, eof_error_p, eof_value)
+        %__MODULE__{type: :concatenated, extra: %{streams: [head_s | tail_s]}} = concat_s ->
+          case read_char(head_s, nil, :eof) do
+            :eof ->
+              read_char(%{concat_s | extra: %{streams: tail_s}}, eof_error_p, eof_value)
 
-          c ->
-            c
-        end
+            c ->
+              c
+          end
 
-      %__MODULE__{type: :echo, extra: %{input: in_s, output: out_s}} ->
-        case read_char(in_s, eof_error_p, eof_value) do
-          c when is_integer(c) ->
-            write_char(c, out_s)
-            c
+        %__MODULE__{type: :echo, extra: %{input: in_s, output: out_s}} ->
+          case read_char(in_s, eof_error_p, eof_value) do
+            %ExLisp.Character{} = c ->
+              write_char(c, out_s)
+              c
 
-          other ->
-            other
-        end
+            c when is_integer(c) ->
+              write_char(c, out_s)
+              ExLisp.Character.new(c)
 
-      %__MODULE__{type: :two_way, extra: %{input: in_s}} ->
-        read_char(in_s, eof_error_p, eof_value)
+            other ->
+              other
+          end
 
-      %__MODULE__{device: pid} when is_pid(pid) ->
-        read_char_from_pid(pid, s, eof_error_p, eof_value)
+        %__MODULE__{type: :two_way, extra: %{input: in_s}} ->
+          read_char(in_s, eof_error_p, eof_value)
 
-      pid when is_pid(pid) ->
-        read_char_from_pid(pid, pid, eof_error_p, eof_value)
+        %__MODULE__{device: pid} when is_pid(pid) ->
+          read_char_from_pid(pid, s, eof_error_p, eof_value)
 
-      _ ->
-        case IO.getn(:stdio, "", 1) do
-          :eof -> handle_eof(eof_error_p, eof_value)
-          <<c::utf8>> -> c
-          _ -> handle_eof(eof_error_p, eof_value)
-        end
+        pid when is_pid(pid) ->
+          read_char_from_pid(pid, pid, eof_error_p, eof_value)
+
+        _ ->
+          case IO.getn(:stdio, "", 1) do
+            :eof -> handle_eof(eof_error_p, eof_value)
+            <<c::utf8>> -> c
+            _ -> handle_eof(eof_error_p, eof_value)
+          end
+      end
+
+    case raw_res do
+      %ExLisp.Character{} = c -> c
+      c when is_integer(c) -> ExLisp.Character.new(c)
+      other -> other
     end
   end
 
@@ -576,9 +587,13 @@ defmodule ExLisp.Stream do
     s = resolve_input_stream(stream)
 
     case read_char(s, eof_error_p, eof_value) do
-      c when is_integer(c) ->
+      %ExLisp.Character{} = c ->
         unread_char(c, s)
         c
+
+      c when is_integer(c) ->
+        unread_char(c, s)
+        ExLisp.Character.new(c)
 
       other ->
         other
@@ -641,6 +656,9 @@ defmodule ExLisp.Stream do
         res = handle_eof(eof_error_p, eof_value)
         [:_values_, [res, :t]]
 
+      %ExLisp.Character{code: c} ->
+        collect_line_chars(s, [c])
+
       c when is_integer(c) ->
         collect_line_chars(s, [c])
     end
@@ -655,6 +673,13 @@ defmodule ExLisp.Stream do
         :eof ->
           line = acc |> Enum.reverse() |> List.to_string()
           [:_values_, [line, :t]]
+
+        %ExLisp.Character{code: ?\n} ->
+          line = acc |> Enum.reverse() |> List.to_string() |> String.trim_trailing("\r")
+          [:_values_, [line, nil]]
+
+        %ExLisp.Character{code: c} ->
+          collect_line_chars(s, [c | acc])
 
         ?\n ->
           line = acc |> Enum.reverse() |> List.to_string() |> String.trim_trailing("\r")

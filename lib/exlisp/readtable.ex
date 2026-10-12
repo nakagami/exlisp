@@ -244,6 +244,7 @@ defmodule ExLisp.Readtable do
   defp resolve_rt({:readtable, _} = rt), do: rt
   defp resolve_rt(_), do: current_readtable()
 
+  defp to_char_code(%ExLisp.Character{code: c}), do: c
   defp to_char_code(c) when is_integer(c), do: c
   defp to_char_code(s) when is_binary(s) and byte_size(s) > 0 do
     s |> String.to_charlist() |> hd()

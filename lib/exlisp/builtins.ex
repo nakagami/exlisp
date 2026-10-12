@@ -1464,6 +1464,10 @@ defmodule ExLisp.Builtins do
   def equal(x, y), do: (x == y) |> lisp_bool()
   def equalt(x, y), do: equal(x, y)
 
+  def equalp(%ExLisp.Character{code: c1}, %ExLisp.Character{code: c2}) do
+    char_equal(c1, c2)
+  end
+
   def equalp(x, y) when x in [nil, [], nil] and y in [nil, [], nil], do: :t
 
   def equalp(%ExLisp.Ratio{} = x, %ExLisp.Ratio{} = y) do
@@ -1662,38 +1666,8 @@ defmodule ExLisp.Builtins do
     end
   end
 
-  def characterp(x) do
-    (is_integer(x) and x >= 0 and x <= 0x10FFFF and
-       x not in [
-         1,
-         2,
-         3,
-         4,
-         5,
-         6,
-         7,
-         8,
-         11,
-         14,
-         15,
-         16,
-         17,
-         18,
-         19,
-         20,
-         21,
-         22,
-         23,
-         24,
-         25,
-         26,
-         28,
-         29,
-         30,
-         31
-       ])
-    |> lisp_bool()
-  end
+  def characterp(%ExLisp.Character{}), do: :t
+  def characterp(_), do: nil
 
   def functionp(%ExLisp.Closure{}), do: :t
 
@@ -3440,6 +3414,17 @@ defmodule ExLisp.Builtins do
     end
   end
 
+  defp list_to_string_compat(list) do
+    list
+    |> Enum.map(fn
+      %ExLisp.Character{code: c} -> c
+      c when is_integer(c) -> c
+      <<c::utf8>> -> c
+      c -> char_code(c)
+    end)
+    |> List.to_string()
+  end
+
   def coerce_list_to_type(list, type_spec) do
     norm = normalize_type_spec(type_spec)
 
@@ -3584,7 +3569,7 @@ defmodule ExLisp.Builtins do
         seq
 
       is_binary(seq) ->
-        String.to_charlist(seq)
+        for <<c::utf8 <- seq>>, do: ExLisp.Character.new(c)
 
       match?({:array, _dims, _tid}, seq) ->
         {:array, [dim | _], tid} = seq
@@ -4162,7 +4147,7 @@ defmodule ExLisp.Builtins do
 
         cond do
           is_binary(seq) ->
-            List.to_string(sub_items)
+            list_to_string_compat(sub_items)
 
           is_list(seq) ->
             sub_items
@@ -4233,7 +4218,7 @@ defmodule ExLisp.Builtins do
 
     cond do
       is_binary(seq) ->
-        List.to_string(res_list)
+        list_to_string_compat(res_list)
 
       is_list(seq) ->
         res_list
@@ -4380,7 +4365,7 @@ defmodule ExLisp.Builtins do
 
     cond do
       is_binary(seq) ->
-        List.to_string(res_list)
+        list_to_string_compat(res_list)
 
       is_list(seq) ->
         res_list
@@ -4544,7 +4529,7 @@ defmodule ExLisp.Builtins do
 
         cond do
           is_binary(seq) ->
-            List.to_string(res_list)
+            list_to_string_compat(res_list)
 
           is_list(seq) ->
             res_list
@@ -5023,7 +5008,7 @@ defmodule ExLisp.Builtins do
 
         cond do
           is_binary(seq) ->
-            List.to_string(res)
+            list_to_string_compat(res)
 
           is_list(seq) ->
             res
@@ -5078,7 +5063,7 @@ defmodule ExLisp.Builtins do
 
         cond do
           is_binary(seq1) ->
-            List.to_string(res)
+            list_to_string_compat(res)
 
           is_list(seq1) ->
             res
@@ -5162,7 +5147,7 @@ defmodule ExLisp.Builtins do
             seq
 
           is_binary(seq) ->
-            List.to_string(sorted)
+            list_to_string_compat(sorted)
 
           true ->
             sorted
@@ -5414,6 +5399,9 @@ defmodule ExLisp.Builtins do
       match?(%ExLisp.Symbol{}, val) ->
         symbol_name(val)
 
+      match?(%ExLisp.Character{}, val) ->
+        to_string(val)
+
       is_integer(val) and val >= 0 and val <= 0x10FFFF ->
         List.to_string([val])
 
@@ -5463,13 +5451,12 @@ defmodule ExLisp.Builtins do
       true ->
         c1 = Enum.at(chars1, i1)
         c2 = Enum.at(chars2, i2)
+        code1 = char_code(c1)
+        code2 = char_code(c2)
+        u1 = if case_fold, do: char_code(char_upcase(c1)), else: code1
+        u2 = if case_fold, do: char_code(char_upcase(c2)), else: code2
 
-        eq? =
-          if case_fold do
-            char_upcase(c1) == char_upcase(c2)
-          else
-            c1 == c2
-          end
+        eq? = u1 == u2
 
         if eq? do
           run_string_compare(chars1, chars2, i1 + 1, end1, i2 + 1, end2, comparison, case_fold)
@@ -5483,16 +5470,16 @@ defmodule ExLisp.Builtins do
                 true
 
               :< ->
-                if case_fold, do: char_upcase(c1) < char_upcase(c2), else: c1 < c2
+                u1 < u2
 
               :<= ->
-                if case_fold, do: char_upcase(c1) <= char_upcase(c2), else: c1 <= c2
+                u1 <= u2
 
               :> ->
-                if case_fold, do: char_upcase(c1) > char_upcase(c2), else: c1 > c2
+                u1 > u2
 
               :>= ->
-                if case_fold, do: char_upcase(c1) >= char_upcase(c2), else: c1 >= c2
+                u1 >= u2
             end
 
           if mismatch? do
@@ -5583,7 +5570,7 @@ defmodule ExLisp.Builtins do
           |> Enum.with_index()
           |> Enum.map(fn {c, idx} ->
             if idx >= start_idx and idx < end_idx do
-              char_upcase(c)
+              char_code(char_upcase(c))
             else
               c
             end
@@ -5613,7 +5600,7 @@ defmodule ExLisp.Builtins do
           |> Enum.with_index()
           |> Enum.map(fn {c, idx} ->
             if idx >= start_idx and idx < end_idx do
-              char_downcase(c)
+              char_code(char_downcase(c))
             else
               c
             end
@@ -5643,9 +5630,9 @@ defmodule ExLisp.Builtins do
             if idx >= start_idx and idx < end_idx do
               if alphanumeric_code?(c) do
                 if in_word do
-                  {[char_downcase(c) | acc], true}
+                  {[char_code(char_downcase(c)) | acc], true}
                 else
-                  {[char_upcase(c) | acc], true}
+                  {[char_code(char_upcase(c)) | acc], true}
                 end
               else
                 {[c | acc], false}
@@ -5674,7 +5661,7 @@ defmodule ExLisp.Builtins do
 
         for i <- start_idx..(end_idx - 1)//1 do
           c = aref([arr, i])
-          if is_integer(c), do: set_aref(arr, i, char_upcase(c))
+          if is_integer(c) or match?(%ExLisp.Character{}, c), do: set_aref(arr, i, char_upcase(c))
         end
 
         arr
@@ -5699,7 +5686,7 @@ defmodule ExLisp.Builtins do
 
         for i <- start_idx..(end_idx - 1)//1 do
           c = aref([arr, i])
-          if is_integer(c), do: set_aref(arr, i, char_downcase(c))
+          if is_integer(c) or match?(%ExLisp.Character{}, c), do: set_aref(arr, i, char_downcase(c))
         end
 
         arr
@@ -5726,7 +5713,7 @@ defmodule ExLisp.Builtins do
           Enum.reduce(start_idx..(end_idx - 1)//1, false, fn i, in_w ->
             c = aref([arr, i])
 
-            if is_integer(c) and alphanumeric_code?(c) do
+            if (is_integer(c) or match?(%ExLisp.Character{}, c)) and alphanumeric_code?(char_code(c)) do
               if in_w do
                 set_aref(arr, i, char_downcase(c))
                 true
@@ -5832,6 +5819,7 @@ defmodule ExLisp.Builtins do
 
   def to_string_val(val) when is_binary(val), do: val
   def to_string_val(%ExLisp.Symbol{} = sym), do: symbol_name(sym)
+  def to_string_val(%ExLisp.Character{code: code}), do: List.to_string([code])
   def to_string_val(val) when is_atom(val), do: symbol_name(val)
 
   def to_string_val(val) when is_integer(val) and val >= 0 and val <= 0x10FFFF,
@@ -5871,6 +5859,7 @@ defmodule ExLisp.Builtins do
     end
   end
 
+  def to_string_val(%ExLisp.Character{} = c), do: to_string(c)
   def to_string_val(val), do: inspect(val)
 
   def char(str, idx) when is_integer(idx) and idx >= 0 do
@@ -5878,7 +5867,7 @@ defmodule ExLisp.Builtins do
       is_binary(str) ->
         case String.at(str, idx) do
           nil -> nil
-          ch -> hd(String.to_charlist(ch))
+          <<char_code::utf8>> -> ExLisp.Character.new(char_code)
         end
 
       match?({:array, _, _}, str) ->
@@ -5912,6 +5901,7 @@ defmodule ExLisp.Builtins do
       is_binary(seq) and is_integer(idx) and idx >= 0 ->
         char_code =
           cond do
+            match?(%ExLisp.Character{}, val) -> val.code
             is_integer(val) -> val
             is_binary(val) -> hd(String.to_charlist(val))
             true -> ?\s
@@ -6013,6 +6003,7 @@ defmodule ExLisp.Builtins do
             is_binary(val) -> String.to_charlist(val)
             is_list(val) ->
               Enum.map(val, fn
+                %ExLisp.Character{code: c} -> c
                 c when is_integer(c) -> c
                 s when is_binary(s) -> hd(String.to_charlist(s))
                 _ -> ?\s
@@ -6029,14 +6020,16 @@ defmodule ExLisp.Builtins do
     end
   end
 
+  def character(%ExLisp.Character{} = ch), do: ch
+
   def character(ch) do
     cond do
       is_integer(ch) and ch >= 0 and ch <= 0x10FFFF ->
-        ch
+        ExLisp.Character.new(ch)
 
       is_binary(ch) ->
         case String.to_charlist(ch) do
-          [c] -> c
+          [c] -> ExLisp.Character.new(c)
           _ -> raise ArgumentError, "Cannot coerce #{inspect(ch)} to character"
         end
 
@@ -6044,7 +6037,7 @@ defmodule ExLisp.Builtins do
         name = symbol_name(ch)
 
         case String.to_charlist(name) do
-          [c] -> c
+          [c] -> ExLisp.Character.new(c)
           _ -> raise ArgumentError, "Cannot coerce #{inspect(ch)} to character"
         end
 
@@ -6052,7 +6045,7 @@ defmodule ExLisp.Builtins do
         name = symbol_name(ch)
 
         case String.to_charlist(name) do
-          [c] -> c
+          [c] -> ExLisp.Character.new(c)
           _ -> raise ArgumentError, "Cannot coerce #{inspect(ch)} to character"
         end
 
@@ -6060,6 +6053,8 @@ defmodule ExLisp.Builtins do
         raise ArgumentError, "Cannot coerce #{inspect(ch)} to character"
     end
   end
+
+  def char_code(%ExLisp.Character{code: code}), do: code
 
   def char_code(ch) do
     cond do
@@ -6081,7 +6076,7 @@ defmodule ExLisp.Builtins do
     if code in 0xD800..0xDFFF do
       nil
     else
-      code
+      ExLisp.Character.new(code)
     end
   end
 
@@ -6089,12 +6084,14 @@ defmodule ExLisp.Builtins do
 
   def char_upcase(c) do
     code = char_code(c)
-    if code >= ?a and code <= ?z, do: code - 32, else: code
+    up = if code >= ?a and code <= ?z, do: code - 32, else: code
+    ExLisp.Character.new(up)
   end
 
   def char_downcase(c) do
     code = char_code(c)
-    if code >= ?A and code <= ?Z, do: code + 32, else: code
+    down = if code >= ?A and code <= ?Z, do: code + 32, else: code
+    ExLisp.Character.new(down)
   end
 
   def char_equal([]), do: raise(ArgumentError, "char-equal requires at least 1 argument")
@@ -6540,7 +6537,7 @@ defmodule ExLisp.Builtins do
         nil
 
       <<char_code::utf8>> ->
-        char_code
+        ExLisp.Character.new(char_code)
     end
   end
 
@@ -6663,7 +6660,10 @@ defmodule ExLisp.Builtins do
 
   def elt(str, index) when is_binary(str) and is_integer(index) do
     chars = String.to_charlist(str)
-    if index >= 0 and index < length(chars), do: Enum.at(chars, index), else: nil
+
+    if index >= 0 and index < length(chars),
+      do: ExLisp.Character.new(Enum.at(chars, index)),
+      else: nil
   end
 
   def elt(_seq, _index), do: nil
@@ -6941,10 +6941,10 @@ defmodule ExLisp.Builtins do
         seq_to_list(object)
 
       type_str in ["string", "base-string", "simple-string"] ->
-        if is_list(object), do: List.to_string(object), else: to_string_val(object)
+        if is_list(object), do: list_to_string_compat(object), else: to_string_val(object)
 
       type_str in ["character", "base-char", "standard-char"] ->
-        char_code(object)
+        character(object)
 
       type_str in ["float", "single-float", "double-float", "short-float", "long-float"] ->
         if is_number(object), do: object * 1.0, else: object
@@ -7308,10 +7308,15 @@ defmodule ExLisp.Builtins do
   end
 
   def princ(obj) do
-    if is_binary(obj) do
-      IO.write(obj)
-    else
-      IO.write("#{inspect(ExLisp.to_repl_display(obj))}")
+    cond do
+      is_binary(obj) ->
+        IO.write(obj)
+
+      match?(%ExLisp.Character{}, obj) ->
+        IO.write(to_string(obj))
+
+      true ->
+        IO.write("#{inspect(ExLisp.to_repl_display(obj))}")
     end
 
     obj
@@ -8336,6 +8341,7 @@ defmodule ExLisp.Builtins do
           case List.keyfind(opts, :initial_element, 0) do
             {:initial_element, elem} ->
               cond do
+                match?(%ExLisp.Character{}, elem) -> elem.code
                 is_integer(elem) -> elem
                 is_binary(elem) and byte_size(elem) > 0 -> hd(String.to_charlist(elem))
                 true -> ?\s
@@ -8357,29 +8363,18 @@ defmodule ExLisp.Builtins do
     make_string([size | opt_list])
   end
 
-  @char_names %{
-    ?\s => "Space",
-    ?\n => "Newline",
-    ?\t => "Tab",
-    ?\r => "Return",
-    ?\f => "Page",
-    ?\b => "Backspace",
-    27 => "Escape",
-    127 => "Rubout",
-    0 => "Null"
-  }
-
-  @name_chars Map.new(@char_names, fn {code, name} -> {String.downcase(name), code} end)
-              |> Map.put("linefeed", ?\n)
-
   def char_name(char) do
     code = char_code(char)
-    Map.get(@char_names, code, nil)
+    ExLisp.Character.code_to_name(code)
   end
 
   def name_char(name) do
-    str = string_designator_to_string(name) |> String.downcase()
-    Map.get(@name_chars, str, nil)
+    str = string_designator_to_string(name)
+
+    case ExLisp.Character.name_to_code(str) do
+      nil -> nil
+      code -> ExLisp.Character.new(code)
+    end
   end
 
   def digit_char(arg1, arg2 \\ 10)
@@ -8394,10 +8389,13 @@ defmodule ExLisp.Builtins do
 
   def digit_char(weight, radix) when is_integer(weight) and is_integer(radix) do
     if weight >= 0 and weight < radix and radix >= 2 and radix <= 36 do
-      cond do
-        weight < 10 -> ?0 + weight
-        true -> ?A + (weight - 10)
-      end
+      code =
+        cond do
+          weight < 10 -> ?0 + weight
+          true -> ?A + (weight - 10)
+        end
+
+      ExLisp.Character.new(code)
     else
       nil
     end

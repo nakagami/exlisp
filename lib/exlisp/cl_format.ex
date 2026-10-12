@@ -101,6 +101,7 @@ defmodule ExLisp.CLFormat do
     str =
       cond do
         colons and val == nil -> "()"
+        match?(%ExLisp.Character{}, val) -> to_string(val)
         is_binary(val) -> val
         is_atom(val) -> val |> Atom.to_string() |> String.upcase()
         is_integer(val) -> "#{val}"
@@ -133,6 +134,12 @@ defmodule ExLisp.CLFormat do
     {val, rem_args} = pop_arg(args)
     char_str =
       case val do
+        %ExLisp.Character{code: c} ->
+          cond do
+            ats -> "#\\#{char_name(c)}"
+            colons -> char_name(c)
+            true -> <<c::utf8>>
+          end
         c when is_integer(c) ->
           cond do
             ats -> "#\\#{char_name(c)}"
@@ -1042,14 +1049,9 @@ defmodule ExLisp.CLFormat do
   defp tl_or_empty([]), do: []
 
   defp char_name(c) do
-    case c do
-      ?\s -> "Space"
-      ?\n -> "Newline"
-      ?\t -> "Tab"
-      ?\r -> "Return"
-      12 -> "Page"
-      8 -> "Backspace"
-      _ -> <<c::utf8>>
+    case ExLisp.Character.code_to_name(c) do
+      name when is_binary(name) -> name
+      nil -> <<c::utf8>>
     end
   end
 
