@@ -946,6 +946,38 @@ defmodule ExLisp.Type do
           do: t2_norm in [:integer, :rational, :real, :number],
           else: t2_norm in [:symbol, :atom]
 
+      t1_norm in [:unsigned_byte, :signed_byte, :mod] and
+          t2_norm in [:integer, :rational, :real, :number] ->
+        true
+
+      is_list(t1_norm) and hd(t1_norm) in [:unsigned_byte, :signed_byte, :mod, :integer] and
+          t2_norm in [:integer, :rational, :real, :number] ->
+        true
+
+      is_list(t1_norm) and hd(t1_norm) in [:float, :short_float, :single_float, :double_float, :long_float] and
+          t2_norm in [:float, :real, :number] ->
+        true
+
+      is_list(t1_norm) and hd(t1_norm) in [:rational, :ratio] and
+          t2_norm in [:rational, :real, :number] ->
+        true
+
+      is_list(t1_norm) and hd(t1_norm) in [:string, :simple_string, :base_string, :simple_base_string] and
+          t2_norm in [:string, :vector, :array, :sequence] ->
+        true
+
+      is_list(t1_norm) and hd(t1_norm) in [:bit_vector, :simple_bit_vector] and
+          t2_norm in [:bit_vector, :vector, :array, :sequence] ->
+        true
+
+      is_list(t1_norm) and hd(t1_norm) in [:vector, :simple_vector] and
+          t2_norm in [:vector, :array, :sequence] ->
+        true
+
+      is_list(t1_norm) and hd(t1_norm) in [:array, :simple_array] and
+          t2_norm in [:array] ->
+        true
+
       match?([:and | _], t1_norm) ->
         [:and | sub_types] = t1_norm
         Enum.all?(sub_types, &is_subtype_internal?(&1, t2_norm))
@@ -1053,13 +1085,21 @@ defmodule ExLisp.Type do
   Upgrades an array element type.
   """
   def upgraded_array_element_type(typespec, _env \\ nil) do
-    norm = normalize_type_name(typespec)
-    case norm do
-      :character -> :character
-      :base_char -> :character
-      :standard_char -> :character
-      :bit -> :bit
-      _ -> :t
+    expanded = expand_type(typespec)
+    norm = normalize_type_for_sub(expanded)
+
+    cond do
+      norm in [:character, :base_char, :standard_char, :extended_char] ->
+        :character
+
+      norm in [:bit, :unsigned_byte_1, [0, 1], [:integer, 0, 1]] ->
+        :bit
+
+      norm == [:unsigned_byte, 1] ->
+        :bit
+
+      true ->
+        :t
     end
   end
 
@@ -1067,13 +1107,14 @@ defmodule ExLisp.Type do
   Upgrades a complex part type.
   """
   def upgraded_complex_part_type(typespec, _env \\ nil) do
-    norm = normalize_type_name(typespec)
-    case norm do
-      :short_float -> :short_float
-      :single_float -> :single_float
-      :double_float -> :double_float
-      :long_float -> :long_float
-      _ -> :real
+    expanded = expand_type(typespec)
+    norm = normalize_type_for_sub(expanded)
+
+    cond do
+      norm in [:short_float, :single_float] -> :single_float
+      norm in [:double_float, :long_float] -> :double_float
+      norm in [:rational, :integer, :ratio] -> :rational
+      true -> :real
     end
   end
 end

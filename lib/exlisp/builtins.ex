@@ -1784,13 +1784,25 @@ defmodule ExLisp.Builtins do
     ExLisp.Type.define_deftype(name, lambda_list, body)
   end
 
-  def upgraded_array_element_type(typespec, env \\ nil) do
-    ExLisp.Type.upgraded_array_element_type(typespec, env)
+  def upgraded_array_element_type(args) when is_list(args) do
+    case args do
+      [typespec, env | _] -> ExLisp.Type.upgraded_array_element_type(typespec, env)
+      [typespec] -> ExLisp.Type.upgraded_array_element_type(typespec, nil)
+      typespec -> ExLisp.Type.upgraded_array_element_type(typespec, nil)
+    end
   end
+  def upgraded_array_element_type(typespec), do: ExLisp.Type.upgraded_array_element_type(typespec, nil)
+  def upgraded_array_element_type(typespec, env), do: ExLisp.Type.upgraded_array_element_type(typespec, env)
 
-  def upgraded_complex_part_type(typespec, env \\ nil) do
-    ExLisp.Type.upgraded_complex_part_type(typespec, env)
+  def upgraded_complex_part_type(args) when is_list(args) do
+    case args do
+      [typespec, env | _] -> ExLisp.Type.upgraded_complex_part_type(typespec, env)
+      [typespec] -> ExLisp.Type.upgraded_complex_part_type(typespec, nil)
+      typespec -> ExLisp.Type.upgraded_complex_part_type(typespec, nil)
+    end
   end
+  def upgraded_complex_part_type(typespec), do: ExLisp.Type.upgraded_complex_part_type(typespec, nil)
+  def upgraded_complex_part_type(typespec, env), do: ExLisp.Type.upgraded_complex_part_type(typespec, env)
 
   def simple_array_p(val) do
     cond do
@@ -6981,33 +6993,98 @@ defmodule ExLisp.Builtins do
 
   def adjust_array(arr, new_dims), do: adjust_array([arr, new_dims])
 
-  def coerce([object, result_type | _]) do
-    type_str = result_type |> to_string_val() |> String.downcase() |> String.trim_leading("'")
-
-    cond do
-      type_str in ["list"] ->
-        seq_to_list(object)
-
-      type_str in ["string", "base-string", "simple-string"] ->
-        if is_list(object), do: list_to_string_compat(object), else: to_string_val(object)
-
-      type_str in ["character", "base-char", "standard-char"] ->
-        character(object)
-
-      type_str in ["float", "single-float", "double-float", "short-float", "long-float"] ->
-        if is_number(object), do: object * 1.0, else: object
-
-      type_str in ["vector", "simple-vector"] ->
-        if is_list(object),
-          do: make_array([length(object), :initial_contents, object]),
-          else: object
-
-      true ->
-        object
+  def coerce(args) when is_list(args) do
+    case args do
+      [object, result_type | _] -> coerce(object, result_type)
+      _ -> raise ArgumentError, "coerce requires 2 arguments"
     end
   end
 
-  def coerce(object, result_type), do: coerce([object, result_type])
+  def coerce(object, result_type) do
+    norm = ExLisp.Type.expand_type(result_type) |> normalize_type_spec()
+
+    cond do
+      ExLisp.Type.typep(object, result_type) ->
+        object
+
+      # Coerce to character
+      norm in [:character, :base_char, :standard_char] ->
+        cond do
+          is_integer(object) ->
+            ExLisp.Character.new(object)
+
+          is_binary(object) and byte_size(object) == 1 ->
+            ExLisp.Character.new(:binary.first(object))
+
+          match?(%ExLisp.Character{}, object) ->
+            object
+
+          is_atom(object) ->
+            str = Atom.to_string(object)
+            if byte_size(str) == 1,
+              do: ExLisp.Character.new(:binary.first(str)),
+              else: raise(ArgumentError, "Cannot coerce #{inspect(object)} to character")
+
+          true ->
+            raise ArgumentError, "Cannot coerce #{inspect(object)} to character"
+        end
+
+      # Coerce to float / single-float / double-float
+      norm in [:float, :short_float, :single_float, :double_float, :long_float] ->
+        cond do
+          is_number(object) ->
+            object * 1.0
+
+          match?(%ExLisp.Ratio{}, object) ->
+            object.numerator / object.denominator
+
+          true ->
+            raise ArgumentError, "Cannot coerce #{inspect(object)} to float"
+        end
+
+      # Coerce to complex
+      norm in [:complex] or (is_list(norm) and hd(norm) == :complex) ->
+        cond do
+          is_number(object) ->
+            {:complex, object, 0}
+
+          match?(%ExLisp.Ratio{}, object) ->
+            {:complex, object, 0}
+
+          match?({:complex, _, _}, object) ->
+            object
+
+          true ->
+            raise ArgumentError, "Cannot coerce #{inspect(object)} to complex"
+        end
+
+      # Coerce to function
+      norm in [:function, :compiled_function] ->
+        cond do
+          is_function(object) or match?(%ExLisp.Closure{}, object) ->
+            object
+
+          is_atom(object) ->
+            fun = ExLisp.Env.get_fun(object)
+            if fun != nil do
+              fun
+            else
+              raise ArgumentError, "Undefined function: #{inspect(object)}"
+            end
+
+          is_list(object) and hd(object) in [:lambda, :_cl_lambda_] ->
+            LispBeam.evaluate_ast({:list, 1, [{:id, 1, ["function"]}, object]})
+
+          true ->
+            raise ArgumentError, "Cannot coerce #{inspect(object)} to function"
+        end
+
+      # Sequence coercions (list, vector, string, bit-vector, etc.)
+      true ->
+        seq_list = seq_to_list(object)
+        coerce_list_to_type(seq_list, result_type)
+    end
+  end
 
   def fill_pointer([arr]), do: fill_pointer(arr)
   def fill_pointer({:array, _, tid}) do
@@ -9531,6 +9608,39 @@ defmodule ExLisp.Builtins do
   end
   def use_value(val), do: ExLisp.Condition.use_value(val, nil)
   def use_value(val, condition), do: ExLisp.Condition.use_value(val, condition)
+
+  def type_error_datum(args) when is_list(args), do: ExLisp.Condition.type_error_datum(hd(args))
+  def type_error_datum(c), do: ExLisp.Condition.type_error_datum(c)
+
+  def type_error_expected_type(args) when is_list(args), do: ExLisp.Condition.type_error_expected_type(hd(args))
+  def type_error_expected_type(c), do: ExLisp.Condition.type_error_expected_type(c)
+
+  def unbound_variable_name(args) when is_list(args), do: ExLisp.Condition.unbound_variable_name(hd(args))
+  def unbound_variable_name(c), do: ExLisp.Condition.unbound_variable_name(c)
+
+  def undefined_function_name(args) when is_list(args), do: ExLisp.Condition.undefined_function_name(hd(args))
+  def undefined_function_name(c), do: ExLisp.Condition.undefined_function_name(c)
+
+  def stream_error_stream(args) when is_list(args), do: ExLisp.Condition.stream_error_stream(hd(args))
+  def stream_error_stream(c), do: ExLisp.Condition.stream_error_stream(c)
+
+  def file_error_pathname(args) when is_list(args), do: ExLisp.Condition.file_error_pathname(hd(args))
+  def file_error_pathname(c), do: ExLisp.Condition.file_error_pathname(c)
+
+  def package_error_package(args) when is_list(args), do: ExLisp.Condition.package_error_package(hd(args))
+  def package_error_package(c), do: ExLisp.Condition.package_error_package(c)
+
+  def arithmetic_error_operation(args) when is_list(args), do: ExLisp.Condition.arithmetic_error_operation(hd(args))
+  def arithmetic_error_operation(c), do: ExLisp.Condition.arithmetic_error_operation(c)
+
+  def arithmetic_error_operands(args) when is_list(args), do: ExLisp.Condition.arithmetic_error_operands(hd(args))
+  def arithmetic_error_operands(c), do: ExLisp.Condition.arithmetic_error_operands(c)
+
+  def simple_condition_format_control(args) when is_list(args), do: ExLisp.Condition.simple_condition_format_control(hd(args))
+  def simple_condition_format_control(c), do: ExLisp.Condition.simple_condition_format_control(c)
+
+  def simple_condition_format_arguments(args) when is_list(args), do: ExLisp.Condition.simple_condition_format_arguments(hd(args))
+  def simple_condition_format_arguments(c), do: ExLisp.Condition.simple_condition_format_arguments(c)
 
   # --- Time functions ---
   def get_internal_real_time do

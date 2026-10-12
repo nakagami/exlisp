@@ -1247,6 +1247,14 @@ defmodule LispBeam do
             compile_regular_op(op, args, local_env)
         end
 
+      name when name in [:with_condition_restarts, :"with-condition-restarts", :_cl_with_condition_restarts_] ->
+        case args do
+          [_cond_node, _restarts_node | body_nodes] ->
+            compile_progn(body_nodes, local_env)
+          _ ->
+            {:atom, 1, nil}
+        end
+
       name when name in [:check_type, :_cl_check_type_] ->
         compile_check_type(args, local_env)
 

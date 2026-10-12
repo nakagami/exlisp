@@ -637,4 +637,33 @@ defmodule ExLisp.Condition do
   end
   def normalize_name(%ExLisp.Symbol{name: name}), do: normalize_name(name)
   def normalize_name(other), do: other
+
+  # --- Standard Condition Accessors ---
+
+  def type_error_datum(cond_obj), do: get_condition_slot(cond_obj, :datum)
+  def type_error_expected_type(cond_obj), do: get_condition_slot(cond_obj, :expected_type)
+  def cell_error_name(cond_obj), do: get_condition_slot(cond_obj, :name)
+  def unbound_variable_name(cond_obj), do: cell_error_name(cond_obj)
+  def undefined_function_name(cond_obj), do: cell_error_name(cond_obj)
+  def stream_error_stream(cond_obj), do: get_condition_slot(cond_obj, :stream)
+  def file_error_pathname(cond_obj), do: get_condition_slot(cond_obj, :pathname)
+  def package_error_package(cond_obj), do: get_condition_slot(cond_obj, :package)
+  def arithmetic_error_operation(cond_obj), do: get_condition_slot(cond_obj, :operation)
+  def arithmetic_error_operands(cond_obj), do: get_condition_slot(cond_obj, :operands)
+  def simple_condition_format_control(cond_obj), do: get_condition_slot(cond_obj, :format_control)
+  def simple_condition_format_arguments(cond_obj), do: get_condition_slot(cond_obj, :format_arguments)
+
+  defp get_condition_slot(cond_obj, slot_name) do
+    case cond_obj do
+      {:instance, _class, _tid} = inst ->
+        try do
+          ExLisp.CLOS.slot_value(inst, slot_name)
+        rescue
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
 end
