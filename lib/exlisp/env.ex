@@ -186,8 +186,42 @@ defmodule ExLisp.Env do
   end
 
   @predefined_vars %{
-    :features => [:exlisp, :cl, :common_lisp, :ansi_cl, :beam, :erlang, :elixir],
-    :"*features*" => [:exlisp, :cl, :common_lisp, :ansi_cl, :beam, :erlang, :elixir],
+    :features => [
+      :exlisp,
+      :cl,
+      :common_lisp,
+      :ansi_cl,
+      :beam,
+      :erlang,
+      :elixir,
+      :sbcl,
+      :sb_thread,
+      :sb_ext,
+      :sb_posix,
+      :sb_sys,
+      :"sb-thread",
+      :"sb-ext",
+      :"sb-posix",
+      :"sb-sys"
+    ],
+    :"*features*" => [
+      :exlisp,
+      :cl,
+      :common_lisp,
+      :ansi_cl,
+      :beam,
+      :erlang,
+      :elixir,
+      :sbcl,
+      :sb_thread,
+      :sb_ext,
+      :sb_posix,
+      :sb_sys,
+      :"sb-thread",
+      :"sb-ext",
+      :"sb-posix",
+      :"sb-sys"
+    ],
     :pi => :math.pi(),
     :most_positive_fixnum => 4_611_686_018_427_387_903,
     :"most-positive-fixnum" => 4_611_686_018_427_387_903,
@@ -241,21 +275,40 @@ defmodule ExLisp.Env do
       :undefined ->
         case :persistent_term.get({:exlisp_var, var_name}, :__not_found__) do
           :__not_found__ ->
-            case Map.fetch(@predefined_vars, var_name) do
-              {:ok, val} ->
-                val
+            cands = symbol_lookup_candidates(var_name)
 
-              :error ->
-                if keyword?(var_name) do
-                  var_name
-                else
-                  case lookup_global_module_var(var_name) do
-                    {:ok, value} ->
-                      value
+            posix_argv_names = [
+              :"*posix-argv*",
+              :posix_argv,
+              :"*posix_argv*",
+              :"sb-ext:*posix-argv*",
+              :"sb_ext:*posix_argv*",
+              :"sb-ext:*posix_argv*",
+              :"sb-ext.*posix-argv*",
+              :"sb_ext.*posix_argv*",
+              :"sb-ext.*posix_argv*"
+            ]
 
-                    :error ->
-                      raise RuntimeError, "Unbound variable: #{var_name}"
-                  end
+            cond do
+              var_name in posix_argv_names or Enum.any?(cands, &(&1 in posix_argv_names)) ->
+                ["exlisp" | System.argv()]
+
+              Map.has_key?(@predefined_vars, var_name) ->
+                Map.fetch!(@predefined_vars, var_name)
+
+              Enum.find_value(cands, fn c -> Map.get(@predefined_vars, c) end) != nil ->
+                Enum.find_value(cands, fn c -> Map.get(@predefined_vars, c) end)
+
+              keyword?(var_name) ->
+                var_name
+
+              true ->
+                case lookup_global_module_var(var_name) do
+                  {:ok, value} ->
+                    value
+
+                  :error ->
+                    raise RuntimeError, "Unbound variable: #{var_name}"
                 end
             end
 
@@ -332,18 +385,38 @@ defmodule ExLisp.Env do
   """
   def has_var?(name) do
     var_name = normalize_name(name)
+    cands = symbol_lookup_candidates(var_name)
 
-    if Map.has_key?(@predefined_vars, var_name) do
-      true
-    else
-      if :persistent_term.get({:exlisp_var, var_name}, :__not_found__) != :__not_found__ do
+    posix_argv_names = [
+      :"*posix-argv*",
+      :posix_argv,
+      :"*posix_argv*",
+      :"sb-ext:*posix-argv*",
+      :"sb_ext:*posix_argv*",
+      :"sb-ext:*posix_argv*",
+      :"sb-ext.*posix-argv*",
+      :"sb_ext.*posix_argv*",
+      :"sb-ext.*posix_argv*"
+    ]
+
+    cond do
+      var_name in posix_argv_names or Enum.any?(cands, &(&1 in posix_argv_names)) ->
         true
-      else
+
+      Map.has_key?(@predefined_vars, var_name) or Enum.any?(cands, &Map.has_key?(@predefined_vars, &1)) ->
+        true
+
+      :persistent_term.get({:exlisp_var, var_name}, :__not_found__) != :__not_found__ ->
+        true
+
+      Enum.any?(cands, fn c -> :persistent_term.get({:exlisp_var, c}, :__not_found__) != :__not_found__ end) ->
+        true
+
+      true ->
         mod = ExLisp.Global
 
         Code.ensure_loaded?(mod) and function_exported?(mod, :has_var, 1) and
           apply(mod, :has_var, [var_name])
-      end
     end
   end
 

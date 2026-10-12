@@ -1150,6 +1150,81 @@ defmodule BuiltinFunction do
     :"sb-ext::exit" => {:quit, :quit},
     :"sb_ext::exit" => {:quit, :quit},
 
+    # SBCL SB-THREAD
+    :make_thread => {:make_thread, :make_thread},
+    :"make-thread" => {:make_thread, :make_thread},
+    :join_thread => {:join_thread, :join_thread},
+    :"join-thread" => {:join_thread, :join_thread},
+    :thread_alive_p => {:thread_alive_p, :thread_alive_p},
+    :"thread-alive-p" => {:thread_alive_p, :thread_alive_p},
+    :thread_p => {:thread_p, :thread_p},
+    :"thread-p" => {:thread_p, :thread_p},
+    :current_thread => {:current_thread, :current_thread},
+    :"current-thread" => {:current_thread, :current_thread},
+    :thread_name => {:thread_name, :thread_name},
+    :"thread-name" => {:thread_name, :thread_name},
+    :list_all_threads => {:list_all_threads, :list_all_threads},
+    :"list-all-threads" => {:list_all_threads, :list_all_threads},
+    :destroy_thread => {:destroy_thread, :destroy_thread},
+    :"destroy-thread" => {:destroy_thread, :destroy_thread},
+    :terminate_thread => {:destroy_thread, :destroy_thread},
+    :"terminate-thread" => {:destroy_thread, :destroy_thread},
+    :thread_yield => {:thread_yield, :thread_yield},
+    :"thread-yield" => {:thread_yield, :thread_yield},
+    :make_mutex => {:make_mutex, :make_mutex},
+    :"make-mutex" => {:make_mutex, :make_mutex},
+    :mutex_p => {:mutex_p, :mutex_p},
+    :"mutex-p" => {:mutex_p, :mutex_p},
+    :grab_mutex => {:grab_mutex, :grab_mutex},
+    :"grab-mutex" => {:grab_mutex, :grab_mutex},
+    :get_mutex => {:grab_mutex, :grab_mutex},
+    :"get-mutex" => {:grab_mutex, :grab_mutex},
+    :release_mutex => {:release_mutex, :release_mutex},
+    :"release-mutex" => {:release_mutex, :release_mutex},
+    :mutex_name => {:mutex_name, :mutex_name},
+    :"mutex-name" => {:mutex_name, :mutex_name},
+    :mutex_value => {:mutex_value, :mutex_value},
+    :"mutex-value" => {:mutex_value, :mutex_value},
+    :mutex_owner => {:mutex_value, :mutex_value},
+    :"mutex-owner" => {:mutex_value, :mutex_value},
+    :make_semaphore => {:make_semaphore, :make_semaphore},
+    :"make-semaphore" => {:make_semaphore, :make_semaphore},
+    :semaphore_p => {:semaphore_p, :semaphore_p},
+    :"semaphore-p" => {:semaphore_p, :semaphore_p},
+    :wait_on_semaphore => {:wait_on_semaphore, :wait_on_semaphore},
+    :"wait-on-semaphore" => {:wait_on_semaphore, :wait_on_semaphore},
+    :signal_semaphore => {:signal_semaphore, :signal_semaphore},
+    :"signal-semaphore" => {:signal_semaphore, :signal_semaphore},
+
+    # SBCL SB-EXT & SB-POSIX
+    :posix_getenv => {:posix_getenv, :posix_getenv},
+    :"posix-getenv" => {:posix_getenv, :posix_getenv},
+    :run_program => {:run_program, :run_program},
+    :"run-program" => {:run_program, :run_program},
+    :process_exit_code => {:process_exit_code, :process_exit_code},
+    :"process-exit-code" => {:process_exit_code, :process_exit_code},
+    :process_p => {:process_p, :process_p},
+    :"process-p" => {:process_p, :process_p},
+    :process_kill => {:process_kill, :process_kill},
+    :"process-kill" => {:process_kill, :process_kill},
+    :process_wait => {:process_wait, :process_wait},
+    :"process-wait" => {:process_wait, :process_wait},
+    :process_close => {:process_close, :process_close},
+    :"process-close" => {:process_close, :process_close},
+    :gc => {:sb_ext_gc, :sb_ext_gc},
+    :sb_ext_gc => {:sb_ext_gc, :sb_ext_gc},
+    :bytes_consed_between_gcs => {:bytes_consed_between_gcs, :bytes_consed_between_gcs},
+    :"bytes-consed-between-gcs" => {:bytes_consed_between_gcs, :bytes_consed_between_gcs},
+    :get_time_of_day => {:get_time_of_day, :get_time_of_day},
+    :"get-time-of-day" => {:get_time_of_day, :get_time_of_day},
+    :getenv => {:posix_getenv, :posix_getenv},
+    :setenv => {:sb_posix_setenv, :sb_posix_setenv},
+    :sb_posix_setenv => {:sb_posix_setenv, :sb_posix_setenv},
+    :"sb-posix:setenv" => {:sb_posix_setenv, :sb_posix_setenv},
+    :unsetenv => {:sb_posix_unsetenv, :sb_posix_unsetenv},
+    :sb_posix_unsetenv => {:sb_posix_unsetenv, :sb_posix_unsetenv},
+    :"sb-posix:unsetenv" => {:sb_posix_unsetenv, :sb_posix_unsetenv},
+
     # Internal helpers
     :_cl_set_char_update_seq_ => {:set_char_update_seq, :set_char_update_seq},
     :set_char_update_seq => {:set_char_update_seq, :set_char_update_seq},
@@ -1169,43 +1244,64 @@ defmodule BuiltinFunction do
     |> Enum.uniq()
   end
 
+  @known_package_prefixes [
+    "cl", "common-lisp", "common_lisp", "sb-cl", "sb_cl",
+    "sb-thread", "sb_thread", "sb-ext", "sb_ext", "sb-posix", "sb_posix", "sb-sys", "sb_sys"
+  ]
+
   @doc """
   Returns the canonicalized atom name for the given operator.
   """
   def canonical_name(name) when is_binary(name) do
     down_str = String.downcase(name)
 
-    stripped_str =
-      case String.split(down_str, ~r/::?|\./, parts: 2) do
-        [pkg, sym] when pkg in ["cl", "common-lisp", "common_lisp", "sb-cl", "sb_cl"] -> sym
-        _ -> down_str
-      end
+    case String.split(down_str, ~r/::?|\./, parts: 2) do
+      [pkg, sym] when pkg in @known_package_prefixes ->
+        norm_atom = sym |> String.replace("-", "_") |> String.to_atom()
+        sym_atom = String.to_atom(sym)
 
-    atom = String.to_atom(stripped_str)
-    canonical_name(atom)
+        case Map.get(@builtin_mappings, sym_atom) do
+          {canonical, _} -> {:ok, canonical}
+          nil ->
+            case Map.get(@builtin_mappings, norm_atom) do
+              {canonical, _} -> {:ok, canonical}
+              nil -> {:ok, norm_atom}
+            end
+        end
+
+      _ ->
+        canonical_name(String.to_atom(down_str))
+    end
   end
 
   def canonical_name(atom) when is_atom(atom) do
     str = atom |> Atom.to_string() |> String.downcase()
 
-    stripped_str =
-      case String.split(str, ~r/::?|\./, parts: 2) do
-        [pkg, sym] when pkg in ["cl", "common-lisp", "common_lisp", "sb-cl", "sb_cl"] -> sym
-        _ -> str
-      end
+    case String.split(str, ~r/::?|\./, parts: 2) do
+      [pkg, sym] when pkg in @known_package_prefixes ->
+        norm_atom = sym |> String.replace("-", "_") |> String.to_atom()
+        sym_atom = String.to_atom(sym)
 
-    down_atom = String.to_atom(stripped_str)
+        case Map.get(@builtin_mappings, sym_atom) do
+          {canonical, _} -> {:ok, canonical}
+          nil ->
+            case Map.get(@builtin_mappings, norm_atom) do
+              {canonical, _} -> {:ok, canonical}
+              nil -> {:ok, norm_atom}
+            end
+        end
 
-    case Map.get(@builtin_mappings, down_atom) do
-      {canonical, _impl} ->
-        {:ok, canonical}
+      _ ->
+        down_atom = String.to_atom(str)
+        norm_atom = str |> String.replace("-", "_") |> String.to_atom()
 
-      nil ->
-        replaced = stripped_str |> String.replace("-", "_") |> String.to_atom()
-
-        case Map.get(@builtin_mappings, replaced) do
-          {canonical, _impl} -> {:ok, canonical}
-          nil -> :error
+        case Map.get(@builtin_mappings, down_atom) do
+          {canonical, _} -> {:ok, canonical}
+          nil ->
+            case Map.get(@builtin_mappings, norm_atom) do
+              {canonical, _} -> {:ok, canonical}
+              nil -> :error
+            end
         end
     end
   end
@@ -1804,7 +1900,36 @@ defmodule BuiltinFunction do
              :set_dispatch_macro_character,
              :get_dispatch_macro_character,
              :set_syntax_from_char,
-             :readtable_case
+             :readtable_case,
+             :make_thread,
+             :join_thread,
+             :thread_alive_p,
+             :current_thread,
+             :thread_name,
+             :list_all_threads,
+             :destroy_thread,
+             :thread_yield,
+             :make_mutex,
+             :grab_mutex,
+             :release_mutex,
+             :mutex_name,
+             :mutex_value,
+             :make_semaphore,
+             :wait_on_semaphore,
+             :signal_semaphore,
+             :posix_getenv,
+             :run_program,
+             :process_exit_code,
+             :process_p,
+             :process_alive_p,
+             :process_kill,
+             :process_wait,
+             :process_close,
+             :sb_ext_gc,
+             :bytes_consed_between_gcs,
+             :get_time_of_day,
+             :sb_posix_setenv,
+             :sb_posix_unsetenv
            ] ->
         args_cons = ast_cons_list(compiled_args)
 

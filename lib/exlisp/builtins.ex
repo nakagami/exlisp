@@ -10115,11 +10115,13 @@ defmodule ExLisp.Builtins do
     end
   end
 
+  def process_alive_p(%ExLisp.SBCLProcess{} = proc), do: ExLisp.SBCLCompat.process_alive_p(proc)
+
   def process_alive_p(pid) when is_pid(pid) do
     if Process.alive?(pid), do: :t, else: nil
   end
 
-  def process_alive_p([pid]), do: process_alive_p(pid)
+  def process_alive_p([obj]), do: process_alive_p(obj)
   def process_alive_p(_), do: nil
 
   def pidp([x]), do: pidp(x)
@@ -10258,9 +10260,72 @@ defmodule ExLisp.Builtins do
     "Map/Hash-Table with #{map_size(obj)} entries: #{inspect(obj)}"
   end
 
+  defp do_describe(%ExLisp.Thread{name: name, pid: pid}) do
+    alive = if Process.alive?(pid), do: "alive", else: "dead"
+    "Thread: #{inspect(name)} [PID: #{inspect(pid)}] (#{alive})"
+  end
+
+  defp do_describe(%ExLisp.Mutex{name: name, agent: agent}) do
+    owner = ExLisp.SBCLCompat.mutex_value(%ExLisp.Mutex{name: name, agent: agent})
+    "Mutex: #{inspect(name)} (owner: #{inspect(owner)})"
+  end
+
+  defp do_describe(%ExLisp.Semaphore{name: name}) do
+    "Semaphore: #{inspect(name)}"
+  end
+
+  defp do_describe(%ExLisp.SBCLProcess{program: prog, status: status}) do
+    "Process: #{inspect(prog)} (status: #{status})"
+  end
+
   defp do_describe(obj) do
     "Object: #{inspect(obj)}"
   end
+
+  # --- SBCL Compatibility Layer Functions ---
+
+  def make_thread(args), do: ExLisp.SBCLCompat.make_thread(args)
+  def join_thread(args), do: ExLisp.SBCLCompat.join_thread(args)
+  def thread_alive_p(args), do: ExLisp.SBCLCompat.thread_alive_p(args)
+  def thread_p(args), do: ExLisp.SBCLCompat.thread_p(args)
+  def current_thread, do: ExLisp.SBCLCompat.current_thread()
+  def current_thread(args), do: ExLisp.SBCLCompat.current_thread(args)
+  def thread_name(args), do: ExLisp.SBCLCompat.thread_name(args)
+  def list_all_threads, do: ExLisp.SBCLCompat.list_all_threads()
+  def list_all_threads(args), do: ExLisp.SBCLCompat.list_all_threads(args)
+  def destroy_thread(args), do: ExLisp.SBCLCompat.destroy_thread(args)
+  def thread_yield, do: ExLisp.SBCLCompat.thread_yield()
+  def thread_yield(args), do: ExLisp.SBCLCompat.thread_yield(args)
+
+  def make_mutex(args), do: ExLisp.SBCLCompat.make_mutex(args)
+  def make_mutex, do: ExLisp.SBCLCompat.make_mutex([])
+  def mutex_p(args), do: ExLisp.SBCLCompat.mutex_p(args)
+  def grab_mutex(args), do: ExLisp.SBCLCompat.grab_mutex(args)
+  def release_mutex(args), do: ExLisp.SBCLCompat.release_mutex(args)
+  def mutex_name(args), do: ExLisp.SBCLCompat.mutex_name(args)
+  def mutex_value(args), do: ExLisp.SBCLCompat.mutex_value(args)
+
+  def make_semaphore(args), do: ExLisp.SBCLCompat.make_semaphore(args)
+  def make_semaphore, do: ExLisp.SBCLCompat.make_semaphore([])
+  def semaphore_p(args), do: ExLisp.SBCLCompat.semaphore_p(args)
+  def wait_on_semaphore(args), do: ExLisp.SBCLCompat.wait_on_semaphore(args)
+  def signal_semaphore(args), do: ExLisp.SBCLCompat.signal_semaphore(args)
+
+  def posix_getenv(args), do: ExLisp.SBCLCompat.posix_getenv(args)
+  def sb_posix_setenv(args), do: ExLisp.SBCLCompat.sb_posix_setenv(args)
+  def sb_posix_unsetenv(args), do: ExLisp.SBCLCompat.sb_posix_unsetenv(args)
+  def run_program(args), do: ExLisp.SBCLCompat.run_program(args)
+  def process_exit_code(args), do: ExLisp.SBCLCompat.process_exit_code(args)
+  def process_p(args), do: ExLisp.SBCLCompat.process_p(args)
+  def process_kill(args), do: ExLisp.SBCLCompat.process_kill(args)
+  def process_wait(args), do: ExLisp.SBCLCompat.process_wait(args)
+  def process_close(args), do: ExLisp.SBCLCompat.process_close(args)
+  def sb_ext_gc(args), do: ExLisp.SBCLCompat.sb_ext_gc(args)
+  def sb_ext_gc, do: ExLisp.SBCLCompat.sb_ext_gc([])
+  def bytes_consed_between_gcs, do: ExLisp.SBCLCompat.bytes_consed_between_gcs()
+  def bytes_consed_between_gcs(args), do: ExLisp.SBCLCompat.bytes_consed_between_gcs(args)
+  def get_time_of_day, do: ExLisp.SBCLCompat.get_time_of_day()
+  def get_time_of_day(args), do: ExLisp.SBCLCompat.get_time_of_day(args)
 
   def apropos_list(args) when is_list(args) do
     case args do

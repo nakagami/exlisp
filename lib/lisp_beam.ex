@@ -1158,6 +1158,17 @@ defmodule LispBeam do
            ] ->
         compile_with_simple_restart(args, local_env)
 
+      name
+      when name in [
+             :with_mutex,
+             :_cl_with_mutex_,
+             :"with-mutex",
+             :"sb-thread:with-mutex",
+             :"sb_thread:with_mutex",
+             :_sb_thread_with_mutex_
+           ] ->
+        compile_with_mutex(args, local_env)
+
       name when name in [:define_condition, :_cl_define_condition_] ->
         compile_define_condition(args, local_env)
 
@@ -1296,6 +1307,9 @@ defmodule LispBeam do
 
       name when name in [:nth_value, :"nth-value", :_cl_nth_value_] ->
         compile_nth_value(args, local_env)
+
+      name when name in [:with_mutex, :"with-mutex", :_sb_thread_with_mutex_] ->
+        compile_with_mutex(args, local_env)
 
       name when name in [:catch, :_cl_catch_] ->
         compile_catch(args, local_env)
@@ -4727,6 +4741,65 @@ defmodule LispBeam do
     end
   end
 
+  def compile_with_mutex(args, local_env) do
+    case args do
+      [mutex_spec | body_nodes] ->
+        {mutex_node, options} =
+          case mutex_spec do
+            {:list, _, [m | opts]} -> {m, opts}
+            [m | opts] -> {m, opts}
+            m -> {m, []}
+          end
+
+        uid = System.unique_integer([:positive, :monotonic])
+        mutex_var = {:id, 1, ["__mutex_#{uid}"]}
+        got_var = {:id, 1, ["__mutex_got_#{uid}"]}
+
+        grab_call =
+          {:list, 1,
+           [{:id, 1, ["sb-thread:grab-mutex"]}, mutex_var | options]}
+
+        release_call =
+          {:list, 1,
+           [{:id, 1, ["sb-thread:release-mutex"]}, mutex_var]}
+
+        body_expr =
+          case body_nodes do
+            [] -> {:lit, nil}
+            [single] -> single
+            _ -> {:list, 1, [{:id, 1, ["progn"]} | body_nodes]}
+          end
+
+        ast =
+          {:list, 1,
+           [
+             {:id, 1, ["let*"]},
+             {:list, 1,
+              [
+                {:list, 1, [mutex_var, mutex_node]},
+                {:list, 1, [got_var, grab_call]}
+              ]},
+             {:list, 1,
+              [
+                {:id, 1, ["if"]},
+                got_var,
+                {:list, 1,
+                 [
+                   {:id, 1, ["unwind-protect"]},
+                   body_expr,
+                   release_call
+                 ]},
+                {:lit, nil}
+              ]}
+           ]}
+
+        compile_expr(ast, local_env)
+
+      _ ->
+        {:atom, 1, nil}
+    end
+  end
+
   defp parse_restart_case_options(nodes) do
     do_parse_restart_opts(nodes, [])
   end
@@ -6390,10 +6463,18 @@ defmodule LispBeam do
   def extract_op_name({:id, _pos, parts}) when is_list(parts) do
     case parts do
       [name] ->
-        if String.contains?(name, ":") do
-          nil
-        else
-          String.downcase(name) |> String.to_atom()
+        down = String.downcase(name)
+
+        case BuiltinFunction.canonical_name(down) do
+          {:ok, canon} ->
+            canon
+
+          :error ->
+            if String.contains?(name, ":") do
+              nil
+            else
+              String.to_atom(down)
+            end
         end
 
       _ ->
@@ -6402,7 +6483,12 @@ defmodule LispBeam do
         if valid_remote_module?(mod) do
           nil
         else
-          Enum.join(parts, ".") |> String.downcase() |> String.to_atom()
+          str = Enum.join(parts, ".") |> String.downcase()
+
+          case BuiltinFunction.canonical_name(str) do
+            {:ok, canon} -> canon
+            :error -> String.to_atom(str)
+          end
         end
     end
   end

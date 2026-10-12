@@ -258,9 +258,68 @@ defmodule ExLisp.Package do
       internal_symbols: MapSet.new()
     }
 
+    sb_thread_exports = [
+      "MAKE-THREAD", "JOIN-THREAD", "CURRENT-THREAD", "THREAD-ALIVE-P",
+      "THREAD-NAME", "LIST-ALL-THREADS", "DESTROY-THREAD", "TERMINATE-THREAD",
+      "THREAD-YIELD", "MAKE-MUTEX", "GRAB-MUTEX", "GET-MUTEX", "RELEASE-MUTEX",
+      "WITH-MUTEX", "MAKE-SEMAPHORE", "WAIT-ON-SEMAPHORE", "SIGNAL-SEMAPHORE",
+      "MUTEX-NAME", "MUTEX-VALUE", "MUTEX-OWNER"
+    ]
+
+    sb_thread_pkg = %ExLisp.Package{
+      name: "SB-THREAD",
+      nicknames: ["SB_THREAD"],
+      use_list: ["COMMON-LISP"],
+      used_by_list: [],
+      external_symbols: MapSet.new(sb_thread_exports),
+      internal_symbols: MapSet.new()
+    }
+
+    sb_ext_exports = [
+      "EXIT", "QUIT", "POSIX-GETENV", "RUN-PROGRAM", "PROCESS-EXIT-CODE",
+      "PROCESS-P", "PROCESS-ALIVE-P", "PROCESS-KILL", "PROCESS-WAIT",
+      "PROCESS-CLOSE", "GC", "BYTES-CONSED-BETWEEN-GCS", "GET-TIME-OF-DAY",
+      "*POSIX-ARGV*"
+    ]
+
+    sb_ext_pkg = %ExLisp.Package{
+      name: "SB-EXT",
+      nicknames: ["SB_EXT"],
+      use_list: ["COMMON-LISP"],
+      used_by_list: [],
+      external_symbols: MapSet.new(sb_ext_exports),
+      internal_symbols: MapSet.new()
+    }
+
+    sb_posix_exports = ["GETENV", "SETENV", "UNSETENV"]
+
+    sb_posix_pkg = %ExLisp.Package{
+      name: "SB-POSIX",
+      nicknames: ["SB_POSIX"],
+      use_list: ["COMMON-LISP"],
+      used_by_list: [],
+      external_symbols: MapSet.new(sb_posix_exports),
+      internal_symbols: MapSet.new()
+    }
+
+    sb_sys_exports = ["*STDOUT*", "*STDIN*", "*STDERR*"]
+
+    sb_sys_pkg = %ExLisp.Package{
+      name: "SB-SYS",
+      nicknames: ["SB_SYS"],
+      use_list: ["COMMON-LISP"],
+      used_by_list: [],
+      external_symbols: MapSet.new(sb_sys_exports),
+      internal_symbols: MapSet.new()
+    }
+
     save_package(cl_pkg)
     save_package(cl_user_pkg)
     save_package(kw_pkg)
+    save_package(sb_thread_pkg)
+    save_package(sb_ext_pkg)
+    save_package(sb_posix_pkg)
+    save_package(sb_sys_pkg)
   end
 
   defp save_package(%ExLisp.Package{name: name, nicknames: nicks} = pkg) do
