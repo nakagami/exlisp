@@ -21,6 +21,7 @@ exlisp-*.tar
 
 # Temporary files, for example, from tests.
 /tmp/
+/ansi-test
 
 # Escript executable
 /exlisp

@@ -205,6 +205,8 @@ defmodule ExLisp.Builtins do
                        :hex_search,
                        :hex_info,
                        :hex_where_is_package,
+                       :format,
+                       :array_in_bounds_p,
                        :quit
                      ])
 
@@ -646,7 +648,7 @@ defmodule ExLisp.Builtins do
       :cons ->
         case args do
           [h, t] -> cons(h, t)
-          _ -> raise ArgumentError, "cons requires 2 arguments"
+          _ -> raise ArgumentError, "cons requires exactly 2 arguments"
         end
 
       :constantly ->
@@ -695,6 +697,18 @@ defmodule ExLisp.Builtins do
       :quit ->
         quit(args)
 
+      :receive ->
+        receive_msg(args)
+
+      :receive_msg ->
+        receive_msg(args)
+
+      :apply ->
+        case args do
+          [fn_val | rest] -> apply(fn_val, rest)
+          _ -> raise ArgumentError, "apply requires at least 2 arguments"
+        end
+
       :exit ->
         quit(args)
 
@@ -707,6 +721,9 @@ defmodule ExLisp.Builtins do
 
           function_exported?(__MODULE__, name, arity) ->
             Kernel.apply(__MODULE__, name, args)
+
+          function_exported?(__MODULE__, name, 1) ->
+            Kernel.apply(__MODULE__, name, [args])
 
           true ->
             raise ArgumentError, "Cannot invoke builtin: #{name} with #{arity} arguments"
@@ -723,7 +740,10 @@ defmodule ExLisp.Builtins do
 
   def add_two([:_values_ | _] = a, b), do: add_two(unwrap_mv_primary(a), b)
   def add_two(a, [:_values_ | _] = b), do: add_two(a, unwrap_mv_primary(b))
-  def add_two({:complex, r1, i1}, {:complex, r2, i2}), do: {:complex, add_two(r1, r2), add_two(i1, i2)}
+
+  def add_two({:complex, r1, i1}, {:complex, r2, i2}),
+    do: {:complex, add_two(r1, r2), add_two(i1, i2)}
+
   def add_two({:complex, r1, i1}, b), do: {:complex, add_two(r1, b), i1}
   def add_two(a, {:complex, r2, i2}), do: {:complex, add_two(a, r2), i2}
   def add_two(a, b) when is_integer(a) and is_integer(b), do: a + b
@@ -738,7 +758,10 @@ defmodule ExLisp.Builtins do
 
   def sub_two([:_values_ | _] = a, b), do: sub_two(unwrap_mv_primary(a), b)
   def sub_two(a, [:_values_ | _] = b), do: sub_two(a, unwrap_mv_primary(b))
-  def sub_two({:complex, r1, i1}, {:complex, r2, i2}), do: {:complex, sub_two(r1, r2), sub_two(i1, i2)}
+
+  def sub_two({:complex, r1, i1}, {:complex, r2, i2}),
+    do: {:complex, sub_two(r1, r2), sub_two(i1, i2)}
+
   def sub_two({:complex, r1, i1}, b), do: {:complex, sub_two(r1, b), i1}
   def sub_two(a, {:complex, r2, i2}), do: {:complex, sub_two(a, r2), negate_num(i2)}
   def sub_two(a, b) when is_integer(a) and is_integer(b), do: a - b
@@ -753,9 +776,12 @@ defmodule ExLisp.Builtins do
 
   def mul_two([:_values_ | _] = a, b), do: mul_two(unwrap_mv_primary(a), b)
   def mul_two(a, [:_values_ | _] = b), do: mul_two(a, unwrap_mv_primary(b))
+
   def mul_two({:complex, r1, i1}, {:complex, r2, i2}) do
-    {:complex, sub_two(mul_two(r1, r2), mul_two(i1, i2)), add_two(mul_two(r1, i2), mul_two(i1, r2))}
+    {:complex, sub_two(mul_two(r1, r2), mul_two(i1, i2)),
+     add_two(mul_two(r1, i2), mul_two(i1, r2))}
   end
+
   def mul_two({:complex, r1, i1}, b), do: {:complex, mul_two(r1, b), mul_two(i1, b)}
   def mul_two(a, {:complex, r2, i2}), do: {:complex, mul_two(a, r2), mul_two(a, i2)}
   def mul_two(a, b) when is_integer(a) and is_integer(b), do: a * b
@@ -770,21 +796,29 @@ defmodule ExLisp.Builtins do
 
   def divide_two([:_values_ | _] = a, b), do: divide_two(unwrap_mv_primary(a), b)
   def divide_two(a, [:_values_ | _] = b), do: divide_two(a, unwrap_mv_primary(b))
-  def divide_two(_a, 0), do: ExLisp.Condition.error(:division_by_zero, format_control: "division by zero")
-  def divide_two(_a, %ExLisp.Ratio{numerator: 0}), do: ExLisp.Condition.error(:division_by_zero, format_control: "division by zero")
+
+  def divide_two(_a, 0),
+    do: ExLisp.Condition.error(:division_by_zero, format_control: "division by zero")
+
+  def divide_two(_a, %ExLisp.Ratio{numerator: 0}),
+    do: ExLisp.Condition.error(:division_by_zero, format_control: "division by zero")
+
   def divide_two({:complex, r1, i1}, {:complex, r2, i2}) do
     denom = add_two(mul_two(r2, r2), mul_two(i2, i2))
     r = divide_two(add_two(mul_two(r1, r2), mul_two(i1, i2)), denom)
     i = divide_two(sub_two(mul_two(i1, r2), mul_two(r1, i2)), denom)
     {:complex, r, i}
   end
+
   def divide_two({:complex, r1, i1}, b), do: {:complex, divide_two(r1, b), divide_two(i1, b)}
+
   def divide_two(a, {:complex, r2, i2}) do
     denom = add_two(mul_two(r2, r2), mul_two(i2, i2))
     r = divide_two(mul_two(a, r2), denom)
     i = divide_two(negate_num(mul_two(a, i2)), denom)
     {:complex, r, i}
   end
+
   def divide_two(a, b) when is_integer(a) and is_integer(b), do: ExLisp.Ratio.new(a, b)
   def divide_two(%ExLisp.Ratio{} = a, b) when is_float(b), do: ExLisp.Ratio.to_float(a) / b
   def divide_two(a, %ExLisp.Ratio{} = b) when is_float(a), do: a / ExLisp.Ratio.to_float(b)
@@ -1073,12 +1107,15 @@ defmodule ExLisp.Builtins do
   def conjugate([x]), do: conjugate(unwrap_mv_primary(x))
 
   def phase({:complex, r, i}), do: :math.atan2(i, r)
+
   def phase(x) when is_number(x) do
     if x < 0, do: :math.pi(), else: 0.0
   end
+
   def phase(%ExLisp.Ratio{numerator: n}) do
     if n < 0, do: :math.pi(), else: 0.0
   end
+
   def phase([x]), do: phase(unwrap_mv_primary(x))
 
   def gcd([]), do: 0
@@ -1130,6 +1167,7 @@ defmodule ExLisp.Builtins do
 
   def compare_nums([:_values_ | _] = a, b), do: compare_nums(unwrap_mv_primary(a), b)
   def compare_nums(a, [:_values_ | _] = b), do: compare_nums(a, unwrap_mv_primary(b))
+
   def compare_nums(a, b) when is_integer(a) and is_integer(b) do
     cond do
       a < b -> :lt
@@ -1801,8 +1839,12 @@ defmodule ExLisp.Builtins do
       typespec -> ExLisp.Type.upgraded_array_element_type(typespec, nil)
     end
   end
-  def upgraded_array_element_type(typespec), do: ExLisp.Type.upgraded_array_element_type(typespec, nil)
-  def upgraded_array_element_type(typespec, env), do: ExLisp.Type.upgraded_array_element_type(typespec, env)
+
+  def upgraded_array_element_type(typespec),
+    do: ExLisp.Type.upgraded_array_element_type(typespec, nil)
+
+  def upgraded_array_element_type(typespec, env),
+    do: ExLisp.Type.upgraded_array_element_type(typespec, env)
 
   def upgraded_complex_part_type(args) when is_list(args) do
     case args do
@@ -1811,8 +1853,12 @@ defmodule ExLisp.Builtins do
       typespec -> ExLisp.Type.upgraded_complex_part_type(typespec, nil)
     end
   end
-  def upgraded_complex_part_type(typespec), do: ExLisp.Type.upgraded_complex_part_type(typespec, nil)
-  def upgraded_complex_part_type(typespec, env), do: ExLisp.Type.upgraded_complex_part_type(typespec, env)
+
+  def upgraded_complex_part_type(typespec),
+    do: ExLisp.Type.upgraded_complex_part_type(typespec, nil)
+
+  def upgraded_complex_part_type(typespec, env),
+    do: ExLisp.Type.upgraded_complex_part_type(typespec, env)
 
   def simple_array_p(val) do
     cond do
@@ -1839,6 +1885,7 @@ defmodule ExLisp.Builtins do
   end
 
   def bit_vector_p([arr]), do: bit_vector_p(arr)
+
   def bit_vector_p({:array, [_], tid}) do
     case :ets.lookup(tid, :__meta__) do
       [{:__meta__, meta}] ->
@@ -1853,6 +1900,7 @@ defmodule ExLisp.Builtins do
   def bit_vector_p(_), do: nil
 
   def simple_bit_vector_p([arr]), do: simple_bit_vector_p(arr)
+
   def simple_bit_vector_p({:array, [_], tid}) do
     case :ets.lookup(tid, :__meta__) do
       [{:__meta__, meta}] ->
@@ -4211,6 +4259,7 @@ defmodule ExLisp.Builtins do
     end_idx = if is_integer(end_opt), do: end_opt, else: len
     check_start_end!(start_idx, end_opt, len)
     from_end = truthy?(Keyword.get(opts, :from_end, nil))
+
     count_limit =
       case Keyword.get(opts, :count, nil) do
         nil -> nil
@@ -4358,6 +4407,7 @@ defmodule ExLisp.Builtins do
     end_idx = if is_integer(end_opt), do: end_opt, else: len
     check_start_end!(start_idx, end_opt, len)
     from_end = truthy?(Keyword.get(opts, :from_end, nil))
+
     count_limit =
       case Keyword.get(opts, :count, nil) do
         nil -> nil
@@ -5708,7 +5758,9 @@ defmodule ExLisp.Builtins do
 
         for i <- start_idx..(end_idx - 1)//1 do
           c = aref([arr, i])
-          if is_integer(c) or match?(%ExLisp.Character{}, c), do: set_aref(arr, i, char_downcase(c))
+
+          if is_integer(c) or match?(%ExLisp.Character{}, c),
+            do: set_aref(arr, i, char_downcase(c))
         end
 
         arr
@@ -5735,7 +5787,8 @@ defmodule ExLisp.Builtins do
           Enum.reduce(start_idx..(end_idx - 1)//1, false, fn i, in_w ->
             c = aref([arr, i])
 
-            if (is_integer(c) or match?(%ExLisp.Character{}, c)) and alphanumeric_code?(char_code(c)) do
+            if (is_integer(c) or match?(%ExLisp.Character{}, c)) and
+                 alphanumeric_code?(char_code(c)) do
               if in_w do
                 set_aref(arr, i, char_downcase(c))
                 true
@@ -5984,33 +6037,51 @@ defmodule ExLisp.Builtins do
       {:array, [len], _} ->
         actual_end = if is_integer(end_idx), do: min(len, max(start, end_idx)), else: len
         count = actual_end - start
+
         val_list =
           cond do
-            is_list(val) -> val
-            is_binary(val) -> String.to_charlist(val)
+            is_list(val) ->
+              val
+
+            is_binary(val) ->
+              String.to_charlist(val)
+
             match?({:array, _, _}, val) ->
               for i <- 0..(length(val) - 1), do: aref(val, i)
-            true -> []
+
+            true ->
+              []
           end
+
         val_list = Enum.take(val_list, count)
+
         Enum.with_index(val_list)
         |> Enum.each(fn {item, i} ->
           set_aref(seq, start + i, item)
         end)
+
         seq
 
       _ when is_list(seq) ->
         len = Kernel.length(seq)
         actual_end = if is_integer(end_idx), do: min(len, max(start, end_idx)), else: len
         count = actual_end - start
+
         val_list =
           cond do
-            is_list(val) -> val
-            is_binary(val) -> String.to_charlist(val)
+            is_list(val) ->
+              val
+
+            is_binary(val) ->
+              String.to_charlist(val)
+
             match?({:array, _, _}, val) ->
               for i <- 0..(length(val) - 1), do: aref(val, i)
-            true -> []
+
+            true ->
+              []
           end
+
         val_list = Enum.take(val_list, count)
         prefix = Enum.take(seq, start)
         suffix = Enum.drop(seq, start + length(val_list))
@@ -6021,9 +6092,12 @@ defmodule ExLisp.Builtins do
         len = length(chars)
         actual_end = if is_integer(end_idx), do: min(len, max(start, end_idx)), else: len
         count = actual_end - start
+
         val_chars =
           cond do
-            is_binary(val) -> String.to_charlist(val)
+            is_binary(val) ->
+              String.to_charlist(val)
+
             is_list(val) ->
               Enum.map(val, fn
                 %ExLisp.Character{code: c} -> c
@@ -6031,8 +6105,11 @@ defmodule ExLisp.Builtins do
                 s when is_binary(s) -> hd(String.to_charlist(s))
                 _ -> ?\s
               end)
-            true -> []
+
+            true ->
+              []
           end
+
         val_chars = Enum.take(val_chars, count)
         prefix = Enum.take(chars, start)
         suffix = Enum.drop(chars, start + length(val_chars))
@@ -6709,7 +6786,9 @@ defmodule ExLisp.Builtins do
 
       _ ->
         case :ets.lookup(tid, :__init__) do
-          [{_, default}] -> default
+          [{_, default}] ->
+            default
+
           _ ->
             case :ets.lookup(tid, :__meta__) do
               [{_, %{initial_element: default}}] -> default
@@ -6761,6 +6840,7 @@ defmodule ExLisp.Builtins do
   def vectorp(_), do: nil
 
   def simple_vector_p([arr]), do: simple_vector_p(arr)
+
   def simple_vector_p({:array, [_], tid}) do
     case :ets.lookup(tid, :__meta__) do
       [{:__meta__, meta}] ->
@@ -6783,6 +6863,7 @@ defmodule ExLisp.Builtins do
   def array_dimensions(_), do: nil
 
   def array_dimension([arr, axis]), do: array_dimension(arr, axis)
+
   def array_dimension({:array, dims, _}, axis) when is_integer(axis) do
     Enum.at(dims, axis)
   end
@@ -6801,7 +6882,8 @@ defmodule ExLisp.Builtins do
       end
 
     if length(dims) == length(flat_indices) and
-         Enum.zip(flat_indices, dims) |> Enum.all?(fn {i, d} -> is_integer(i) and i >= 0 and i < d end) do
+         Enum.zip(flat_indices, dims)
+         |> Enum.all?(fn {i, d} -> is_integer(i) and i >= 0 and i < d end) do
       :t
     else
       nil
@@ -6896,7 +6978,8 @@ defmodule ExLisp.Builtins do
 
   def array_displacement({:array, _, tid}) do
     case :ets.lookup(tid, :__meta__) do
-      [{:__meta__, %{displaced_to: target, displaced_index_offset: offset}}] when not is_nil(target) ->
+      [{:__meta__, %{displaced_to: target, displaced_index_offset: offset}}]
+      when not is_nil(target) ->
         [:_values_, [target, offset || 0]]
 
       _ ->
@@ -7032,6 +7115,7 @@ defmodule ExLisp.Builtins do
 
           is_atom(object) ->
             str = Atom.to_string(object)
+
             if byte_size(str) == 1,
               do: ExLisp.Character.new(:binary.first(str)),
               else: raise(ArgumentError, "Cannot coerce #{inspect(object)} to character")
@@ -7077,6 +7161,7 @@ defmodule ExLisp.Builtins do
 
           is_atom(object) ->
             fun = ExLisp.Env.get_fun(object)
+
             if fun != nil do
               fun
             else
@@ -7098,6 +7183,7 @@ defmodule ExLisp.Builtins do
   end
 
   def fill_pointer([arr]), do: fill_pointer(arr)
+
   def fill_pointer({:array, _, tid}) do
     case :ets.lookup(tid, :__meta__) do
       [{:__meta__, %{fill_pointer: fp}}] when is_integer(fp) -> fp
@@ -7106,6 +7192,7 @@ defmodule ExLisp.Builtins do
   end
 
   def set_fill_pointer([arr, fp]), do: set_fill_pointer(arr, fp)
+
   def set_fill_pointer({:array, _, tid}, fp) when is_integer(fp) do
     case :ets.lookup(tid, :__meta__) do
       [{:__meta__, meta}] ->
@@ -7118,6 +7205,7 @@ defmodule ExLisp.Builtins do
   end
 
   def array_has_fill_pointer_p([arr]), do: array_has_fill_pointer_p(arr)
+
   def array_has_fill_pointer_p({:array, _, tid}) do
     case :ets.lookup(tid, :__meta__) do
       [{:__meta__, %{fill_pointer: fp}}] when not is_nil(fp) -> :t
@@ -7128,6 +7216,7 @@ defmodule ExLisp.Builtins do
   def array_has_fill_pointer_p(_), do: nil
 
   def adjustable_array_p([arr]), do: adjustable_array_p(arr)
+
   def adjustable_array_p({:array, _, tid}) do
     case :ets.lookup(tid, :__meta__) do
       [{:__meta__, %{adjustable: true}}] -> :t
@@ -7161,7 +7250,10 @@ defmodule ExLisp.Builtins do
   end
 
   def bit_and(a, b), do: bit_op_2(fn x, y -> Bitwise.band(x, y) end, a, b, nil)
-  def bit_and(a, b, opt) when not is_list(a), do: bit_op_2(fn x, y -> Bitwise.band(x, y) end, a, b, opt)
+
+  def bit_and(a, b, opt) when not is_list(a),
+    do: bit_op_2(fn x, y -> Bitwise.band(x, y) end, a, b, opt)
+
   def bit_and(args) when is_list(args) do
     case args do
       [a, b] -> bit_and(a, b)
@@ -7170,7 +7262,10 @@ defmodule ExLisp.Builtins do
   end
 
   def bit_ior(a, b), do: bit_op_2(fn x, y -> Bitwise.bor(x, y) end, a, b, nil)
-  def bit_ior(a, b, opt) when not is_list(a), do: bit_op_2(fn x, y -> Bitwise.bor(x, y) end, a, b, opt)
+
+  def bit_ior(a, b, opt) when not is_list(a),
+    do: bit_op_2(fn x, y -> Bitwise.bor(x, y) end, a, b, opt)
+
   def bit_ior(args) when is_list(args) do
     case args do
       [a, b] -> bit_ior(a, b)
@@ -7179,7 +7274,10 @@ defmodule ExLisp.Builtins do
   end
 
   def bit_xor(a, b), do: bit_op_2(fn x, y -> Bitwise.bxor(x, y) end, a, b, nil)
-  def bit_xor(a, b, opt) when not is_list(a), do: bit_op_2(fn x, y -> Bitwise.bxor(x, y) end, a, b, opt)
+
+  def bit_xor(a, b, opt) when not is_list(a),
+    do: bit_op_2(fn x, y -> Bitwise.bxor(x, y) end, a, b, opt)
+
   def bit_xor(args) when is_list(args) do
     case args do
       [a, b] -> bit_xor(a, b)
@@ -7188,7 +7286,10 @@ defmodule ExLisp.Builtins do
   end
 
   def bit_eqv(a, b), do: bit_op_2(fn x, y -> if(x == y, do: 1, else: 0) end, a, b, nil)
-  def bit_eqv(a, b, opt) when not is_list(a), do: bit_op_2(fn x, y -> if(x == y, do: 1, else: 0) end, a, b, opt)
+
+  def bit_eqv(a, b, opt) when not is_list(a),
+    do: bit_op_2(fn x, y -> if(x == y, do: 1, else: 0) end, a, b, opt)
+
   def bit_eqv(args) when is_list(args) do
     case args do
       [a, b] -> bit_eqv(a, b)
@@ -7197,7 +7298,10 @@ defmodule ExLisp.Builtins do
   end
 
   def bit_nand(a, b), do: bit_op_2(fn x, y -> 1 - Bitwise.band(x, y) end, a, b, nil)
-  def bit_nand(a, b, opt) when not is_list(a), do: bit_op_2(fn x, y -> 1 - Bitwise.band(x, y) end, a, b, opt)
+
+  def bit_nand(a, b, opt) when not is_list(a),
+    do: bit_op_2(fn x, y -> 1 - Bitwise.band(x, y) end, a, b, opt)
+
   def bit_nand(args) when is_list(args) do
     case args do
       [a, b] -> bit_nand(a, b)
@@ -7206,7 +7310,10 @@ defmodule ExLisp.Builtins do
   end
 
   def bit_nor(a, b), do: bit_op_2(fn x, y -> 1 - Bitwise.bor(x, y) end, a, b, nil)
-  def bit_nor(a, b, opt) when not is_list(a), do: bit_op_2(fn x, y -> 1 - Bitwise.bor(x, y) end, a, b, opt)
+
+  def bit_nor(a, b, opt) when not is_list(a),
+    do: bit_op_2(fn x, y -> 1 - Bitwise.bor(x, y) end, a, b, opt)
+
   def bit_nor(args) when is_list(args) do
     case args do
       [a, b] -> bit_nor(a, b)
@@ -7215,7 +7322,10 @@ defmodule ExLisp.Builtins do
   end
 
   def bit_andc1(a, b), do: bit_op_2(fn x, y -> Bitwise.band(1 - x, y) end, a, b, nil)
-  def bit_andc1(a, b, opt) when not is_list(a), do: bit_op_2(fn x, y -> Bitwise.band(1 - x, y) end, a, b, opt)
+
+  def bit_andc1(a, b, opt) when not is_list(a),
+    do: bit_op_2(fn x, y -> Bitwise.band(1 - x, y) end, a, b, opt)
+
   def bit_andc1(args) when is_list(args) do
     case args do
       [a, b] -> bit_andc1(a, b)
@@ -7224,7 +7334,10 @@ defmodule ExLisp.Builtins do
   end
 
   def bit_andc2(a, b), do: bit_op_2(fn x, y -> Bitwise.band(x, 1 - y) end, a, b, nil)
-  def bit_andc2(a, b, opt) when not is_list(a), do: bit_op_2(fn x, y -> Bitwise.band(x, 1 - y) end, a, b, opt)
+
+  def bit_andc2(a, b, opt) when not is_list(a),
+    do: bit_op_2(fn x, y -> Bitwise.band(x, 1 - y) end, a, b, opt)
+
   def bit_andc2(args) when is_list(args) do
     case args do
       [a, b] -> bit_andc2(a, b)
@@ -7233,7 +7346,10 @@ defmodule ExLisp.Builtins do
   end
 
   def bit_orc1(a, b), do: bit_op_2(fn x, y -> Bitwise.bor(1 - x, y) end, a, b, nil)
-  def bit_orc1(a, b, opt) when not is_list(a), do: bit_op_2(fn x, y -> Bitwise.bor(1 - x, y) end, a, b, opt)
+
+  def bit_orc1(a, b, opt) when not is_list(a),
+    do: bit_op_2(fn x, y -> Bitwise.bor(1 - x, y) end, a, b, opt)
+
   def bit_orc1(args) when is_list(args) do
     case args do
       [a, b] -> bit_orc1(a, b)
@@ -7242,7 +7358,10 @@ defmodule ExLisp.Builtins do
   end
 
   def bit_orc2(a, b), do: bit_op_2(fn x, y -> Bitwise.bor(x, 1 - y) end, a, b, nil)
-  def bit_orc2(a, b, opt) when not is_list(a), do: bit_op_2(fn x, y -> Bitwise.bor(x, 1 - y) end, a, b, opt)
+
+  def bit_orc2(a, b, opt) when not is_list(a),
+    do: bit_op_2(fn x, y -> Bitwise.bor(x, 1 - y) end, a, b, opt)
+
   def bit_orc2(args) when is_list(args) do
     case args do
       [a, b] -> bit_orc2(a, b)
@@ -7410,7 +7529,8 @@ defmodule ExLisp.Builtins do
 
   def slot_value(instance, slot_name), do: ExLisp.CLOS.slot_value(instance, slot_name)
 
-  def set_slot_value(instance, slot_name, val), do: ExLisp.CLOS.set_slot_value(instance, slot_name, val)
+  def set_slot_value(instance, slot_name, val),
+    do: ExLisp.CLOS.set_slot_value(instance, slot_name, val)
 
   def slot_boundp(instance, slot_name), do: ExLisp.CLOS.slot_boundp(instance, slot_name)
 
@@ -7797,10 +7917,19 @@ defmodule ExLisp.Builtins do
     end
   end
 
-  def format(dest, fmt_string, args \\ []) do
+  def format(args) when is_list(args) do
+    case args do
+      [dest, fmt_string | rest] ->
+        format(dest, fmt_string, rest)
+
+      _ ->
+        ""
+    end
+  end
+
+  def format(dest, fmt_string, args) when is_list(args) do
     fmt = to_string_val(fmt_string)
-    arg_list = if is_list(args), do: args, else: [args]
-    formatted = ExLisp.CLFormat.format(fmt, arg_list)
+    formatted = ExLisp.CLFormat.format(fmt, args)
 
     cond do
       dest in [:t, :T, true, "t", "T"] ->
@@ -7821,6 +7950,14 @@ defmodule ExLisp.Builtins do
       true ->
         formatted
     end
+  end
+
+  def format(dest, fmt_string, arg) do
+    format(dest, fmt_string, [arg])
+  end
+
+  def format(dest, fmt_string) do
+    format(dest, fmt_string, [])
   end
 
   # --- Utilities ---
@@ -7862,13 +7999,16 @@ defmodule ExLisp.Builtins do
       datum -> ExLisp.Condition.error(datum, [])
     end
   end
+
   def error(datum), do: ExLisp.Condition.error(datum, [])
   def error(datum, a1), do: ExLisp.Condition.error(datum, [a1])
   def error(datum, a1, a2), do: ExLisp.Condition.error(datum, [a1, a2])
   def error(datum, a1, a2, a3), do: ExLisp.Condition.error(datum, [a1, a2, a3])
   def error(datum, a1, a2, a3, a4), do: ExLisp.Condition.error(datum, [a1, a2, a3, a4])
   def error(datum, a1, a2, a3, a4, a5), do: ExLisp.Condition.error(datum, [a1, a2, a3, a4, a5])
-  def error(datum, a1, a2, a3, a4, a5, a6), do: ExLisp.Condition.error(datum, [a1, a2, a3, a4, a5, a6])
+
+  def error(datum, a1, a2, a3, a4, a5, a6),
+    do: ExLisp.Condition.error(datum, [a1, a2, a3, a4, a5, a6])
 
   def warn(args) when is_list(args) do
     case args do
@@ -7876,6 +8016,7 @@ defmodule ExLisp.Builtins do
       datum -> ExLisp.Condition.warn(datum, [])
     end
   end
+
   def warn(datum), do: ExLisp.Condition.warn(datum, [])
   def warn(datum, a1), do: ExLisp.Condition.warn(datum, [a1])
   def warn(datum, a1, a2), do: ExLisp.Condition.warn(datum, [a1, a2])
@@ -7886,9 +8027,14 @@ defmodule ExLisp.Builtins do
       _ -> raise ArgumentError, "cerror requires at least 2 arguments"
     end
   end
+
   def cerror(continue_control, datum), do: ExLisp.Condition.cerror(continue_control, datum, [])
-  def cerror(continue_control, datum, a1), do: ExLisp.Condition.cerror(continue_control, datum, [a1])
-  def cerror(continue_control, datum, a1, a2), do: ExLisp.Condition.cerror(continue_control, datum, [a1, a2])
+
+  def cerror(continue_control, datum, a1),
+    do: ExLisp.Condition.cerror(continue_control, datum, [a1])
+
+  def cerror(continue_control, datum, a1, a2),
+    do: ExLisp.Condition.cerror(continue_control, datum, [a1, a2])
 
   # --- Symbol & package ---
 
@@ -8165,6 +8311,7 @@ defmodule ExLisp.Builtins do
         case ExLisp.CLOS.slot_value(c, :name) do
           nil ->
             ctrl = ExLisp.CLOS.slot_value(c, :format_control) || ""
+
             cond do
               String.starts_with?(ctrl, "Unbound variable: ") ->
                 name = String.trim_leading(ctrl, "Unbound variable: ")
@@ -8204,6 +8351,22 @@ defmodule ExLisp.Builtins do
       true ->
         nil
     end
+  end
+
+  def get(args) when is_list(args) do
+    case args do
+      [sym, prop, default | _] -> get_symbol_prop(sym, prop, default)
+      [sym, prop] -> get_symbol_prop(sym, prop, nil)
+      _ -> raise ArgumentError, "get requires at least 2 arguments"
+    end
+  end
+
+  def get(sym, prop, default \\ nil) do
+    get_symbol_prop(sym, prop, default)
+  end
+
+  def set_get(sym, prop, val) do
+    set_symbol_prop(sym, prop, val)
   end
 
   def get_symbol_prop(sym, prop, default \\ nil) do
@@ -9151,6 +9314,7 @@ defmodule ExLisp.Builtins do
       pkg -> ExLisp.Package.find_package(pkg)
     end
   end
+
   def find_package(pkg), do: ExLisp.Package.find_package(pkg)
 
   def packagep(pkg), do: ExLisp.Package.packagep(pkg)
@@ -9167,10 +9331,12 @@ defmodule ExLisp.Builtins do
       [name | opts] ->
         opt_kw = Enum.chunk_every(opts, 2) |> Enum.map(fn [k, v] -> {k, v} end)
         ExLisp.Package.make_package(name, opt_kw)
+
       name ->
         ExLisp.Package.make_package(name)
     end
   end
+
   def make_package(name), do: ExLisp.Package.make_package(name)
   def make_package(name, opts), do: ExLisp.Package.make_package(name, opts)
 
@@ -9180,6 +9346,7 @@ defmodule ExLisp.Builtins do
       pkg -> ExLisp.Package.delete_package(pkg)
     end
   end
+
   def delete_package(pkg), do: ExLisp.Package.delete_package(pkg)
 
   def rename_package(args) when is_list(args) do
@@ -9189,8 +9356,11 @@ defmodule ExLisp.Builtins do
       _ -> raise ArgumentError, "rename-package requires at least 2 arguments"
     end
   end
+
   def rename_package(pkg, new_name), do: ExLisp.Package.rename_package(pkg, new_name, [])
-  def rename_package(pkg, new_name, new_nicks), do: ExLisp.Package.rename_package(pkg, new_name, new_nicks)
+
+  def rename_package(pkg, new_name, new_nicks),
+    do: ExLisp.Package.rename_package(pkg, new_name, new_nicks)
 
   def defpackage(args) when is_list(args) do
     case args do
@@ -9198,6 +9368,7 @@ defmodule ExLisp.Builtins do
       name -> ExLisp.Package.defpackage(name)
     end
   end
+
   def defpackage(name), do: ExLisp.Package.defpackage(name)
   def defpackage(name, opts), do: ExLisp.Package.defpackage(name, opts)
 
@@ -9207,6 +9378,7 @@ defmodule ExLisp.Builtins do
       name -> ExLisp.Package.set_current_package(name)
     end
   end
+
   def in_package(name), do: ExLisp.Package.set_current_package(name)
 
   def export(args) when is_list(args) do
@@ -9216,6 +9388,7 @@ defmodule ExLisp.Builtins do
       symbols -> ExLisp.Package.export(symbols)
     end
   end
+
   def export(symbols), do: ExLisp.Package.export(symbols)
   def export(symbols, pkg), do: ExLisp.Package.export(symbols, pkg)
 
@@ -9226,6 +9399,7 @@ defmodule ExLisp.Builtins do
       symbols -> ExLisp.Package.unexport(symbols)
     end
   end
+
   def unexport(symbols), do: ExLisp.Package.unexport(symbols)
   def unexport(symbols, pkg), do: ExLisp.Package.unexport(symbols, pkg)
 
@@ -9236,6 +9410,7 @@ defmodule ExLisp.Builtins do
       symbols -> ExLisp.Package.import(symbols)
     end
   end
+
   def import(symbols), do: ExLisp.Package.import(symbols)
   def import(symbols, pkg), do: ExLisp.Package.import(symbols, pkg)
 
@@ -9246,6 +9421,7 @@ defmodule ExLisp.Builtins do
       symbols -> ExLisp.Package.shadow(symbols)
     end
   end
+
   def shadow(symbols), do: ExLisp.Package.shadow(symbols)
   def shadow(symbols, pkg), do: ExLisp.Package.shadow(symbols, pkg)
 
@@ -9256,6 +9432,7 @@ defmodule ExLisp.Builtins do
       symbols -> ExLisp.Package.shadowing_import(symbols)
     end
   end
+
   def shadowing_import(symbols), do: ExLisp.Package.shadowing_import(symbols)
   def shadowing_import(symbols, pkg), do: ExLisp.Package.shadowing_import(symbols, pkg)
 
@@ -9266,6 +9443,7 @@ defmodule ExLisp.Builtins do
       pkgs -> ExLisp.Package.use_package(pkgs)
     end
   end
+
   def use_package(pkgs), do: ExLisp.Package.use_package(pkgs)
   def use_package(pkgs, target_pkg), do: ExLisp.Package.use_package(pkgs, target_pkg)
 
@@ -9276,6 +9454,7 @@ defmodule ExLisp.Builtins do
       pkgs -> ExLisp.Package.unuse_package(pkgs)
     end
   end
+
   def unuse_package(pkgs), do: ExLisp.Package.unuse_package(pkgs)
   def unuse_package(pkgs, target_pkg), do: ExLisp.Package.unuse_package(pkgs, target_pkg)
 
@@ -9286,6 +9465,7 @@ defmodule ExLisp.Builtins do
       name -> ExLisp.Package.intern(name)
     end
   end
+
   def intern(name), do: ExLisp.Package.intern(name)
   def intern(name, pkg), do: ExLisp.Package.intern(name, pkg)
 
@@ -9296,6 +9476,7 @@ defmodule ExLisp.Builtins do
       name -> ExLisp.Package.find_symbol(name)
     end
   end
+
   def find_symbol(name), do: ExLisp.Package.find_symbol(name)
   def find_symbol(name, pkg), do: ExLisp.Package.find_symbol(name, pkg)
 
@@ -9306,6 +9487,7 @@ defmodule ExLisp.Builtins do
       sym -> ExLisp.Package.unintern(sym)
     end
   end
+
   def unintern(sym), do: ExLisp.Package.unintern(sym)
   def unintern(sym, pkg), do: ExLisp.Package.unintern(sym, pkg)
 
@@ -9315,6 +9497,7 @@ defmodule ExLisp.Builtins do
       sym -> ExLisp.Package.symbol_package(sym)
     end
   end
+
   def symbol_package(sym), do: ExLisp.Package.symbol_package(sym)
 
   def provide(_args), do: :t
@@ -9523,6 +9706,7 @@ defmodule ExLisp.Builtins do
       type -> ExLisp.Condition.make_condition(type, [])
     end
   end
+
   def make_condition(type), do: ExLisp.Condition.make_condition(type, [])
 
   def signal(args) when is_list(args) do
@@ -9531,6 +9715,7 @@ defmodule ExLisp.Builtins do
       datum -> ExLisp.Condition.signal(datum, [])
     end
   end
+
   def signal(datum), do: ExLisp.Condition.signal(datum, [])
 
   def restart_name(args) when is_list(args) do
@@ -9539,6 +9724,7 @@ defmodule ExLisp.Builtins do
       r -> ExLisp.Condition.restart_name(r)
     end
   end
+
   def restart_name(r), do: ExLisp.Condition.restart_name(r)
 
   def find_restart(args) when is_list(args) do
@@ -9548,16 +9734,19 @@ defmodule ExLisp.Builtins do
       name -> ExLisp.Condition.find_restart(name)
     end
   end
+
   def find_restart(name), do: ExLisp.Condition.find_restart(name)
   def find_restart(name, condition), do: ExLisp.Condition.find_restart(name, condition)
 
   def compute_restarts(args \\ [])
+
   def compute_restarts(args) when is_list(args) do
     case args do
       [condition | _] -> ExLisp.Condition.compute_restarts(condition)
       _ -> ExLisp.Condition.compute_restarts(nil)
     end
   end
+
   def compute_restarts(condition), do: ExLisp.Condition.compute_restarts(condition)
 
   def invoke_restart(args) when is_list(args) do
@@ -9566,38 +9755,46 @@ defmodule ExLisp.Builtins do
       restart -> ExLisp.Condition.invoke_restart(restart, [])
     end
   end
+
   def invoke_restart(restart), do: ExLisp.Condition.invoke_restart(restart, [])
 
   def invoke_restart_interactively(args) when is_list(args) do
     invoke_restart(args)
   end
+
   def invoke_restart_interactively(restart), do: invoke_restart(restart)
 
   def abort(args \\ [])
+
   def abort(args) when is_list(args) do
     case args do
       [condition | _] -> ExLisp.Condition.abort(condition)
       _ -> ExLisp.Condition.abort(nil)
     end
   end
+
   def abort(condition), do: ExLisp.Condition.abort(condition)
 
   def continue(args \\ [])
+
   def continue(args) when is_list(args) do
     case args do
       [condition | _] -> ExLisp.Condition.continue(condition)
       _ -> ExLisp.Condition.continue(nil)
     end
   end
+
   def continue(condition), do: ExLisp.Condition.continue(condition)
 
   def muffle_warning(args \\ [])
+
   def muffle_warning(args) when is_list(args) do
     case args do
       [condition | _] -> ExLisp.Condition.muffle_warning(condition)
       _ -> ExLisp.Condition.muffle_warning(nil)
     end
   end
+
   def muffle_warning(condition), do: ExLisp.Condition.muffle_warning(condition)
 
   def store_value(args) when is_list(args) do
@@ -9607,6 +9804,7 @@ defmodule ExLisp.Builtins do
       val -> ExLisp.Condition.store_value(val, nil)
     end
   end
+
   def store_value(val), do: ExLisp.Condition.store_value(val, nil)
   def store_value(val, condition), do: ExLisp.Condition.store_value(val, condition)
 
@@ -9617,41 +9815,63 @@ defmodule ExLisp.Builtins do
       val -> ExLisp.Condition.use_value(val, nil)
     end
   end
+
   def use_value(val), do: ExLisp.Condition.use_value(val, nil)
   def use_value(val, condition), do: ExLisp.Condition.use_value(val, condition)
 
   def type_error_datum(args) when is_list(args), do: ExLisp.Condition.type_error_datum(hd(args))
   def type_error_datum(c), do: ExLisp.Condition.type_error_datum(c)
 
-  def type_error_expected_type(args) when is_list(args), do: ExLisp.Condition.type_error_expected_type(hd(args))
+  def type_error_expected_type(args) when is_list(args),
+    do: ExLisp.Condition.type_error_expected_type(hd(args))
+
   def type_error_expected_type(c), do: ExLisp.Condition.type_error_expected_type(c)
 
-  def unbound_variable_name(args) when is_list(args), do: ExLisp.Condition.unbound_variable_name(hd(args))
+  def unbound_variable_name(args) when is_list(args),
+    do: ExLisp.Condition.unbound_variable_name(hd(args))
+
   def unbound_variable_name(c), do: ExLisp.Condition.unbound_variable_name(c)
 
-  def undefined_function_name(args) when is_list(args), do: ExLisp.Condition.undefined_function_name(hd(args))
+  def undefined_function_name(args) when is_list(args),
+    do: ExLisp.Condition.undefined_function_name(hd(args))
+
   def undefined_function_name(c), do: ExLisp.Condition.undefined_function_name(c)
 
-  def stream_error_stream(args) when is_list(args), do: ExLisp.Condition.stream_error_stream(hd(args))
+  def stream_error_stream(args) when is_list(args),
+    do: ExLisp.Condition.stream_error_stream(hd(args))
+
   def stream_error_stream(c), do: ExLisp.Condition.stream_error_stream(c)
 
-  def file_error_pathname(args) when is_list(args), do: ExLisp.Condition.file_error_pathname(hd(args))
+  def file_error_pathname(args) when is_list(args),
+    do: ExLisp.Condition.file_error_pathname(hd(args))
+
   def file_error_pathname(c), do: ExLisp.Condition.file_error_pathname(c)
 
-  def package_error_package(args) when is_list(args), do: ExLisp.Condition.package_error_package(hd(args))
+  def package_error_package(args) when is_list(args),
+    do: ExLisp.Condition.package_error_package(hd(args))
+
   def package_error_package(c), do: ExLisp.Condition.package_error_package(c)
 
-  def arithmetic_error_operation(args) when is_list(args), do: ExLisp.Condition.arithmetic_error_operation(hd(args))
+  def arithmetic_error_operation(args) when is_list(args),
+    do: ExLisp.Condition.arithmetic_error_operation(hd(args))
+
   def arithmetic_error_operation(c), do: ExLisp.Condition.arithmetic_error_operation(c)
 
-  def arithmetic_error_operands(args) when is_list(args), do: ExLisp.Condition.arithmetic_error_operands(hd(args))
+  def arithmetic_error_operands(args) when is_list(args),
+    do: ExLisp.Condition.arithmetic_error_operands(hd(args))
+
   def arithmetic_error_operands(c), do: ExLisp.Condition.arithmetic_error_operands(c)
 
-  def simple_condition_format_control(args) when is_list(args), do: ExLisp.Condition.simple_condition_format_control(hd(args))
+  def simple_condition_format_control(args) when is_list(args),
+    do: ExLisp.Condition.simple_condition_format_control(hd(args))
+
   def simple_condition_format_control(c), do: ExLisp.Condition.simple_condition_format_control(c)
 
-  def simple_condition_format_arguments(args) when is_list(args), do: ExLisp.Condition.simple_condition_format_arguments(hd(args))
-  def simple_condition_format_arguments(c), do: ExLisp.Condition.simple_condition_format_arguments(c)
+  def simple_condition_format_arguments(args) when is_list(args),
+    do: ExLisp.Condition.simple_condition_format_arguments(hd(args))
+
+  def simple_condition_format_arguments(c),
+    do: ExLisp.Condition.simple_condition_format_arguments(c)
 
   # --- Time functions ---
   def get_internal_real_time do
@@ -9679,9 +9899,11 @@ defmodule ExLisp.Builtins do
       rt -> ExLisp.Readtable.readtablep(rt)
     end
   end
+
   def readtablep(rt), do: ExLisp.Readtable.readtablep(rt)
 
   def copy_readtable(args \\ [])
+
   def copy_readtable(args) when is_list(args) do
     case args do
       [from, to | _] -> ExLisp.Readtable.copy_readtable(from, to)
@@ -9689,19 +9911,33 @@ defmodule ExLisp.Builtins do
       _ -> ExLisp.Readtable.copy_readtable(nil, nil)
     end
   end
+
   def copy_readtable(from, to), do: ExLisp.Readtable.copy_readtable(from, to)
 
   def set_macro_character(args) when is_list(args) do
     case args do
-      [char, func, non_term, rt | _] -> ExLisp.Readtable.set_macro_character(char, func, non_term, rt)
-      [char, func, non_term] -> ExLisp.Readtable.set_macro_character(char, func, non_term, nil)
-      [char, func] -> ExLisp.Readtable.set_macro_character(char, func, nil, nil)
-      _ -> nil
+      [char, func, non_term, rt | _] ->
+        ExLisp.Readtable.set_macro_character(char, func, non_term, rt)
+
+      [char, func, non_term] ->
+        ExLisp.Readtable.set_macro_character(char, func, non_term, nil)
+
+      [char, func] ->
+        ExLisp.Readtable.set_macro_character(char, func, nil, nil)
+
+      _ ->
+        nil
     end
   end
-  def set_macro_character(char, func), do: ExLisp.Readtable.set_macro_character(char, func, nil, nil)
-  def set_macro_character(char, func, non_term), do: ExLisp.Readtable.set_macro_character(char, func, non_term, nil)
-  def set_macro_character(char, func, non_term, rt), do: ExLisp.Readtable.set_macro_character(char, func, non_term, rt)
+
+  def set_macro_character(char, func),
+    do: ExLisp.Readtable.set_macro_character(char, func, nil, nil)
+
+  def set_macro_character(char, func, non_term),
+    do: ExLisp.Readtable.set_macro_character(char, func, non_term, nil)
+
+  def set_macro_character(char, func, non_term, rt),
+    do: ExLisp.Readtable.set_macro_character(char, func, non_term, rt)
 
   def get_macro_character(args) when is_list(args) do
     case args do
@@ -9710,30 +9946,53 @@ defmodule ExLisp.Builtins do
       char -> ExLisp.Readtable.get_macro_character(char, nil)
     end
   end
+
   def get_macro_character(char), do: ExLisp.Readtable.get_macro_character(char, nil)
   def get_macro_character(char, rt), do: ExLisp.Readtable.get_macro_character(char, rt)
 
   def make_dispatch_macro_character(args) when is_list(args) do
     case args do
-      [char, non_term, rt | _] -> ExLisp.Readtable.make_dispatch_macro_character(char, non_term, rt)
-      [char, non_term] -> ExLisp.Readtable.make_dispatch_macro_character(char, non_term, nil)
-      [char] -> ExLisp.Readtable.make_dispatch_macro_character(char, nil, nil)
-      char -> ExLisp.Readtable.make_dispatch_macro_character(char, nil, nil)
+      [char, non_term, rt | _] ->
+        ExLisp.Readtable.make_dispatch_macro_character(char, non_term, rt)
+
+      [char, non_term] ->
+        ExLisp.Readtable.make_dispatch_macro_character(char, non_term, nil)
+
+      [char] ->
+        ExLisp.Readtable.make_dispatch_macro_character(char, nil, nil)
+
+      char ->
+        ExLisp.Readtable.make_dispatch_macro_character(char, nil, nil)
     end
   end
-  def make_dispatch_macro_character(char), do: ExLisp.Readtable.make_dispatch_macro_character(char, nil, nil)
-  def make_dispatch_macro_character(char, non_term), do: ExLisp.Readtable.make_dispatch_macro_character(char, non_term, nil)
-  def make_dispatch_macro_character(char, non_term, rt), do: ExLisp.Readtable.make_dispatch_macro_character(char, non_term, rt)
+
+  def make_dispatch_macro_character(char),
+    do: ExLisp.Readtable.make_dispatch_macro_character(char, nil, nil)
+
+  def make_dispatch_macro_character(char, non_term),
+    do: ExLisp.Readtable.make_dispatch_macro_character(char, non_term, nil)
+
+  def make_dispatch_macro_character(char, non_term, rt),
+    do: ExLisp.Readtable.make_dispatch_macro_character(char, non_term, rt)
 
   def set_dispatch_macro_character(args) when is_list(args) do
     case args do
-      [disp, sub, func, rt | _] -> ExLisp.Readtable.set_dispatch_macro_character(disp, sub, func, rt)
-      [disp, sub, func] -> ExLisp.Readtable.set_dispatch_macro_character(disp, sub, func, nil)
-      _ -> nil
+      [disp, sub, func, rt | _] ->
+        ExLisp.Readtable.set_dispatch_macro_character(disp, sub, func, rt)
+
+      [disp, sub, func] ->
+        ExLisp.Readtable.set_dispatch_macro_character(disp, sub, func, nil)
+
+      _ ->
+        nil
     end
   end
-  def set_dispatch_macro_character(disp, sub, func), do: ExLisp.Readtable.set_dispatch_macro_character(disp, sub, func, nil)
-  def set_dispatch_macro_character(disp, sub, func, rt), do: ExLisp.Readtable.set_dispatch_macro_character(disp, sub, func, rt)
+
+  def set_dispatch_macro_character(disp, sub, func),
+    do: ExLisp.Readtable.set_dispatch_macro_character(disp, sub, func, nil)
+
+  def set_dispatch_macro_character(disp, sub, func, rt),
+    do: ExLisp.Readtable.set_dispatch_macro_character(disp, sub, func, rt)
 
   def get_dispatch_macro_character(args) when is_list(args) do
     case args do
@@ -9742,20 +10001,37 @@ defmodule ExLisp.Builtins do
       _ -> nil
     end
   end
-  def get_dispatch_macro_character(disp, sub), do: ExLisp.Readtable.get_dispatch_macro_character(disp, sub, nil)
-  def get_dispatch_macro_character(disp, sub, rt), do: ExLisp.Readtable.get_dispatch_macro_character(disp, sub, rt)
+
+  def get_dispatch_macro_character(disp, sub),
+    do: ExLisp.Readtable.get_dispatch_macro_character(disp, sub, nil)
+
+  def get_dispatch_macro_character(disp, sub, rt),
+    do: ExLisp.Readtable.get_dispatch_macro_character(disp, sub, rt)
 
   def set_syntax_from_char(args) when is_list(args) do
     case args do
-      [to_char, from_char, to_rt, from_rt | _] -> ExLisp.Readtable.set_syntax_from_char(to_char, from_char, to_rt, from_rt)
-      [to_char, from_char, to_rt] -> ExLisp.Readtable.set_syntax_from_char(to_char, from_char, to_rt, nil)
-      [to_char, from_char] -> ExLisp.Readtable.set_syntax_from_char(to_char, from_char, nil, nil)
-      _ -> nil
+      [to_char, from_char, to_rt, from_rt | _] ->
+        ExLisp.Readtable.set_syntax_from_char(to_char, from_char, to_rt, from_rt)
+
+      [to_char, from_char, to_rt] ->
+        ExLisp.Readtable.set_syntax_from_char(to_char, from_char, to_rt, nil)
+
+      [to_char, from_char] ->
+        ExLisp.Readtable.set_syntax_from_char(to_char, from_char, nil, nil)
+
+      _ ->
+        nil
     end
   end
-  def set_syntax_from_char(to_char, from_char), do: ExLisp.Readtable.set_syntax_from_char(to_char, from_char, nil, nil)
-  def set_syntax_from_char(to_char, from_char, to_rt), do: ExLisp.Readtable.set_syntax_from_char(to_char, from_char, to_rt, nil)
-  def set_syntax_from_char(to_char, from_char, to_rt, from_rt), do: ExLisp.Readtable.set_syntax_from_char(to_char, from_char, to_rt, from_rt)
+
+  def set_syntax_from_char(to_char, from_char),
+    do: ExLisp.Readtable.set_syntax_from_char(to_char, from_char, nil, nil)
+
+  def set_syntax_from_char(to_char, from_char, to_rt),
+    do: ExLisp.Readtable.set_syntax_from_char(to_char, from_char, to_rt, nil)
+
+  def set_syntax_from_char(to_char, from_char, to_rt, from_rt),
+    do: ExLisp.Readtable.set_syntax_from_char(to_char, from_char, to_rt, from_rt)
 
   def readtable_case(args) when is_list(args) do
     case args do
@@ -9763,6 +10039,7 @@ defmodule ExLisp.Builtins do
       rt -> ExLisp.Readtable.readtable_case(rt)
     end
   end
+
   def readtable_case(rt), do: ExLisp.Readtable.readtable_case(rt)
 
   def set_readtable_case(args) when is_list(args) do
@@ -9771,6 +10048,7 @@ defmodule ExLisp.Builtins do
       _ -> :upcase
     end
   end
+
   def set_readtable_case(rt, new_case), do: ExLisp.Readtable.set_readtable_case(rt, new_case)
 
   # --- Streams ---
@@ -9798,6 +10076,7 @@ defmodule ExLisp.Builtins do
       filespec -> ExLisp.Stream.open(filespec, [])
     end
   end
+
   def open(filespec), do: ExLisp.Stream.open(filespec, [])
   def open(filespec, opts), do: ExLisp.Stream.open(filespec, opts)
 
@@ -9806,17 +10085,27 @@ defmodule ExLisp.Builtins do
   def close(s, opts), do: ExLisp.Stream.close(s, opts)
 
   def make_broadcast_stream(args \\ [])
-  def make_broadcast_stream(args) when is_list(args), do: ExLisp.Stream.make_broadcast_stream(args)
+
+  def make_broadcast_stream(args) when is_list(args),
+    do: ExLisp.Stream.make_broadcast_stream(args)
+
   def make_broadcast_stream(s), do: ExLisp.Stream.make_broadcast_stream([s])
 
-  def broadcast_stream_streams(args) when is_list(args), do: ExLisp.Stream.broadcast_stream_streams(args)
+  def broadcast_stream_streams(args) when is_list(args),
+    do: ExLisp.Stream.broadcast_stream_streams(args)
+
   def broadcast_stream_streams(s), do: ExLisp.Stream.broadcast_stream_streams(s)
 
   def make_concatenated_stream(args \\ [])
-  def make_concatenated_stream(args) when is_list(args), do: ExLisp.Stream.make_concatenated_stream(args)
+
+  def make_concatenated_stream(args) when is_list(args),
+    do: ExLisp.Stream.make_concatenated_stream(args)
+
   def make_concatenated_stream(s), do: ExLisp.Stream.make_concatenated_stream([s])
 
-  def concatenated_stream_streams(args) when is_list(args), do: ExLisp.Stream.concatenated_stream_streams(args)
+  def concatenated_stream_streams(args) when is_list(args),
+    do: ExLisp.Stream.concatenated_stream_streams(args)
+
   def concatenated_stream_streams(s), do: ExLisp.Stream.concatenated_stream_streams(s)
 
   def make_two_way_stream(args) when is_list(args) do
@@ -9825,12 +10114,17 @@ defmodule ExLisp.Builtins do
       _ -> raise ArgumentError, "make-two-way-stream requires 2 arguments"
     end
   end
+
   def make_two_way_stream(in_s, out_s), do: ExLisp.Stream.make_two_way_stream(in_s, out_s)
 
-  def two_way_stream_input_stream(args) when is_list(args), do: ExLisp.Stream.two_way_stream_input_stream(args)
+  def two_way_stream_input_stream(args) when is_list(args),
+    do: ExLisp.Stream.two_way_stream_input_stream(args)
+
   def two_way_stream_input_stream(s), do: ExLisp.Stream.two_way_stream_input_stream(s)
 
-  def two_way_stream_output_stream(args) when is_list(args), do: ExLisp.Stream.two_way_stream_output_stream(args)
+  def two_way_stream_output_stream(args) when is_list(args),
+    do: ExLisp.Stream.two_way_stream_output_stream(args)
+
   def two_way_stream_output_stream(s), do: ExLisp.Stream.two_way_stream_output_stream(s)
 
   def make_echo_stream(args) when is_list(args) do
@@ -9839,12 +10133,17 @@ defmodule ExLisp.Builtins do
       _ -> raise ArgumentError, "make-echo-stream requires 2 arguments"
     end
   end
+
   def make_echo_stream(in_s, out_s), do: ExLisp.Stream.make_echo_stream(in_s, out_s)
 
-  def echo_stream_input_stream(args) when is_list(args), do: ExLisp.Stream.echo_stream_input_stream(args)
+  def echo_stream_input_stream(args) when is_list(args),
+    do: ExLisp.Stream.echo_stream_input_stream(args)
+
   def echo_stream_input_stream(s), do: ExLisp.Stream.echo_stream_input_stream(s)
 
-  def echo_stream_output_stream(args) when is_list(args), do: ExLisp.Stream.echo_stream_output_stream(args)
+  def echo_stream_output_stream(args) when is_list(args),
+    do: ExLisp.Stream.echo_stream_output_stream(args)
+
   def echo_stream_output_stream(s), do: ExLisp.Stream.echo_stream_output_stream(s)
 
   def make_synonym_stream(args) when is_list(args) do
@@ -9853,12 +10152,16 @@ defmodule ExLisp.Builtins do
       _ -> raise ArgumentError, "make-synonym-stream requires 1 symbol argument"
     end
   end
+
   def make_synonym_stream(sym), do: ExLisp.Stream.make_synonym_stream(sym)
 
-  def synonym_stream_symbol(args) when is_list(args), do: ExLisp.Stream.synonym_stream_symbol(args)
+  def synonym_stream_symbol(args) when is_list(args),
+    do: ExLisp.Stream.synonym_stream_symbol(args)
+
   def synonym_stream_symbol(s), do: ExLisp.Stream.synonym_stream_symbol(s)
 
   def read_char, do: ExLisp.Stream.read_char(nil, :t, nil)
+
   def read_char(args) when is_list(args) do
     case args do
       [s, e, v | _] -> ExLisp.Stream.read_char(s, e, v)
@@ -9867,6 +10170,7 @@ defmodule ExLisp.Builtins do
       [] -> ExLisp.Stream.read_char(nil, :t, nil)
     end
   end
+
   def read_char(s), do: ExLisp.Stream.read_char(s, :t, nil)
   def read_char(s, e), do: ExLisp.Stream.read_char(s, e, nil)
   def read_char(s, e, v), do: ExLisp.Stream.read_char(s, e, v)
@@ -9878,10 +10182,12 @@ defmodule ExLisp.Builtins do
       _ -> nil
     end
   end
+
   def unread_char(c), do: ExLisp.Stream.unread_char(c, nil)
   def unread_char(c, s), do: ExLisp.Stream.unread_char(c, s)
 
   def peek_char, do: ExLisp.Stream.peek_char(nil, nil, :t, nil)
+
   def peek_char(args) when is_list(args) do
     case args do
       [t, s, e, v | _] -> ExLisp.Stream.peek_char(t, s, e, v)
@@ -9891,25 +10197,31 @@ defmodule ExLisp.Builtins do
       [] -> ExLisp.Stream.peek_char(nil, nil, :t, nil)
     end
   end
+
   def peek_char(t), do: ExLisp.Stream.peek_char(t, nil, :t, nil)
   def peek_char(t, s), do: ExLisp.Stream.peek_char(t, s, :t, nil)
   def peek_char(t, s, e), do: ExLisp.Stream.peek_char(t, s, e, nil)
   def peek_char(t, s, e, v), do: ExLisp.Stream.peek_char(t, s, e, v)
 
-  def read_line, do: ExLisp.Stream.read_line(nil, :t, nil)
+  def read_line, do: ExLisp.Stream.read_line_mv(nil, :t, nil)
+
   def read_line(args) when is_list(args) do
     case args do
-      [s, e, v | _] -> ExLisp.Stream.read_line(s, e, v)
-      [s, e] -> ExLisp.Stream.read_line(s, e, nil)
-      [s] -> ExLisp.Stream.read_line(s, :t, nil)
-      [] -> ExLisp.Stream.read_line(nil, :t, nil)
+      [s, e, v, r | _] -> ExLisp.Stream.read_line_mv(s, e, v, r)
+      [s, e, v] -> ExLisp.Stream.read_line_mv(s, e, v)
+      [s, e] -> ExLisp.Stream.read_line_mv(s, e, nil)
+      [s] -> ExLisp.Stream.read_line_mv(s, :t, nil)
+      [] -> ExLisp.Stream.read_line_mv(nil, :t, nil)
     end
   end
-  def read_line(s), do: ExLisp.Stream.read_line(s, :t, nil)
-  def read_line(s, e), do: ExLisp.Stream.read_line(s, e, nil)
-  def read_line(s, e, v), do: ExLisp.Stream.read_line(s, e, v)
+
+  def read_line(s), do: ExLisp.Stream.read_line_mv(s, :t, nil)
+  def read_line(s, e), do: ExLisp.Stream.read_line_mv(s, e, nil)
+  def read_line(s, e, v), do: ExLisp.Stream.read_line_mv(s, e, v)
+  def read_line(s, e, v, r), do: ExLisp.Stream.read_line_mv(s, e, v, r)
 
   def read_line_mv, do: ExLisp.Stream.read_line_mv(nil, :t, nil)
+
   def read_line_mv(args) when is_list(args) do
     case args do
       [s, e, v | _] -> ExLisp.Stream.read_line_mv(s, e, v)
@@ -9918,6 +10230,7 @@ defmodule ExLisp.Builtins do
       [] -> ExLisp.Stream.read_line_mv(nil, :t, nil)
     end
   end
+
   def read_line_mv(s), do: ExLisp.Stream.read_line_mv(s, :t, nil)
   def read_line_mv(s, e), do: ExLisp.Stream.read_line_mv(s, e, nil)
   def read_line_mv(s, e, v), do: ExLisp.Stream.read_line_mv(s, e, v)
@@ -9928,6 +10241,7 @@ defmodule ExLisp.Builtins do
       _ -> raise ArgumentError, "read-sequence requires at least 2 arguments"
     end
   end
+
   def read_sequence(seq, s), do: ExLisp.Stream.read_sequence(seq, s, [])
   def read_sequence(seq, s, opts), do: ExLisp.Stream.read_sequence(seq, s, opts)
 
@@ -9938,6 +10252,7 @@ defmodule ExLisp.Builtins do
       _ -> nil
     end
   end
+
   def write_char(c), do: ExLisp.Stream.write_char(c, nil)
   def write_char(c, s), do: ExLisp.Stream.write_char(c, s)
 
@@ -9948,6 +10263,7 @@ defmodule ExLisp.Builtins do
       _ -> ""
     end
   end
+
   def write_string(str), do: ExLisp.Stream.write_string(str, nil, [])
   def write_string(str, s), do: ExLisp.Stream.write_string(str, s, [])
   def write_string(str, s, opts), do: ExLisp.Stream.write_string(str, s, opts)
@@ -9959,6 +10275,7 @@ defmodule ExLisp.Builtins do
       _ -> ""
     end
   end
+
   def write_line(str), do: ExLisp.Stream.write_line(str, nil, [])
   def write_line(str, s), do: ExLisp.Stream.write_line(str, s, [])
   def write_line(str, s, opts), do: ExLisp.Stream.write_line(str, s, opts)
@@ -9969,6 +10286,7 @@ defmodule ExLisp.Builtins do
       _ -> raise ArgumentError, "write-sequence requires at least 2 arguments"
     end
   end
+
   def write_sequence(seq, s), do: ExLisp.Stream.write_sequence(seq, s, [])
   def write_sequence(seq, s, opts), do: ExLisp.Stream.write_sequence(seq, s, opts)
 
@@ -10014,6 +10332,7 @@ defmodule ExLisp.Builtins do
       _ -> nil
     end
   end
+
   def file_position(s), do: ExLisp.Stream.file_position(s, nil)
   def file_position(s, pos), do: ExLisp.Stream.file_position(s, pos)
 
@@ -10053,7 +10372,9 @@ defmodule ExLisp.Builtins do
   def file_namestring(args) when is_list(args), do: ExLisp.Pathname.file_namestring(args)
   def file_namestring(p), do: ExLisp.Pathname.file_namestring(p)
 
-  def directory_namestring(args) when is_list(args), do: ExLisp.Pathname.directory_namestring(args)
+  def directory_namestring(args) when is_list(args),
+    do: ExLisp.Pathname.directory_namestring(args)
+
   def directory_namestring(p), do: ExLisp.Pathname.directory_namestring(p)
 
   def host_namestring(args) when is_list(args), do: ExLisp.Pathname.host_namestring(args)
@@ -10066,6 +10387,7 @@ defmodule ExLisp.Builtins do
       _ -> ""
     end
   end
+
   def enough_namestring(p), do: ExLisp.Pathname.enough_namestring(p, nil)
   def enough_namestring(p, d), do: ExLisp.Pathname.enough_namestring(p, d)
 
@@ -10086,6 +10408,7 @@ defmodule ExLisp.Builtins do
       _ -> raise ArgumentError, "truename requires 1 argument"
     end
   end
+
   def truename(filespec), do: ExLisp.Pathname.truename(filespec)
 
   def probe_file(args) when is_list(args) do
@@ -10094,6 +10417,7 @@ defmodule ExLisp.Builtins do
       _ -> nil
     end
   end
+
   def probe_file(filespec), do: ExLisp.Pathname.probe_file(filespec)
 
   def file_author(args) when is_list(args) do
@@ -10102,6 +10426,7 @@ defmodule ExLisp.Builtins do
       _ -> nil
     end
   end
+
   def file_author(filespec), do: ExLisp.Pathname.file_author(filespec)
 
   def file_write_date(args) when is_list(args) do
@@ -10110,15 +10435,18 @@ defmodule ExLisp.Builtins do
       _ -> nil
     end
   end
+
   def file_write_date(filespec), do: ExLisp.Pathname.file_write_date(filespec)
 
   def directory, do: ExLisp.Pathname.directory("*")
+
   def directory(args) when is_list(args) do
     case args do
       [spec | _] -> ExLisp.Pathname.directory(spec)
       _ -> ExLisp.Pathname.directory("*")
     end
   end
+
   def directory(spec), do: ExLisp.Pathname.directory(spec)
 
   def user_homedir_pathname, do: ExLisp.Pathname.user_homedir_pathname()
@@ -10131,6 +10459,7 @@ defmodule ExLisp.Builtins do
       _ -> nil
     end
   end
+
   def wild_pathname_p(p), do: ExLisp.Pathname.wild_pathname_p(p, nil)
   def wild_pathname_p(p, field), do: ExLisp.Pathname.wild_pathname_p(p, field)
 
@@ -10140,6 +10469,7 @@ defmodule ExLisp.Builtins do
       _ -> nil
     end
   end
+
   def pathname_match_p(p, wild), do: ExLisp.Pathname.pathname_match_p(p, wild)
 
   # --- Concurrency & BEAM/OTP ---
@@ -10149,8 +10479,19 @@ defmodule ExLisp.Builtins do
       [f] when is_function(f, 0) ->
         Kernel.spawn(f)
 
-      [%ExLisp.Closure{fun: f}] when is_function(f, 0) ->
-        Kernel.spawn(f)
+      [f] when is_function(f) ->
+        cond do
+          is_function(f, 0) -> Kernel.spawn(f)
+          is_function(f, 1) -> Kernel.spawn(fn -> f.([]) end)
+          true -> Kernel.spawn(fn -> f.() end)
+        end
+
+      [%ExLisp.Closure{fun: f}] ->
+        cond do
+          is_function(f, 0) -> Kernel.spawn(f)
+          is_function(f, 1) -> Kernel.spawn(fn -> f.([]) end)
+          true -> Kernel.spawn(fn -> f.() end)
+        end
 
       [%ExLisp.Closure{fun: f} | call_args] when is_list(call_args) ->
         Kernel.spawn(fn ->
@@ -10160,7 +10501,7 @@ defmodule ExLisp.Builtins do
       [f | call_args] when is_function(f) and is_list(call_args) ->
         Kernel.spawn(fn ->
           if :erlang.fun_info(f, :arity) == {:arity, length(call_args)} do
-            apply(f, call_args)
+            Kernel.apply(f, call_args)
           else
             f.(call_args)
           end
@@ -10168,6 +10509,7 @@ defmodule ExLisp.Builtins do
 
       [sym | call_args] when is_atom(sym) ->
         fun = ExLisp.Env.get_fun(sym)
+
         if fun do
           spawn([fun | call_args])
         else
@@ -10180,9 +10522,26 @@ defmodule ExLisp.Builtins do
   end
 
   def spawn(f) when is_function(f, 0), do: Kernel.spawn(f)
-  def spawn(%ExLisp.Closure{fun: f}) when is_function(f, 0), do: Kernel.spawn(f)
+
+  def spawn(f) when is_function(f) do
+    cond do
+      is_function(f, 0) -> Kernel.spawn(f)
+      is_function(f, 1) -> Kernel.spawn(fn -> f.([]) end)
+      true -> Kernel.spawn(fn -> f.() end)
+    end
+  end
+
+  def spawn(%ExLisp.Closure{fun: f}) do
+    cond do
+      is_function(f, 0) -> Kernel.spawn(f)
+      is_function(f, 1) -> Kernel.spawn(fn -> f.([]) end)
+      true -> Kernel.spawn(fn -> f.() end)
+    end
+  end
+
   def spawn(sym) when is_atom(sym) do
     fun = ExLisp.Env.get_fun(sym)
+
     if fun do
       spawn(fun)
     else
@@ -10223,6 +10582,7 @@ defmodule ExLisp.Builtins do
 
       n when is_number(n) ->
         ms = Kernel.trunc(n)
+
         receive do
           msg -> msg
         after
@@ -10490,6 +10850,7 @@ defmodule ExLisp.Builtins do
       IO.puts("No matching symbols found for #{inspect(query)}.")
     else
       IO.puts("Matching symbols for #{inspect(query)}:")
+
       for sym <- syms do
         kinds = []
         kinds = if ExLisp.Env.has_var?(sym), do: ["variable" | kinds], else: kinds
@@ -10506,4 +10867,3 @@ defmodule ExLisp.Builtins do
     nil
   end
 end
-

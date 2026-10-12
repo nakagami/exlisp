@@ -101,6 +101,7 @@ defmodule ExLisp.CLOS do
 
   defp merge_cpls(lists) do
     cleaned_lists = Enum.reject(lists, &Enum.empty?/1)
+
     if Enum.empty?(cleaned_lists) do
       []
     else
@@ -120,11 +121,13 @@ defmodule ExLisp.CLOS do
         nil ->
           # Fallback: pick first head to break cycle
           [fallback_head | _] = hd(cleaned_lists)
+
           remaining =
             Enum.map(cleaned_lists, fn
               [^fallback_head | rest] -> rest
               other -> other
             end)
+
           [fallback_head | merge_cpls(remaining)]
 
         chosen ->
@@ -133,6 +136,7 @@ defmodule ExLisp.CLOS do
               [^chosen | rest] -> rest
               other -> other
             end)
+
           [chosen | merge_cpls(remaining)]
       end
     end
@@ -182,9 +186,42 @@ defmodule ExLisp.CLOS do
 
   defp parse_slots_spec(slots_spec) do
     Enum.map(slots_spec, fn
+      {:id, _pos, [name]} ->
+        norm = normalize_name(name)
+
+        {norm,
+         %{
+           name: norm,
+           initargs: [],
+           initform_fun: nil,
+           initform_ast: nil,
+           accessors: [],
+           readers: [],
+           writers: [],
+           type: :t,
+           allocation: :instance
+         }}
+
+      {:list, _pos, [name | opts]} ->
+        norm = normalize_name(name)
+        parsed_opts = parse_slot_opts(opts)
+        {norm, Map.put(parsed_opts, :name, norm)}
+
       slot_name when is_atom(slot_name) or is_binary(slot_name) ->
         norm = normalize_name(slot_name)
-        {norm, %{name: norm, initargs: [], initform_fun: nil, initform_ast: nil, accessors: [], readers: [], writers: [], type: :t, allocation: :instance}}
+
+        {norm,
+         %{
+           name: norm,
+           initargs: [],
+           initform_fun: nil,
+           initform_ast: nil,
+           accessors: [],
+           readers: [],
+           writers: [],
+           type: :t,
+           allocation: :instance
+         }}
 
       slot_def when is_list(slot_def) ->
         [name | opts] = slot_def
@@ -201,54 +238,97 @@ defmodule ExLisp.CLOS do
 
   defp parse_slot_opts(opts) do
     Enum.chunk_every(opts, 2)
-    |> Enum.reduce(%{initargs: [], initform_fun: nil, initform_ast: nil, accessors: [], readers: [], writers: [], type: :t, allocation: :instance}, fn
-      [key, val], acc ->
-        k_str = to_string(key) |> String.downcase() |> String.trim_leading(":")
-        case k_str do
-          "initarg" ->
-            norm_kw = val |> to_string() |> String.trim_leading(":") |> String.downcase() |> String.to_atom()
-            Map.update!(acc, :initargs, &[norm_kw | &1])
-
-          k when k in ["initform", "initform_fun"] ->
-            if is_function(val, 0) do
-              Map.put(acc, :initform_fun, val)
-            else
-              acc
-              |> Map.put(:initform_ast, val)
-              |> Map.put(:initform_fun, compile_initform_fun(val))
+    |> Enum.reduce(
+      %{
+        initargs: [],
+        initform_fun: nil,
+        initform_ast: nil,
+        accessors: [],
+        readers: [],
+        writers: [],
+        type: :t,
+        allocation: :instance
+      },
+      fn
+        [key, val], acc ->
+          k_str =
+            case key do
+              {:lit, k} -> to_string(k)
+              {:keyword, _, k} -> to_string(k)
+              {:id, _, [k]} -> to_string(k)
+              _ -> to_string(key)
             end
+            |> String.downcase()
+            |> String.trim_leading(":")
 
-          "accessor" ->
-            acc_name = normalize_name(val)
-            Map.update!(acc, :accessors, &[acc_name | &1])
+          case k_str do
+            "initarg" ->
+              v_val =
+                case val do
+                  {:lit, v} -> v
+                  {:keyword, _, v} -> v
+                  {:id, _, [v]} -> v
+                  {:atom, _, v} -> v
+                  _ -> val
+                end
 
-          "reader" ->
-            r_name = normalize_name(val)
-            Map.update!(acc, :readers, &[r_name | &1])
+              norm_kw =
+                case v_val do
+                  {:keyword, _, v} -> v
+                  {:id, _, [v]} -> v
+                  {:lit, v} -> v
+                  {:atom, _, v} -> v
+                  _ -> v_val
+                end
+                |> to_string()
+                |> String.trim_leading(":")
+                |> String.downcase()
+                |> String.replace("-", "_")
+                |> String.to_atom()
 
-          "writer" ->
-            w_name = normalize_name(val)
-            Map.update!(acc, :writers, &[w_name | &1])
+              Map.update!(acc, :initargs, &[norm_kw | &1])
 
-          "type" ->
-            Map.put(acc, :type, normalize_name(val))
+            k when k in ["initform", "initform_fun"] ->
+              if is_function(val, 0) do
+                Map.put(acc, :initform_fun, val)
+              else
+                acc
+                |> Map.put(:initform_ast, val)
+                |> Map.put(:initform_fun, compile_initform_fun(val))
+              end
 
-          "allocation" ->
-            Map.put(acc, :allocation, normalize_name(val))
+            "accessor" ->
+              acc_name = normalize_name(val)
+              Map.update!(acc, :accessors, &[acc_name | &1])
 
-          _ ->
-            acc
-        end
+            "reader" ->
+              r_name = normalize_name(val)
+              Map.update!(acc, :readers, &[r_name | &1])
 
-      _, acc ->
-        acc
-    end)
+            "writer" ->
+              w_name = normalize_name(val)
+              Map.update!(acc, :writers, &[w_name | &1])
+
+            "type" ->
+              Map.put(acc, :type, normalize_name(val))
+
+            "allocation" ->
+              Map.put(acc, :allocation, normalize_name(val))
+
+            _ ->
+              acc
+          end
+
+        _, acc ->
+          acc
+      end
+    )
   end
 
   defp compile_initform_fun(ast) do
     fn ->
       try do
-        LispBeam.evaluate_ast(ast)
+        ExLisp.Evaluator.eval(ast, %{}) |> ExLisp.Builtins.unwrap_mv_primary()
       rescue
         _ -> ast
       end
@@ -295,6 +375,7 @@ defmodule ExLisp.CLOS do
 
       # Readers
       readers = (slot_def[:readers] || []) ++ (slot_def[:accessors] || [])
+
       Enum.each(readers, fn r_name ->
         register_method(r_name, nil, [class_name], fn inst ->
           slot_value(inst, slot_sym)
@@ -303,8 +384,10 @@ defmodule ExLisp.CLOS do
 
       # Accessors setf
       accessors = slot_def[:accessors] || []
+
       Enum.each(accessors, fn acc_name ->
         setf_name = :"setf_#{acc_name}"
+
         register_method(setf_name, nil, [:t, class_name], fn val, inst ->
           set_slot_value(inst, slot_sym, val)
         end)
@@ -312,12 +395,14 @@ defmodule ExLisp.CLOS do
 
       # Writers
       writers = slot_def[:writers] || []
+
       Enum.each(writers, fn w_name ->
         register_method(w_name, nil, [:t, class_name], fn val, inst ->
           set_slot_value(inst, slot_sym, val)
         end)
 
         setf_name = :"setf_#{w_name}"
+
         register_method(setf_name, nil, [:t, class_name], fn val, inst ->
           set_slot_value(inst, slot_sym, val)
         end)
@@ -332,6 +417,7 @@ defmodule ExLisp.CLOS do
   """
   def make_instance(class_name_or_obj, initargs \\ []) do
     ensure_tables()
+
     class_name =
       case class_name_or_obj do
         %{name: n} -> n
@@ -381,7 +467,11 @@ defmodule ExLisp.CLOS do
     # Call initialize-instance if defined
     try do
       if generic_defined?(:initialize_instance) or generic_defined?(:"initialize-instance") do
-        init_gen_name = if generic_defined?(:initialize_instance), do: :initialize_instance, else: :"initialize-instance"
+        init_gen_name =
+          if generic_defined?(:initialize_instance),
+            do: :initialize_instance,
+            else: :"initialize-instance"
+
         apply_generic(init_gen_name, [inst, initargs])
       end
     rescue
@@ -393,7 +483,14 @@ defmodule ExLisp.CLOS do
 
   defp parse_initargs_kv(initargs) when is_map(initargs) do
     Enum.reduce(initargs, %{}, fn {k, v}, acc ->
-      norm_k = k |> to_string() |> String.trim_leading(":") |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
+      norm_k =
+        k
+        |> to_string()
+        |> String.trim_leading(":")
+        |> String.downcase()
+        |> String.replace("-", "_")
+        |> String.to_atom()
+
       Map.put(acc, norm_k, v)
     end)
   end
@@ -403,7 +500,14 @@ defmodule ExLisp.CLOS do
       Keyword.keyword?(initargs) or (initargs != [] and is_tuple(hd(initargs))) ->
         Enum.reduce(initargs, %{}, fn
           {k, v}, acc ->
-            norm_k = k |> to_string() |> String.trim_leading(":") |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
+            norm_k =
+              k
+              |> to_string()
+              |> String.trim_leading(":")
+              |> String.downcase()
+              |> String.replace("-", "_")
+              |> String.to_atom()
+
             Map.put(acc, norm_k, v)
 
           _, acc ->
@@ -414,7 +518,14 @@ defmodule ExLisp.CLOS do
         Enum.chunk_every(initargs, 2)
         |> Enum.reduce(%{}, fn
           [k, v], acc ->
-            norm_k = k |> to_string() |> String.trim_leading(":") |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
+            norm_k =
+              k
+              |> to_string()
+              |> String.trim_leading(":")
+              |> String.downcase()
+              |> String.replace("-", "_")
+              |> String.to_atom()
+
             Map.put(acc, norm_k, v)
 
           _, acc ->
@@ -422,16 +533,21 @@ defmodule ExLisp.CLOS do
         end)
     end
   end
+
   defp parse_initargs_kv(_), do: %{}
 
   def slot_value({:instance, _class, tid}, slot_name) do
     norm = normalize_slot_name(slot_name)
+
     case :ets.lookup(tid, norm) do
       [{^norm, val}] -> val
       [] -> nil
     end
   end
-  def slot_value({:struct, name, tid}, slot_name), do: ExLisp.Builtins.get_struct_slot({:struct, name, tid}, slot_name)
+
+  def slot_value({:struct, name, tid}, slot_name),
+    do: ExLisp.Builtins.get_struct_slot({:struct, name, tid}, slot_name)
+
   def slot_value(_other, _slot), do: nil
 
   def set_slot_value({:instance, _class, tid}, slot_name, val) do
@@ -439,13 +555,17 @@ defmodule ExLisp.CLOS do
     :ets.insert(tid, {norm, val})
     val
   end
-  def set_slot_value({:struct, name, tid}, slot_name, val), do: ExLisp.Builtins.set_struct_slot({:struct, name, tid}, slot_name, val)
+
+  def set_slot_value({:struct, name, tid}, slot_name, val),
+    do: ExLisp.Builtins.set_struct_slot({:struct, name, tid}, slot_name, val)
+
   def set_slot_value(_other, _slot, val), do: val
 
   def slot_boundp({:instance, _class, tid}, slot_name) do
     norm = normalize_slot_name(slot_name)
     if :ets.member(tid, norm), do: :t, else: nil
   end
+
   def slot_boundp(_other, _slot), do: nil
 
   def slot_makunbound({:instance, _class, tid} = inst, slot_name) do
@@ -453,6 +573,7 @@ defmodule ExLisp.CLOS do
     :ets.delete(tid, norm)
     inst
   end
+
   def slot_makunbound(other, _slot), do: other
 
   def slot_exists_p({:instance, class_name, _tid}, slot_name) do
@@ -460,6 +581,7 @@ defmodule ExLisp.CLOS do
     class_info = find_class(class_name)
     if class_info != nil and Map.has_key?(class_info.slots, norm), do: :t, else: nil
   end
+
   def slot_exists_p(_other, _slot), do: nil
 
   def class_of({:instance, class_name, _tid}), do: class_name
@@ -468,13 +590,15 @@ defmodule ExLisp.CLOS do
   def class_of(val) when is_float(val), do: :float
   def class_of(%ExLisp.Ratio{}), do: :ratio
   def class_of(val) when is_binary(val), do: :string
+
   def class_of(val) when is_atom(val) do
     cond do
-      val in [nil, :nil, []] -> :null
+      val in [nil, nil, []] -> :null
       ExLisp.Env.keyword?(val) -> :keyword
       true -> :symbol
     end
   end
+
   def class_of(val) when is_list(val), do: :cons
   def class_of(val) when is_map(val), do: :hash_table
   def class_of(val) when is_function(val), do: :function
@@ -483,6 +607,7 @@ defmodule ExLisp.CLOS do
   def subclassp(sub, super) do
     sub_norm = normalize_name(sub)
     super_norm = normalize_name(super)
+
     if sub_norm == super_norm do
       :t
     else
@@ -493,10 +618,12 @@ defmodule ExLisp.CLOS do
 
   def type_matches_clos?(expected_type, arg) do
     exp_norm = normalize_name(expected_type)
+
     if exp_norm in [:t, :_] do
       true
     else
       actual_class = class_of(arg)
+
       if actual_class == exp_norm do
         true
       else
@@ -569,6 +696,7 @@ defmodule ExLisp.CLOS do
 
   defp normalize_qualifier(nil), do: :primary
   defp normalize_qualifier(:primary), do: :primary
+
   defp normalize_qualifier(q) when is_atom(q) do
     case q |> Atom.to_string() |> String.downcase() |> String.trim_leading(":") do
       "before" -> :before
@@ -577,6 +705,7 @@ defmodule ExLisp.CLOS do
       _ -> :primary
     end
   end
+
   defp normalize_qualifier(_), do: :primary
 
   defp normalize_specializer({:eql, val}), do: {:eql, val}
@@ -643,6 +772,7 @@ defmodule ExLisp.CLOS do
   defp execute_primary_chain([], _args) do
     raise RuntimeError, "No more next methods in primary chain"
   end
+
   defp execute_primary_chain([head | rest], args) do
     invoke_method(head, args, rest)
   end
@@ -650,6 +780,7 @@ defmodule ExLisp.CLOS do
   defp execute_around_chain([], main_core, args) do
     main_core.(args)
   end
+
   defp execute_around_chain([head | rest], main_core, args) do
     next_around_fn = fn next_args ->
       execute_around_chain(rest, main_core, next_args)
@@ -666,6 +797,7 @@ defmodule ExLisp.CLOS do
           next_around_fn.([single_arg])
       end
     }
+
     invoke_method(head, args, [pseudo_next])
   end
 
@@ -679,7 +811,11 @@ defmodule ExLisp.CLOS do
 
     try do
       fun = method.fun
+
       cond do
+        match?(%ExLisp.Closure{}, fun) ->
+          ExLisp.Builtins.invoke_fn(fun, args)
+
         is_function(fun, length(args)) ->
           apply(fun, args)
 
@@ -753,6 +889,7 @@ defmodule ExLisp.CLOS do
   defp method_more_specific?([], [], _args), do: true
   defp method_more_specific?([], _s2, _args), do: false
   defp method_more_specific?(_s1, [], _args), do: true
+
   defp method_more_specific?([spec1 | rest1], [spec2 | rest2], [arg | rest_args]) do
     case compare_specializer(spec1, spec2, arg) do
       :greater -> true
@@ -760,6 +897,7 @@ defmodule ExLisp.CLOS do
       :equal -> method_more_specific?(rest1, rest2, rest_args)
     end
   end
+
   defp method_more_specific?([_ | rest1], [_ | rest2], []) do
     method_more_specific?(rest1, rest2, [])
   end
@@ -767,6 +905,7 @@ defmodule ExLisp.CLOS do
   defp compare_specializer(s, s, _arg), do: :equal
   defp compare_specializer({:eql, _}, _other, _arg), do: :greater
   defp compare_specializer(_other, {:eql, _}, _arg), do: :lesser
+
   defp compare_specializer(s1, s2, arg) do
     cpl = get_cpl(class_of(arg))
     idx1 = Enum.find_index(cpl, &(&1 == s1)) || 999_999
@@ -781,21 +920,41 @@ defmodule ExLisp.CLOS do
 
   # --- Helper functions ---
 
+  defp normalize_name({:id, _pos, parts}) when is_list(parts) do
+    Enum.join(parts, ".") |> normalize_name()
+  end
+
+  defp normalize_name({:lit, val}), do: normalize_name(val)
+  defp normalize_name({:keyword, _pos, val}), do: normalize_name(val)
+  defp normalize_name({:atom, _pos, val}), do: normalize_name(val)
+
   defp normalize_name(name) when is_atom(name) do
     name |> Atom.to_string() |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
   end
+
   defp normalize_name(name) when is_binary(name) do
     name |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
   end
+
   defp normalize_name(%ExLisp.Symbol{name: name}), do: normalize_name(name)
   defp normalize_name(other), do: other
+
+  defp normalize_slot_name({:id, _pos, parts}) when is_list(parts) do
+    Enum.join(parts, ".") |> normalize_slot_name()
+  end
+
+  defp normalize_slot_name({:lit, val}), do: normalize_slot_name(val)
+  defp normalize_slot_name({:keyword, _pos, val}), do: normalize_slot_name(val)
+  defp normalize_slot_name({:atom, _pos, val}), do: normalize_slot_name(val)
 
   defp normalize_slot_name(name) when is_atom(name) do
     name |> Atom.to_string() |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
   end
+
   defp normalize_slot_name(name) when is_binary(name) do
     name |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
   end
+
   defp normalize_slot_name(%ExLisp.Symbol{name: name}), do: normalize_slot_name(name)
   defp normalize_slot_name(other), do: other
 end

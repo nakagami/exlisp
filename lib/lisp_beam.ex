@@ -46,7 +46,7 @@ defmodule LispBeam do
   Dynamically compiles AST into a temporary BEAM module and executes it.
   Directly evaluates simple expressions (literals, constants, quotes, etc.) for performance.
   """
-  def evaluate_ast(ast, counter \\ nil) do
+  def evaluate_ast(ast, _counter \\ nil) do
     ExLisp.Env.ensure_env()
 
     case try_direct_eval(ast) do
@@ -54,7 +54,7 @@ defmodule LispBeam do
         val
 
       {:error, :not_simple} ->
-        evaluate_asts([ast], counter)
+        ExLisp.Evaluator.eval(ast)
     end
   end
 
@@ -178,12 +178,26 @@ defmodule LispBeam do
   end
 
   @doc """
-  Compiles and executes multiple ASTs in batch (optimizing batch execution such as file loading).
+  Evaluates multiple ASTs in batch.
   """
   def evaluate_asts(asts, counter \\ nil)
   def evaluate_asts([], _counter), do: nil
 
   def evaluate_asts(asts, counter) when is_list(asts) do
+    ExLisp.Env.ensure_env()
+
+    Enum.reduce(asts, nil, fn ast, _acc ->
+      evaluate_ast(ast, counter)
+    end)
+  end
+
+  @doc """
+  Compiles and executes multiple ASTs via BEAM bytecode compilation.
+  """
+  def compile_and_eval_asts(asts, counter \\ nil)
+  def compile_and_eval_asts([], _counter), do: nil
+
+  def compile_and_eval_asts(asts, counter) when is_list(asts) do
     ExLisp.Env.ensure_env()
 
     chunks = chunk_by_macro_defs(asts)
@@ -687,7 +701,9 @@ defmodule LispBeam do
           [inner_expr] ->
             compiled_inner = compile_expr(inner_expr, local_env)
             fun_ast = {:fun, 1, {:clauses, [{:clause, 1, [], [], [compiled_inner]}]}}
-            {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :time_eval}}, [fun_ast]}
+
+            {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :time_eval}},
+             [fun_ast]}
 
           _ ->
             compile_regular_op(op, args, local_env)
@@ -700,7 +716,9 @@ defmodule LispBeam do
 
           _ ->
             args_ast = ast_cons_list(Enum.map(args, &compile_expr(&1, local_env)))
-            {:call, 1, {:remote, 1, {:atom, 1, ExLisp.CLOS}, {:atom, 1, :call_next_method}}, [args_ast]}
+
+            {:call, 1, {:remote, 1, {:atom, 1, ExLisp.CLOS}, {:atom, 1, :call_next_method}},
+             [args_ast]}
         end
 
       name when name in [:next_method_p, :_cl_next_method_p_] ->
@@ -873,11 +891,9 @@ defmodule LispBeam do
              [
                {:clause, 1, [{:integer, 1, 0}], [], [{:atom, 1, :t}]},
                {:clause, 1, [{:float, 1, 0.0}], [], [{:atom, 1, :t}]},
-               {:clause, 1, [{:var, 1, v}],
-                [[{:op, 1, :"=:=", {:var, 1, v}, {:integer, 1, 0}}]],
+               {:clause, 1, [{:var, 1, v}], [[{:op, 1, :"=:=", {:var, 1, v}, {:integer, 1, 0}}]],
                 [{:atom, 1, :t}]},
-               {:clause, 1, [{:var, 1, v}],
-                [[{:op, 1, :"=:=", {:var, 1, v}, {:float, 1, 0.0}}]],
+               {:clause, 1, [{:var, 1, v}], [[{:op, 1, :"=:=", {:var, 1, v}, {:float, 1, 0.0}}]],
                 [{:atom, 1, :t}]},
                {:clause, 1, [{:var, 1, :_}], [], [{:atom, 1, nil}]}
              ]}
@@ -895,11 +911,12 @@ defmodule LispBeam do
             {:case, 1, c_arg,
              [
                {:clause, 1, [{:var, 1, v}],
-                [[
-                  {:call, 1, {:atom, 1, :is_number}, [{:var, 1, v}]},
-                  {:op, 1, :>, {:var, 1, v}, {:integer, 1, 0}}
-                ]],
-                [{:atom, 1, :t}]},
+                [
+                  [
+                    {:call, 1, {:atom, 1, :is_number}, [{:var, 1, v}]},
+                    {:op, 1, :>, {:var, 1, v}, {:integer, 1, 0}}
+                  ]
+                ], [{:atom, 1, :t}]},
                {:clause, 1, [{:var, 1, v}], [],
                 [
                   {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :plusp}},
@@ -920,11 +937,12 @@ defmodule LispBeam do
             {:case, 1, c_arg,
              [
                {:clause, 1, [{:var, 1, v}],
-                [[
-                  {:call, 1, {:atom, 1, :is_number}, [{:var, 1, v}]},
-                  {:op, 1, :<, {:var, 1, v}, {:integer, 1, 0}}
-                ]],
-                [{:atom, 1, :t}]},
+                [
+                  [
+                    {:call, 1, {:atom, 1, :is_number}, [{:var, 1, v}]},
+                    {:op, 1, :<, {:var, 1, v}, {:integer, 1, 0}}
+                  ]
+                ], [{:atom, 1, :t}]},
                {:clause, 1, [{:var, 1, v}], [],
                 [
                   {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :minusp}},
@@ -945,13 +963,13 @@ defmodule LispBeam do
             {:case, 1, c_arg,
              [
                {:clause, 1, [{:var, 1, v}],
-                [[
-                  {:call, 1, {:atom, 1, :is_integer}, [{:var, 1, v}]},
-                  {:op, 1, :"=:=",
-                   {:op, 1, :band, {:var, 1, v}, {:integer, 1, 1}},
-                   {:integer, 1, 0}}
-                ]],
-                [{:atom, 1, :t}]},
+                [
+                  [
+                    {:call, 1, {:atom, 1, :is_integer}, [{:var, 1, v}]},
+                    {:op, 1, :"=:=", {:op, 1, :band, {:var, 1, v}, {:integer, 1, 1}},
+                     {:integer, 1, 0}}
+                  ]
+                ], [{:atom, 1, :t}]},
                {:clause, 1, [{:var, 1, :_}], [], [{:atom, 1, nil}]}
              ]}
 
@@ -968,13 +986,13 @@ defmodule LispBeam do
             {:case, 1, c_arg,
              [
                {:clause, 1, [{:var, 1, v}],
-                [[
-                  {:call, 1, {:atom, 1, :is_integer}, [{:var, 1, v}]},
-                  {:op, 1, :"=:=",
-                   {:op, 1, :band, {:var, 1, v}, {:integer, 1, 1}},
-                   {:integer, 1, 1}}
-                ]],
-                [{:atom, 1, :t}]},
+                [
+                  [
+                    {:call, 1, {:atom, 1, :is_integer}, [{:var, 1, v}]},
+                    {:op, 1, :"=:=", {:op, 1, :band, {:var, 1, v}, {:integer, 1, 1}},
+                     {:integer, 1, 1}}
+                  ]
+                ], [{:atom, 1, :t}]},
                {:clause, 1, [{:var, 1, :_}], [], [{:atom, 1, nil}]}
              ]}
 
@@ -1247,10 +1265,16 @@ defmodule LispBeam do
             compile_regular_op(op, args, local_env)
         end
 
-      name when name in [:with_condition_restarts, :"with-condition-restarts", :_cl_with_condition_restarts_] ->
+      name
+      when name in [
+             :with_condition_restarts,
+             :"with-condition-restarts",
+             :_cl_with_condition_restarts_
+           ] ->
         case args do
           [_cond_node, _restarts_node | body_nodes] ->
             compile_progn(body_nodes, local_env)
+
           _ ->
             {:atom, 1, nil}
         end
@@ -1706,7 +1730,7 @@ defmodule LispBeam do
     end
   end
 
-  defp normalize_quote_symbol(str) do
+  def normalize_quote_symbol(str) do
     cond do
       String.starts_with?(str, "|") ->
         String.to_atom(str)
@@ -2194,8 +2218,12 @@ defmodule LispBeam do
     end
   end
 
-  defp extract_deftype_params({:list, _pos, elems}), do: Enum.map(elems, &extract_symbol_or_spec/1)
-  defp extract_deftype_params({:quoted, _pos, elems}), do: Enum.map(elems, &extract_symbol_or_spec/1)
+  defp extract_deftype_params({:list, _pos, elems}),
+    do: Enum.map(elems, &extract_symbol_or_spec/1)
+
+  defp extract_deftype_params({:quoted, _pos, elems}),
+    do: Enum.map(elems, &extract_symbol_or_spec/1)
+
   defp extract_deftype_params([]), do: []
   defp extract_deftype_params(nil), do: []
   defp extract_deftype_params(other), do: [extract_symbol_or_spec(other)]
@@ -2203,6 +2231,7 @@ defmodule LispBeam do
   defp extract_symbol_or_spec({:list, _pos, [var, def_val | _]}) do
     [extract_symbol_name(var), eval_ast_to_lit(def_val)]
   end
+
   defp extract_symbol_or_spec(node), do: extract_symbol_name(node)
 
   defp eval_ast_to_lit({:lit, v}), do: v
@@ -2504,7 +2533,7 @@ defmodule LispBeam do
      [compiled_val]}
   end
 
-  defp split_declarations(forms) do
+  def split_declarations(forms) do
     Enum.split_while(forms, fn
       {:list, _pos, [{:id, _pos2, [name]} | _]} ->
         String.downcase(name) == "declare"
@@ -2681,16 +2710,16 @@ defmodule LispBeam do
     end)
   end
 
-  defp extract_bindings({:list, _pos, elements}),
+  def extract_bindings({:list, _pos, elements}),
     do: elements |> Enum.reject(&(&1 in [nil, {:lit, nil}])) |> Enum.map(&parse_single_binding/1)
 
-  defp extract_bindings({:quoted, _pos, elements}),
+  def extract_bindings({:quoted, _pos, elements}),
     do: elements |> Enum.reject(&(&1 in [nil, {:lit, nil}])) |> Enum.map(&parse_single_binding/1)
 
-  defp extract_bindings(elements) when is_list(elements),
+  def extract_bindings(elements) when is_list(elements),
     do: elements |> Enum.reject(&(&1 in [nil, {:lit, nil}])) |> Enum.map(&parse_single_binding/1)
 
-  defp extract_bindings(_), do: []
+  def extract_bindings(_), do: []
 
   defp parse_single_binding({:list, _pos, [var_node, val_node | _]}) do
     {extract_symbol_name(var_node), val_node}
@@ -2791,6 +2820,7 @@ defmodule LispBeam do
       end)
 
     fn_names = Enum.map(fn_defs, &elem(&1, 0))
+
     new_local_env =
       Enum.reduce(fn_defs, local_env, fn {name, params_node, _}, env ->
         if has_lambda_list_keywords?(params_node) do
@@ -2928,16 +2958,16 @@ defmodule LispBeam do
 
   def compile_labels([], _local_env), do: {:atom, 1, nil}
 
-  defp extract_fn_bindings({:list, _pos, elements}),
+  def extract_fn_bindings({:list, _pos, elements}),
     do: Enum.map(elements, &parse_single_fn_binding/1)
 
-  defp extract_fn_bindings({:quoted, _pos, elements}),
+  def extract_fn_bindings({:quoted, _pos, elements}),
     do: Enum.map(elements, &parse_single_fn_binding/1)
 
-  defp extract_fn_bindings(elements) when is_list(elements),
+  def extract_fn_bindings(elements) when is_list(elements),
     do: Enum.map(elements, &parse_single_fn_binding/1)
 
-  defp extract_fn_bindings(_), do: []
+  def extract_fn_bindings(_), do: []
 
   defp parse_single_fn_binding({:list, _pos, [name_node, params_node | body_nodes]}) do
     {extract_symbol_name(name_node), params_node, body_nodes}
@@ -3147,7 +3177,8 @@ defmodule LispBeam do
               [target_node | rest_args] ->
                 arg_vars =
                   Enum.map(rest_args, fn _ ->
-                    {:id, 1, ["__#{prefix}_arg_#{System.unique_integer([:positive, :monotonic])}"]}
+                    {:id, 1,
+                     ["__#{prefix}_arg_#{System.unique_integer([:positive, :monotonic])}"]}
                   end)
 
                 arg_bindings =
@@ -3185,7 +3216,8 @@ defmodule LispBeam do
               :error ->
                 arg_vars =
                   Enum.map(acc_args, fn _ ->
-                    {:id, 1, ["__#{prefix}_arg_#{System.unique_integer([:positive, :monotonic])}"]}
+                    {:id, 1,
+                     ["__#{prefix}_arg_#{System.unique_integer([:positive, :monotonic])}"]}
                   end)
 
                 arg_bindings =
@@ -3398,7 +3430,10 @@ defmodule LispBeam do
 
         compile_expr(
           {:list, 1,
-           [{:id, 1, ["progn"]} | init_forms ++ [{:list, 1, [{:id, 1, ["setf"]}, last_form, val_node]}]]},
+           [
+             {:id, 1, ["progn"]}
+             | init_forms ++ [{:list, 1, [{:id, 1, ["setf"]}, last_form, val_node]}]
+           ]},
           local_env
         )
 
@@ -3407,12 +3442,22 @@ defmodule LispBeam do
           name when name in [:documentation, :_cl_documentation_] ->
             case place_args do
               [target_node, type_node] ->
-                {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_documentation}},
-                 [compile_expr(target_node, local_env), compile_expr(type_node, local_env), compile_expr(val_node, local_env)]}
+                {:call, 1,
+                 {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_documentation}},
+                 [
+                   compile_expr(target_node, local_env),
+                   compile_expr(type_node, local_env),
+                   compile_expr(val_node, local_env)
+                 ]}
 
               [target_node] ->
-                {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_documentation}},
-                 [compile_expr(target_node, local_env), {:atom, 1, :function}, compile_expr(val_node, local_env)]}
+                {:call, 1,
+                 {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_documentation}},
+                 [
+                   compile_expr(target_node, local_env),
+                   {:atom, 1, :function},
+                   compile_expr(val_node, local_env)
+                 ]}
 
               _ ->
                 compile_setq([place, val_node], local_env)
@@ -3934,7 +3979,8 @@ defmodule LispBeam do
                    {:match, 1, {:var, 1, arr_var}, compile_expr(arr_node, local_env)},
                    {:match, 1, {:var, 1, idx_var}, compile_expr(idx_node, local_env)},
                    {:match, 1, {:var, 1, val_var}, compile_expr(val_node, local_env)},
-                   {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_row_major_aref}},
+                   {:call, 1,
+                    {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_row_major_aref}},
                     [{:var, 1, arr_var}, {:var, 1, idx_var}, {:var, 1, val_var}]}
                  ]}
 
@@ -4004,8 +4050,7 @@ defmodule LispBeam do
                    idx_matches ++
                    [
                      val_match,
-                     {:call, 1,
-                      {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_aref}},
+                     {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_aref}},
                       [{:var, 1, arr_var}, idx_cons, {:var, 1, val_var}]}
                    ]}
 
@@ -4240,8 +4285,7 @@ defmodule LispBeam do
                 rem_op = "c" <> rem_mid <> "r"
 
                 {:ok,
-                 {:list, 1,
-                  [{:id, 1, [first_op]}, {:list, 1, [{:id, 1, [rem_op]}, target_node]}]}}
+                 {:list, 1, [{:id, 1, [first_op]}, {:list, 1, [{:id, 1, [rem_op]}, target_node]}]}}
               else
                 :error
               end
@@ -4515,10 +4559,16 @@ defmodule LispBeam do
       |> Enum.reject(&is_nil/1)
 
     handlers_list_ast = ast_cons_list(handlers_ast)
-    body_exprs = if body_nodes == [], do: [{:atom, 1, nil}], else: Enum.map(body_nodes, &compile_expr(&1, local_env))
+
+    body_exprs =
+      if body_nodes == [],
+        do: [{:atom, 1, nil}],
+        else: Enum.map(body_nodes, &compile_expr(&1, local_env))
+
     body_fun = {:fun, 1, {:clauses, [{:clause, 1, [], [], body_exprs}]}}
 
-    {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Condition}, {:atom, 1, :push_handlers}}, [handlers_list_ast, body_fun]}
+    {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Condition}, {:atom, 1, :push_handlers}},
+     [handlers_list_ast, body_fun]}
   end
 
   def compile_handler_case([expr_node | clauses], local_env) do
@@ -4556,9 +4606,17 @@ defmodule LispBeam do
             _ -> :_
           end
 
-        erl_err_var = if err_var_name == :_, do: {:var, 1, :_}, else: {:var, 1, erl_var_name(err_var_name)}
-        handler_env = if err_var_name == :_, do: local_env, else: MapSet.put(local_env, err_var_name)
-        handler_exprs = if handler_body == [], do: [{:atom, 1, nil}], else: Enum.map(handler_body, &compile_expr(&1, handler_env))
+        erl_err_var =
+          if err_var_name == :_, do: {:var, 1, :_}, else: {:var, 1, erl_var_name(err_var_name)}
+
+        handler_env =
+          if err_var_name == :_, do: local_env, else: MapSet.put(local_env, err_var_name)
+
+        handler_exprs =
+          if handler_body == [],
+            do: [{:atom, 1, nil}],
+            else: Enum.map(handler_body, &compile_expr(&1, handler_env))
+
         handler_fun = {:fun, 1, {:clauses, [{:clause, 1, [erl_err_var], [], handler_exprs}]}}
 
         {:tuple, 1, [{:atom, 1, type_name}, handler_fun]}
@@ -4585,14 +4643,20 @@ defmodule LispBeam do
             end
 
           noerr_env = Enum.reduce(params, local_env, &MapSet.put(&2, &1))
-          noerr_exprs = if noerr_body == [], do: [{:atom, 1, nil}], else: Enum.map(noerr_body, &compile_expr(&1, noerr_env))
+
+          noerr_exprs =
+            if noerr_body == [],
+              do: [{:atom, 1, nil}],
+              else: Enum.map(noerr_body, &compile_expr(&1, noerr_env))
+
           {:fun, 1, {:clauses, [{:clause, 1, erl_params, [], noerr_exprs}]}}
 
         _ ->
           {:atom, 1, nil}
       end
 
-    {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Condition}, {:atom, 1, :run_handler_case}}, [body_fun, clauses_list_ast, no_error_ast]}
+    {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Condition}, {:atom, 1, :run_handler_case}},
+     [body_fun, clauses_list_ast, no_error_ast]}
   end
 
   def compile_restart_bind([bindings_node | body_nodes], local_env) do
@@ -4609,18 +4673,22 @@ defmodule LispBeam do
         {:list, _, [name_node, fn_node | _]} ->
           name = extract_symbol_name(name_node)
           compiled_fn = compile_expr(fn_node, local_env)
-          {:map, 1, [
-            {:map_field_assoc, 1, {:atom, 1, :name}, {:atom, 1, name}},
-            {:map_field_assoc, 1, {:atom, 1, :fun}, compiled_fn}
-          ]}
+
+          {:map, 1,
+           [
+             {:map_field_assoc, 1, {:atom, 1, :name}, {:atom, 1, name}},
+             {:map_field_assoc, 1, {:atom, 1, :fun}, compiled_fn}
+           ]}
 
         [name_node, fn_node | _] ->
           name = extract_symbol_name(name_node)
           compiled_fn = compile_expr(fn_node, local_env)
-          {:map, 1, [
-            {:map_field_assoc, 1, {:atom, 1, :name}, {:atom, 1, name}},
-            {:map_field_assoc, 1, {:atom, 1, :fun}, compiled_fn}
-          ]}
+
+          {:map, 1,
+           [
+             {:map_field_assoc, 1, {:atom, 1, :name}, {:atom, 1, name}},
+             {:map_field_assoc, 1, {:atom, 1, :fun}, compiled_fn}
+           ]}
 
         _ ->
           nil
@@ -4628,10 +4696,16 @@ defmodule LispBeam do
       |> Enum.reject(&is_nil/1)
 
     restarts_list_ast = ast_cons_list(restarts_ast)
-    body_exprs = if body_nodes == [], do: [{:atom, 1, nil}], else: Enum.map(body_nodes, &compile_expr(&1, local_env))
+
+    body_exprs =
+      if body_nodes == [],
+        do: [{:atom, 1, nil}],
+        else: Enum.map(body_nodes, &compile_expr(&1, local_env))
+
     body_fun = {:fun, 1, {:clauses, [{:clause, 1, [], [], body_exprs}]}}
 
-    {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Condition}, {:atom, 1, :push_restarts}}, [restarts_list_ast, body_fun]}
+    {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Condition}, {:atom, 1, :push_restarts}},
+     [restarts_list_ast, body_fun]}
   end
 
   def compile_restart_case([expr_node | clauses], local_env) do
@@ -4661,14 +4735,28 @@ defmodule LispBeam do
 
         erl_params = Enum.map(params, fn p -> {:var, 1, erl_var_name(p)} end)
         handler_env = Enum.reduce(params, local_env, &MapSet.put(&2, &1))
-        handler_exprs = if handler_body == [], do: [{:atom, 1, nil}], else: Enum.map(handler_body, &compile_expr(&1, handler_env))
+
+        handler_exprs =
+          if handler_body == [],
+            do: [{:atom, 1, nil}],
+            else: Enum.map(handler_body, &compile_expr(&1, handler_env))
+
         handler_fun = {:fun, 1, {:clauses, [{:clause, 1, erl_params, [], handler_exprs}]}}
 
         report_ast =
           case Keyword.get(options, :report) do
-            nil -> {:atom, 1, nil}
-            rep_node when is_binary(rep_node) -> {:bin, 1, [{:bin_element, 1, {:string, 1, :erlang.binary_to_list(rep_node)}, :default, :default}]}
-            rep_node -> compile_expr(rep_node, local_env)
+            nil ->
+              {:atom, 1, nil}
+
+            rep_node when is_binary(rep_node) ->
+              {:bin, 1,
+               [
+                 {:bin_element, 1, {:string, 1, :erlang.binary_to_list(rep_node)}, :default,
+                  :default}
+               ]}
+
+            rep_node ->
+              compile_expr(rep_node, local_env)
           end
 
         test_ast =
@@ -4677,20 +4765,22 @@ defmodule LispBeam do
             test_node -> compile_expr(test_node, local_env)
           end
 
-        {:map, 1, [
-          {:map_field_assoc, 1, {:atom, 1, :name}, {:atom, 1, name}},
-          {:map_field_assoc, 1, {:atom, 1, :fun}, handler_fun},
-          {:map_field_assoc, 1, {:atom, 1, :report}, report_ast},
-          {:map_field_assoc, 1, {:atom, 1, :test}, test_ast}
-        ]}
+        {:map, 1,
+         [
+           {:map_field_assoc, 1, {:atom, 1, :name}, {:atom, 1, name}},
+           {:map_field_assoc, 1, {:atom, 1, :fun}, handler_fun},
+           {:map_field_assoc, 1, {:atom, 1, :report}, report_ast},
+           {:map_field_assoc, 1, {:atom, 1, :test}, test_ast}
+         ]}
       end)
 
     clauses_list_ast = ast_cons_list(clauses_ast)
 
-    {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Condition}, {:atom, 1, :run_restart_case}}, [body_fun, clauses_list_ast]}
+    {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Condition}, {:atom, 1, :run_restart_case}},
+     [body_fun, clauses_list_ast]}
   end
 
-  def compile_with_simple_restart(args, local_env) do
+  def expand_with_simple_restart(args) do
     case args do
       [restart_spec | body_nodes] ->
         {name_node, format_args} =
@@ -4731,8 +4821,7 @@ defmodule LispBeam do
              {:list, 1, []}
              | report_opt ++
                  [
-                   {:list, 1,
-                    [{:id, 1, ["values"]}, {:lit, nil}, {:lit, :t}]}
+                   {:list, 1, [{:id, 1, ["values"]}, {:lit, nil}, {:lit, :t}]}
                  ]
            ]}
 
@@ -4742,11 +4831,15 @@ defmodule LispBeam do
             _ -> {:list, 1, [{:id, 1, ["progn"]} | body_nodes]}
           end
 
-        compile_restart_case([body_expr_node, restart_clause], local_env)
+        {:list, 1, [{:id, 1, ["restart-case"]}, body_expr_node, restart_clause]}
 
       _ ->
         {:atom, 1, nil}
     end
+  end
+
+  def compile_with_simple_restart(args, local_env) do
+    compile_expr(expand_with_simple_restart(args), local_env)
   end
 
   def compile_with_mutex(args, local_env) do
@@ -4764,12 +4857,10 @@ defmodule LispBeam do
         got_var = {:id, 1, ["__mutex_got_#{uid}"]}
 
         grab_call =
-          {:list, 1,
-           [{:id, 1, ["sb-thread:grab-mutex"]}, mutex_var | options]}
+          {:list, 1, [{:id, 1, ["sb-thread:grab-mutex"]}, mutex_var | options]}
 
         release_call =
-          {:list, 1,
-           [{:id, 1, ["sb-thread:release-mutex"]}, mutex_var]}
+          {:list, 1, [{:id, 1, ["sb-thread:release-mutex"]}, mutex_var]}
 
         body_expr =
           case body_nodes do
@@ -4813,6 +4904,7 @@ defmodule LispBeam do
   end
 
   defp do_parse_restart_opts([], acc), do: {acc, []}
+
   defp do_parse_restart_opts([{:keyword, _, kw_str}, v_node | rest], acc) do
     norm =
       kw_str
@@ -4826,8 +4918,10 @@ defmodule LispBeam do
       {acc, [{:keyword, 1, kw_str}, v_node | rest]}
     end
   end
+
   defp do_parse_restart_opts([k_node, v_node | rest], acc) do
     key_sym = extract_symbol_name(k_node)
+
     norm =
       key_sym
       |> Atom.to_string()
@@ -4841,6 +4935,7 @@ defmodule LispBeam do
       {acc, [k_node, v_node | rest]}
     end
   end
+
   defp do_parse_restart_opts(other, acc), do: {acc, other}
 
   defp wrap_block_nil(local_env, callback) do
@@ -4871,7 +4966,7 @@ defmodule LispBeam do
      ], []}
   end
 
-  def compile_do([bindings_node, test_clause | body_nodes], local_env) do
+  def expand_do([bindings_node, test_clause | body_nodes]) do
     bindings = parse_do_bindings(bindings_node)
     {end_test_node, result_nodes} = parse_do_test_clause(test_clause)
 
@@ -4912,28 +5007,29 @@ defmodule LispBeam do
     fn_def = {:list, 1, [loop_fn_sym, {:list, 1, var_nodes}, if_expr]}
     initial_call = {:list, 1, [loop_fn_sym | var_nodes]}
 
-    ast =
-      {:list, 1,
-       [
-         {:id, 1, ["block"]},
-         {:atom, 1, nil},
-         {:list, 1,
-          [
-            {:id, 1, ["let"]},
-            {:list, 1, let_bindings},
-            {:list, 1,
-             [
-               {:id, 1, ["labels"]},
-               {:list, 1, [fn_def]},
-               initial_call
-             ]}
-          ]}
-       ]}
-
-    compile_expr(ast, local_env)
+    {:list, 1,
+     [
+       {:id, 1, ["block"]},
+       {:atom, 1, nil},
+       {:list, 1,
+        [
+          {:id, 1, ["let"]},
+          {:list, 1, let_bindings},
+          {:list, 1,
+           [
+             {:id, 1, ["labels"]},
+             {:list, 1, [fn_def]},
+             initial_call
+           ]}
+        ]}
+     ]}
   end
 
-  def compile_do_star([bindings_node, test_clause | body_nodes], local_env) do
+  def compile_do(args, local_env) do
+    compile_expr(expand_do(args), local_env)
+  end
+
+  def expand_do_star([bindings_node, test_clause | body_nodes]) do
     bindings = parse_do_bindings(bindings_node)
     {end_test_node, result_nodes} = parse_do_test_clause(test_clause)
 
@@ -4984,25 +5080,26 @@ defmodule LispBeam do
     fn_def = {:list, 1, [loop_fn_sym, {:list, 1, var_nodes}, if_expr]}
     initial_call = {:list, 1, [loop_fn_sym | var_nodes]}
 
-    ast =
-      {:list, 1,
-       [
-         {:id, 1, ["block"]},
-         {:atom, 1, nil},
-         {:list, 1,
-          [
-            {:id, 1, ["let*"]},
-            {:list, 1, let_bindings},
-            {:list, 1,
-             [
-               {:id, 1, ["labels"]},
-               {:list, 1, [fn_def]},
-               initial_call
-             ]}
-          ]}
-       ]}
+    {:list, 1,
+     [
+       {:id, 1, ["block"]},
+       {:atom, 1, nil},
+       {:list, 1,
+        [
+          {:id, 1, ["let*"]},
+          {:list, 1, let_bindings},
+          {:list, 1,
+           [
+             {:id, 1, ["labels"]},
+             {:list, 1, [fn_def]},
+             initial_call
+           ]}
+        ]}
+     ]}
+  end
 
-    compile_expr(ast, local_env)
+  def compile_do_star(args, local_env) do
+    compile_expr(expand_do_star(args), local_env)
   end
 
   defp to_id_node({:id, _, _} = n), do: n
@@ -5671,6 +5768,7 @@ defmodule LispBeam do
   def compile_defparameter([var_node, val_node | rest], local_env) do
     var_name = extract_symbol_name(var_node)
     compiled_val = compile_expr(val_node, local_env)
+
     doc_str =
       case rest do
         [doc | _] -> extract_docstring(doc)
@@ -5685,7 +5783,15 @@ defmodule LispBeam do
       {:block, 1,
        [
          {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_documentation}},
-          [{:atom, 1, var_name}, {:atom, 1, :variable}, {:bin, 1, [{:bin_element, 1, {:string, 1, :erlang.binary_to_list(doc_str)}, :default, :default}]}]},
+          [
+            {:atom, 1, var_name},
+            {:atom, 1, :variable},
+            {:bin, 1,
+             [
+               {:bin_element, 1, {:string, 1, :erlang.binary_to_list(doc_str)}, :default,
+                :default}
+             ]}
+          ]},
          put_var_call
        ]}
     else
@@ -5712,6 +5818,7 @@ defmodule LispBeam do
     var_name = extract_symbol_name(var_node)
     compiled_val = compile_expr(val_node, local_env)
     lazy_fun = {:fun, 1, {:clauses, [{:clause, 1, [], [], [compiled_val]}]}}
+
     doc_str =
       case rest do
         [doc | _] -> extract_docstring(doc)
@@ -5726,7 +5833,15 @@ defmodule LispBeam do
       {:block, 1,
        [
          {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_documentation}},
-          [{:atom, 1, var_name}, {:atom, 1, :variable}, {:bin, 1, [{:bin_element, 1, {:string, 1, :erlang.binary_to_list(doc_str)}, :default, :default}]}]},
+          [
+            {:atom, 1, var_name},
+            {:atom, 1, :variable},
+            {:bin, 1,
+             [
+               {:bin_element, 1, {:string, 1, :erlang.binary_to_list(doc_str)}, :default,
+                :default}
+             ]}
+          ]},
          defvar_call
        ]}
     else
@@ -5736,6 +5851,7 @@ defmodule LispBeam do
 
   def compile_defun([name_node, params_node | body_nodes], local_env) do
     fun_name = extract_symbol_name(name_node)
+
     {doc_str, effective_body_nodes} =
       case body_nodes do
         [doc | rest] when rest != [] ->
@@ -5780,7 +5896,15 @@ defmodule LispBeam do
         {:block, 1,
          [
            {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_documentation}},
-            [{:atom, 1, fun_name}, {:atom, 1, :function}, {:bin, 1, [{:bin_element, 1, {:string, 1, :erlang.binary_to_list(doc_str)}, :default, :default}]}]},
+            [
+              {:atom, 1, fun_name},
+              {:atom, 1, :function},
+              {:bin, 1,
+               [
+                 {:bin_element, 1, {:string, 1, :erlang.binary_to_list(doc_str)}, :default,
+                  :default}
+               ]}
+            ]},
            put_fun_call
          ]}
       else
@@ -5810,8 +5934,12 @@ defmodule LispBeam do
 
       compiled_body =
         case effective_body_nodes do
-          [] -> init_erases ++ [{:atom, 1, nil}]
-          _ -> init_erases ++ [compile_block([{:atom, 1, fun_name} | effective_body_nodes], new_local_env)]
+          [] ->
+            init_erases ++ [{:atom, 1, nil}]
+
+          _ ->
+            init_erases ++
+              [compile_block([{:atom, 1, fun_name} | effective_body_nodes], new_local_env)]
         end
 
       erl_params = Enum.map(param_names, fn p -> {:var, 1, erl_var_name(p)} end)
@@ -5826,7 +5954,15 @@ defmodule LispBeam do
         {:block, 1,
          [
            {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_documentation}},
-            [{:atom, 1, fun_name}, {:atom, 1, :function}, {:bin, 1, [{:bin_element, 1, {:string, 1, :erlang.binary_to_list(doc_str)}, :default, :default}]}]},
+            [
+              {:atom, 1, fun_name},
+              {:atom, 1, :function},
+              {:bin, 1,
+               [
+                 {:bin_element, 1, {:string, 1, :erlang.binary_to_list(doc_str)}, :default,
+                  :default}
+               ]}
+            ]},
            put_fun_call
          ]}
       else
@@ -5985,9 +6121,7 @@ defmodule LispBeam do
           case k_atom do
             k when k in [:initform, :_cl_initform_] ->
               initform_fun_ast =
-                {:fun, 1,
-                 {:clauses,
-                  [{:clause, 1, [], [], [compile_expr(v_node, local_env)]}]}}
+                {:fun, 1, {:clauses, [{:clause, 1, [], [], [compile_expr(v_node, local_env)]}]}}
 
               [{:atom, 1, :initform_fun}, initform_fun_ast]
 
@@ -6139,7 +6273,14 @@ defmodule LispBeam do
       {:list, _pos, [p, {:list, _, [{:id, _, [eql_name]}, val_node]} | _]}
       when eql_name in ["eql", "EQL"] ->
         p_name = extract_symbol_name(p)
-        val = try do evaluate_ast(val_node) rescue _ -> nil end
+
+        val =
+          try do
+            evaluate_ast(val_node)
+          rescue
+            _ -> nil
+          end
+
         spec_ast = {:tuple, 1, [{:atom, 1, :eql}, compile_expr(val_node, local_env)]}
         {p_name, spec_ast, {:eql, val}}
 
@@ -6354,7 +6495,7 @@ defmodule LispBeam do
     end
   end
 
-  defp has_lambda_list_keywords?(params_node) do
+  def has_lambda_list_keywords?(params_node) do
     elems =
       case params_node do
         {:list, _pos, es} -> es
@@ -6396,6 +6537,11 @@ defmodule LispBeam do
       _ -> str
     end
   end
+
+  def extract_symbol_name({:atom, _pos, val}), do: val
+  def extract_symbol_name({:keyword, _pos, val}), do: extract_symbol_name(val)
+  def extract_symbol_name({:lit, _pos, val}), do: extract_symbol_name(val)
+  def extract_symbol_name(nil), do: nil
 
   def extract_symbol_name({:id, _pos, [name]}) when is_binary(name) do
     if String.starts_with?(name, "|") or String.starts_with?(name, ":|") do
@@ -6561,7 +6707,7 @@ defmodule LispBeam do
     end
   end
 
-  defp normalize_remote_op({:id, _pos, parts}) when is_list(parts) and length(parts) >= 2 do
+  def normalize_remote_op({:id, _pos, parts}) when is_list(parts) and length(parts) >= 2 do
     mod = Enum.drop(parts, -1) |> build_module_atom()
     fun = List.last(parts) |> String.to_atom()
 
@@ -6572,7 +6718,7 @@ defmodule LispBeam do
     end
   end
 
-  defp normalize_remote_op({:id, _pos, [name]}) when is_binary(name) do
+  def normalize_remote_op({:id, _pos, [name]}) when is_binary(name) do
     if String.contains?(name, ".") or String.contains?(name, ":") do
       parts = String.split(name, ~r/[:.]/) |> Enum.reject(&(&1 == ""))
 
@@ -6593,9 +6739,9 @@ defmodule LispBeam do
     end
   end
 
-  defp normalize_remote_op({:lit, atom}) when is_atom(atom), do: normalize_atom_remote_op(atom)
-  defp normalize_remote_op(op) when is_atom(op), do: normalize_atom_remote_op(op)
-  defp normalize_remote_op(op), do: op
+  def normalize_remote_op({:lit, atom}) when is_atom(atom), do: normalize_atom_remote_op(atom)
+  def normalize_remote_op(op) when is_atom(op), do: normalize_atom_remote_op(op)
+  def normalize_remote_op(op), do: op
 
   defp normalize_atom_remote_op(atom) do
     str = Atom.to_string(atom)
@@ -7327,7 +7473,12 @@ defmodule LispBeam do
   defp compile_defpackage(args, local_env) do
     case args do
       [pkg_node | opt_nodes] ->
-        pkg_name = extract_symbol_name(pkg_node) |> to_string() |> clean_uninterned_name() |> String.trim_leading(":")
+        pkg_name =
+          extract_symbol_name(pkg_node)
+          |> to_string()
+          |> clean_uninterned_name()
+          |> String.trim_leading(":")
+
         opts_ast =
           Enum.map(opt_nodes, fn
             {:list, _, opt_elems} ->
@@ -7335,11 +7486,13 @@ defmodule LispBeam do
                 {:keyword, _, kw} -> kw
                 node -> extract_symbol_name(node) |> to_string() |> clean_uninterned_name()
               end)
+
             {:quoted, _, opt_elems} ->
               Enum.map(opt_elems, fn
                 {:keyword, _, kw} -> kw
                 node -> extract_symbol_name(node) |> to_string() |> clean_uninterned_name()
               end)
+
             other ->
               other
           end)
@@ -7352,7 +7505,9 @@ defmodule LispBeam do
 
         pkg_beam = compile_expr({:lit, pkg_name}, local_env)
         opts_beam = compile_quote(ExLisp.Macro.lisp_data_to_ast(opts_ast))
-        {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Package}, {:atom, 1, :defpackage}}, [pkg_beam, opts_beam]}
+
+        {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Package}, {:atom, 1, :defpackage}},
+         [pkg_beam, opts_beam]}
 
       _ ->
         {:atom, 1, :t}
@@ -7362,7 +7517,12 @@ defmodule LispBeam do
   defp compile_in_package(args, local_env) do
     case args do
       [pkg_node | _] ->
-        pkg_name = extract_symbol_name(pkg_node) |> to_string() |> clean_uninterned_name() |> String.trim_leading(":")
+        pkg_name =
+          extract_symbol_name(pkg_node)
+          |> to_string()
+          |> clean_uninterned_name()
+          |> String.trim_leading(":")
+
         try do
           ExLisp.Package.set_current_package(pkg_name)
         rescue
@@ -7370,7 +7530,9 @@ defmodule LispBeam do
         end
 
         pkg_beam = compile_expr({:lit, pkg_name}, local_env)
-        {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Package}, {:atom, 1, :set_current_package}}, [pkg_beam]}
+
+        {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Package}, {:atom, 1, :set_current_package}},
+         [pkg_beam]}
 
       _ ->
         {:atom, 1, :t}

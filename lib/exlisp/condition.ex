@@ -83,6 +83,7 @@ defmodule ExLisp.Condition do
   """
   def define_condition(name, parent_types, slots, options \\ []) do
     init_condition_hierarchy()
+
     parents =
       cond do
         parent_types == [] or parent_types == nil -> [:condition]
@@ -145,6 +146,7 @@ defmodule ExLisp.Condition do
   def is_condition?({:instance, class_name, _tid}) do
     ExLisp.CLOS.subclassp(class_name, :condition) == :t
   end
+
   def is_condition?(_), do: false
 
   # --- Handlers Stack Management ---
@@ -220,6 +222,7 @@ defmodule ExLisp.Condition do
     cond_obj = coerce_to_condition(datum, args, :simple_warning)
 
     muffle_tag = make_ref()
+
     muffle_restart = %{
       name: :muffle_warning,
       fun: fn -> throw({:muffle_warning_invoked, muffle_tag}) end,
@@ -259,6 +262,7 @@ defmodule ExLisp.Condition do
     cond_obj = coerce_to_condition(datum, args, :simple_error)
 
     cont_tag = make_ref()
+
     cont_restart = %{
       name: :continue,
       fun: fn -> throw({:continue_invoked, cont_tag}) end,
@@ -269,6 +273,7 @@ defmodule ExLisp.Condition do
             is_function(continue_control, 0) -> continue_control.()
             true -> to_string(continue_control)
           end
+
         IO.write(stream, msg)
       end,
       test: fn _ -> true end
@@ -284,14 +289,16 @@ defmodule ExLisp.Condition do
   end
 
   defp search_and_invoke_handler([], _cond_obj, _skipped), do: nil
+
   defp search_and_invoke_handler([handler | rest], cond_obj, skipped) do
     %{type: type, fun: fun} = handler
 
     if condition_matches_type?(cond_obj, type) do
       # Temporarily pop current handler while invoking it
       Process.put(:exlisp_condition_handlers, Enum.reverse(skipped) ++ rest)
+
       try do
-        fun.(cond_obj)
+        ExLisp.Builtins.invoke_fn(fun, [cond_obj])
       after
         Process.put(:exlisp_condition_handlers, Enum.reverse(skipped) ++ [handler | rest])
       end
@@ -331,25 +338,28 @@ defmodule ExLisp.Condition do
           make_condition(norm, args)
         else
           flat_args = flatten_args(args)
-          make_condition(default_type, [
+
+          make_condition(default_type,
             format_control: Atom.to_string(datum),
             format_arguments: flat_args
-          ])
+          )
         end
 
       is_binary(datum) ->
         flat_args = flatten_args(args)
-        make_condition(default_type, [
+
+        make_condition(default_type,
           format_control: datum,
           format_arguments: flat_args
-        ])
+        )
 
       true ->
         flat_args = flatten_args(args)
-        make_condition(default_type, [
+
+        make_condition(default_type,
           format_control: inspect(datum),
           format_arguments: flat_args
-        ])
+        )
     end
   end
 
@@ -377,6 +387,7 @@ defmodule ExLisp.Condition do
         format_string(ctrl, args)
     end
   end
+
   def format_condition(other), do: inspect(other)
 
   defp format_string(ctrl, args) when is_binary(ctrl) do
@@ -384,8 +395,10 @@ defmodule ExLisp.Condition do
       ctrl
     else
       flat_args = if is_list(args), do: args, else: [args]
+
       Enum.reduce(flat_args, ctrl, fn arg, acc ->
         arg_str = ExLisp.to_repl_display(arg) |> inspect()
+
         if String.contains?(acc, "~a") or String.contains?(acc, "~A") do
           Regex.replace(~r/~[aA]/, acc, to_string(arg), global: false)
         else
@@ -394,6 +407,7 @@ defmodule ExLisp.Condition do
       end)
     end
   end
+
   defp format_string(other, _), do: to_string(other)
 
   # --- Restart Operations ---
@@ -515,17 +529,42 @@ defmodule ExLisp.Condition do
           cond do
             String.starts_with?(msg, "Unbound variable: ") ->
               var_str = String.replace_prefix(msg, "Unbound variable: ", "")
-              var_sym = try do String.to_atom(var_str) rescue _ -> var_str end
-              make_condition(:unbound_variable, [name: var_sym, format_control: msg, format_arguments: []])
+
+              var_sym =
+                try do
+                  String.to_atom(var_str)
+                rescue
+                  _ -> var_str
+                end
+
+              make_condition(:unbound_variable,
+                name: var_sym,
+                format_control: msg,
+                format_arguments: []
+              )
+
             String.starts_with?(msg, "Undefined function: ") ->
               fn_str = String.replace_prefix(msg, "Undefined function: ", "")
-              fn_sym = try do String.to_atom(fn_str) rescue _ -> fn_str end
-              make_condition(:undefined_function, [name: fn_sym, format_control: msg, format_arguments: []])
+
+              fn_sym =
+                try do
+                  String.to_atom(fn_str)
+                rescue
+                  _ -> fn_str
+                end
+
+              make_condition(:undefined_function,
+                name: fn_sym,
+                format_control: msg,
+                format_arguments: []
+              )
+
             true ->
-              make_condition(:simple_error, [format_control: msg, format_arguments: []])
+              make_condition(:simple_error, format_control: msg, format_arguments: [])
           end
 
         matching = Enum.find(clauses, fn {t, _} -> condition_matches_type?(cond_obj, t) end)
+
         if matching do
           {_t, handler_fn} = matching
           handler_fn.(cond_obj)
@@ -534,8 +573,9 @@ defmodule ExLisp.Condition do
         end
 
       :error, ex ->
-        cond_obj = make_condition(:error, [format_control: inspect(ex), format_arguments: []])
+        cond_obj = make_condition(:error, format_control: inspect(ex), format_arguments: [])
         matching = Enum.find(clauses, fn {t, _} -> condition_matches_type?(cond_obj, t) end)
+
         if matching do
           {_t, handler_fn} = matching
           handler_fn.(cond_obj)
@@ -579,13 +619,17 @@ defmodule ExLisp.Condition do
     catch
       {^tag, handler_fn, args} ->
         arg_list = if is_list(args), do: args, else: [args]
+
         cond do
           is_function(handler_fn, length(arg_list)) ->
             apply(handler_fn, arg_list)
+
           is_function(handler_fn, 1) ->
             handler_fn.(arg_list)
+
           is_function(handler_fn, 0) ->
             handler_fn.()
+
           true ->
             apply(handler_fn, arg_list)
         end
@@ -632,9 +676,11 @@ defmodule ExLisp.Condition do
   def normalize_name(name) when is_atom(name) do
     name |> Atom.to_string() |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
   end
+
   def normalize_name(name) when is_binary(name) do
     name |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
   end
+
   def normalize_name(%ExLisp.Symbol{name: name}), do: normalize_name(name)
   def normalize_name(other), do: other
 
@@ -651,7 +697,9 @@ defmodule ExLisp.Condition do
   def arithmetic_error_operation(cond_obj), do: get_condition_slot(cond_obj, :operation)
   def arithmetic_error_operands(cond_obj), do: get_condition_slot(cond_obj, :operands)
   def simple_condition_format_control(cond_obj), do: get_condition_slot(cond_obj, :format_control)
-  def simple_condition_format_arguments(cond_obj), do: get_condition_slot(cond_obj, :format_arguments)
+
+  def simple_condition_format_arguments(cond_obj),
+    do: get_condition_slot(cond_obj, :format_arguments)
 
   defp get_condition_slot(cond_obj, slot_name) do
     case cond_obj do

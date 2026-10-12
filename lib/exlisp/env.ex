@@ -363,7 +363,7 @@ defmodule ExLisp.Env do
         _ -> []
       end
 
-    padded_vals = val_list ++ Stream.repeatedly(fn -> nil end) |> Enum.take(length(sym_list))
+    padded_vals = (val_list ++ Stream.repeatedly(fn -> nil end)) |> Enum.take(length(sym_list))
     bindings = Enum.zip(sym_list, padded_vals)
 
     with_special_bindings(bindings, fun)
@@ -403,13 +403,16 @@ defmodule ExLisp.Env do
       var_name in posix_argv_names or Enum.any?(cands, &(&1 in posix_argv_names)) ->
         true
 
-      Map.has_key?(@predefined_vars, var_name) or Enum.any?(cands, &Map.has_key?(@predefined_vars, &1)) ->
+      Map.has_key?(@predefined_vars, var_name) or
+          Enum.any?(cands, &Map.has_key?(@predefined_vars, &1)) ->
         true
 
       :persistent_term.get({:exlisp_var, var_name}, :__not_found__) != :__not_found__ ->
         true
 
-      Enum.any?(cands, fn c -> :persistent_term.get({:exlisp_var, c}, :__not_found__) != :__not_found__ end) ->
+      Enum.any?(cands, fn c ->
+        :persistent_term.get({:exlisp_var, c}, :__not_found__) != :__not_found__
+      end) ->
         true
 
       true ->
@@ -456,7 +459,9 @@ defmodule ExLisp.Env do
 
     try do
       curr_pkg = ExLisp.Package.current_package()
-      if curr_pkg != nil and not String.contains?(name_str, ".") and not String.contains?(name_str, ":") do
+
+      if curr_pkg != nil and not String.contains?(name_str, ".") and
+           not String.contains?(name_str, ":") do
         pkg_name = to_string(curr_pkg) |> String.downcase()
         pkg_h = String.replace(pkg_name, "_", "-")
         :persistent_term.put({:exlisp_fun, :"#{pkg_name}.#{fun_name}"}, fun)
@@ -611,6 +616,7 @@ defmodule ExLisp.Env do
 
     try do
       curr_pkg = ExLisp.Package.current_package()
+
       if curr_pkg != nil do
         name_str = Atom.to_string(fun_name)
         pkg_name = to_string(curr_pkg) |> String.downcase()
@@ -634,7 +640,8 @@ defmodule ExLisp.Env do
   Registers a macro function (for defmacro).
   Returns the macro name.
   """
-  def put_macro(name, macro_fun) when is_function(macro_fun) do
+  def put_macro(name, macro_fun)
+      when is_function(macro_fun) or is_struct(macro_fun, ExLisp.Closure) do
     ensure_env()
     macro_name = normalize_name(name)
     key = {:exlisp_macro, macro_name}
@@ -648,7 +655,9 @@ defmodule ExLisp.Env do
 
     try do
       curr_pkg = ExLisp.Package.current_package()
-      if curr_pkg != nil and not String.contains?(name_str, ".") and not String.contains?(name_str, ":") do
+
+      if curr_pkg != nil and not String.contains?(name_str, ".") and
+           not String.contains?(name_str, ":") do
         pkg_name = to_string(curr_pkg) |> String.downcase()
         pkg_h = String.replace(pkg_name, "_", "-")
         :persistent_term.put({:exlisp_macro, :"#{pkg_name}.#{macro_name}"}, macro_fun)
