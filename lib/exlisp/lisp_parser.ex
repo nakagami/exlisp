@@ -219,6 +219,31 @@ defmodule ExLisp.LispParser do
     read_radix_number(rest, b, line, acc, -1)
   end
 
+  # Array literal (#A(...) / #a(...))
+  defp tokenize_chars([?#, a | rest], line, acc) when a in [?a, ?A] do
+    tokenize_chars(rest, line, [{:array_rank, line, nil} | acc])
+  end
+
+  # Number-prefixed dispatch macros (#nA, #nR, #n*)
+  defp tokenize_chars([?#, d | rest], line, acc) when d >= ?0 and d <= ?9 do
+    {num_digits, after_num} = read_digits([d | rest], [])
+    n = List.to_string(num_digits) |> String.to_integer()
+
+    case after_num do
+      [a | after_a] when a in [?a, ?A] ->
+        tokenize_chars(after_a, line, [{:array_rank, line, n} | acc])
+
+      [r | after_r] when r in [?r, ?R] ->
+        read_explicit_radix_number(after_r, n, line, acc, 1)
+
+      [?* | after_star] ->
+        read_sized_bit_vector(after_star, n, line, acc)
+
+      _ ->
+        {:error, "invalid dispatch macro ##{n} at line #{line}"}
+    end
+  end
+
   # Quote ('form)
   defp tokenize_chars([?' | rest], line, acc) do
     tokenize_chars(rest, line, [{:quote, line} | acc])
@@ -383,6 +408,64 @@ defmodule ExLisp.LispParser do
           {:error, "unknown character literal #\\#{name} at line #{line}"}
         end
     end
+  end
+
+  defp read_digits([d | rest], acc) when d >= ?0 and d <= ?9 do
+    read_digits(rest, [d | acc])
+  end
+
+  defp read_digits(rest, acc), do: {Enum.reverse(acc), rest}
+
+  defp read_explicit_radix_number(chars, radix, line, acc, sign) do
+    if radix < 2 or radix > 36 do
+      {:error, "illegal radix ##{radix}r at line #{line}"}
+    else
+      {digits_chars, rest} = read_token_chars(chars, [])
+      digits = List.to_string(digits_chars)
+
+      case Integer.parse(digits, radix) do
+        {val, ""} ->
+          tokenize_chars(rest, line, [{:int, line, val * sign} | acc])
+
+        _ ->
+          {:error, "invalid radix integer ##{radix}r#{digits} at line #{line}"}
+      end
+    end
+  end
+
+  defp read_sized_bit_vector(chars, size, line, acc) do
+    {bit_chars, rem} = read_token_chars(chars, [])
+    bit_str = List.to_string(bit_chars)
+
+    parsed_bits =
+      if bit_str == "" do
+        []
+      else
+        String.graphemes(bit_str)
+        |> Enum.map(fn
+          "1" -> 1
+          _ -> 0
+        end)
+      end
+
+    padded_bits =
+      cond do
+        size == 0 ->
+          []
+
+        length(parsed_bits) == 0 ->
+          List.duplicate(0, size)
+
+        length(parsed_bits) >= size ->
+          Enum.take(parsed_bits, size)
+
+        true ->
+          last_bit = List.last(parsed_bits)
+          pad_count = size - length(parsed_bits)
+          parsed_bits ++ List.duplicate(last_bit, pad_count)
+      end
+
+    tokenize_chars(rem, line, [{:bit_vector, line, padded_bits} | acc])
   end
 
   # Read radix number (#b, #o, #x)
@@ -695,7 +778,47 @@ defmodule ExLisp.LispParser do
 
   defp parse_expr([{:bit_vector, line, bits} | rest]) do
     elem_nodes = Enum.map(bits, fn b -> {:lit, b} end)
-    {:ok, {:list, line, [{:id, line, ["vector"]} | elem_nodes]}, rest}
+
+    ast =
+      {:list, line,
+       [
+         {:id, line, ["make-array"]},
+         {:lit, length(bits)},
+         {:keyword, line, :element_type},
+         {:list, line, [{:id, line, ["quote"]}, {:id, line, ["bit"]}]},
+         {:keyword, line, :initial_contents},
+         {:list, line, [{:id, line, ["quote"]}, {:list, line, elem_nodes}]}
+       ]}
+
+    {:ok, ast, rest}
+  end
+
+  # Array literal (#nA(...) or #A(...))
+  defp parse_expr([{:array_rank, line, rank} | rest]) do
+    case parse_expr(rest) do
+      {:ok, contents_expr, rem} ->
+        rank_node = if rank != nil, do: {:lit, rank}, else: {:lit, nil}
+
+        quoted_contents =
+          case contents_expr do
+            {:list, _, [{:id, _, ["quote"]}, _]} -> contents_expr
+            {:lit, _} -> contents_expr
+            _ -> {:list, line, [{:id, line, ["quote"]}, contents_expr]}
+          end
+
+        ast =
+          {:list, line,
+           [
+             {:id, line, ["make-array-from-contents"]},
+             quoted_contents,
+             rank_node
+           ]}
+
+        {:ok, ast, rem}
+
+      err ->
+        err
+    end
   end
 
   # Read-time eval (#.form)

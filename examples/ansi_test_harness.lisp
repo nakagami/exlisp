@@ -36,7 +36,6 @@
     count-list.9 count-vector.9 count-filled-vector.9 count-bit-vector.11
     count-if-list.12 count-if-vector.12 count-if-nonsimple-vector.12 count-if.special-vector.4 count-if-bit-vector.12 count-if-string.12
     count-if-not-list.12 count-if-not-vector.12 count-if-not-nonsimple-vector.12 count-if-not.special-vector.4 count-if-not-bit-vector.12 count-if-not-string.12
-    elt.1 elt.1a elt.1b elt.2 elt.5a elt.7 elt.8 elt.9 elt.11 elt.13 elt.14 elt.15 elt.16 elt.17 elt.18 elt.19 elt-v.1 elt-v.7 elt-v.8 elt-v.9 elt-v.13 elt-adj-array.1 elt-adj-array.7 elt-adj-array.8 elt-adj-array.9 elt-adj-array.13 elt-displaced-array.1 elt-fill-pointer.3 elt-fill-pointer.4 elt-fill-pointer.6 elt-fill-pointer.8
     fill.string.1 fill.string.2 fill.string.3 fill.string.4 fill.string.5 fill.string.6 fill.string.7 fill.string.8 fill.string.10 fill.bit-vector.5 fill.bit-vector.6 fill.bit-vector.7 fill.bit-vector.8 fill.bit-vector.9
     array-string-fill.1 array-string-fill.2 array-string-fill.3 array-string-fill.4 array-string-fill.5
     make-sequence.49 make-sequence.50 make-sequence.51 make-sequence.52 make-sequence.53 make-sequence.54 make-sequence.55 make-sequence.56 make-sequence.57 make-sequence.58
@@ -50,7 +49,6 @@
     random_remove_duplicates random_delete_duplicates remove-duplicates.2 remove-duplicates.2a remove-duplicates.3 remove-duplicates.3a remove-duplicates.4 remove-duplicates.5 delete-duplicates.2 delete-duplicates.2a delete-duplicates.3 delete-duplicates.3a delete-duplicates.4 delete-duplicates.5
     replace-list.1 replace-list.2 replace-list.3 replace-list.4 replace-list.5 replace-list.6 replace-list.8 replace-list.9 replace-list.10 replace-list.11 replace-list.12 replace-list.13 replace-list.14 replace-list.15 replace-list.16 replace-list.17 replace-list.18 replace-list.19 replace-list.20 replace-string.1 replace-string.2 replace-string.3 replace-string.4 replace-string.5 replace-string.6 replace-string.8 replace-string.9 replace-string.10 replace-string.11 replace-string.12 replace-string.13 replace-string.14 replace-string.15 replace-string.16 replace-string.17 replace-string.18 replace-string.19 replace-string.21
     sort-vector.4 sort-vector.10 sort-string.1 sort-string.2 stable-sort-vector.4 stable-sort-vector.10 stable-sort-string.1 stable-sort-string.2
-    subseq-list.6 subseq-vector.1 subseq-vector.2 subseq-vector.3 subseq-vector.4 subseq-vector.5 subseq-vector.6 subseq-bit-vector.1 subseq-bit-vector.2 subseq-bit-vector.3
     substitute-string.19 substitute-string.20 substitute-string.21 substitute-string.22 substitute-string.23
     nstring-upcase.1 nstring-upcase.2 nstring-upcase.13
     nstring-downcase.1 nstring-downcase.2 nstring-downcase.13
@@ -337,6 +335,52 @@
 
 (defun append-6-body ()
   0)
+
+(defun make-int-array (n &optional (fn #'make-array))
+  (let ((a (if (functionp fn)
+               (funcall fn n)
+               (make-array n))))
+    (dotimes (i n a)
+      (setf (aref a i) i))))
+
+(defun elt-v-6-body ()
+  (let ((x (make-int-list 1000)))
+    (let ((a (make-array '(1000) :initial-contents x)))
+      (loop
+          for i from 0 to 999 do
+            (unless (eql i (elt a i)) (return nil))
+          finally (return t)))))
+
+(defun make-adj-array (n &key initial-contents)
+  (if initial-contents
+      (make-array n :adjustable t :initial-contents initial-contents)
+      (make-array n :adjustable t)))
+
+(defun elt-adj-array-6-body ()
+  (let ((x (make-int-list 1000)))
+    (let ((a (make-adj-array '(1000) :initial-contents x)))
+      (loop
+          for i from 0 to 999 do
+            (unless (eql i (elt a i)) (return nil))
+          finally (return t)))))
+
+(defparameter *displaced* (make-int-array 100000))
+
+(defun make-displaced-array (n displacement)
+  (make-array n :displaced-to *displaced*
+              :displaced-index-offset displacement))
+
+(defmacro do-special-strings ((var string-form &optional ret-form) &body forms)
+  `(let ((,var ,string-form))
+     ,@forms
+     ,ret-form))
+
+(defmacro do-special-integer-vectors ((var vec-form &optional ret-form) &body forms)
+  `(let ((,var ,vec-form))
+     ,@forms
+     ,ret-form))
+
+
 
 (defun eqt (x y)
   (if (eq x y) t nil))

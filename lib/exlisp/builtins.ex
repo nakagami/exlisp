@@ -6480,6 +6480,54 @@ defmodule ExLisp.Builtins do
 
   def make_array(dims), do: make_array([dims])
 
+  @doc """
+  Constructs an array from nested initial-contents and an optional rank.
+  Used by reader array literals like #2A((1 2) (3 4)).
+  """
+  def make_array_from_contents(contents, rank) do
+    dims =
+      cond do
+        rank == 0 ->
+          []
+
+        rank == 1 ->
+          [length(seq_to_list(contents))]
+
+        rank != nil and is_integer(rank) and rank > 1 ->
+          infer_dimensions(contents, rank)
+
+        true ->
+          infer_dimensions(contents, nil)
+      end
+
+    make_array([dims, :initial_contents, contents])
+  end
+
+  def make_array_from_contents([contents, rank]), do: make_array_from_contents(contents, rank)
+  def make_array_from_contents([contents]), do: make_array_from_contents(contents, nil)
+  def make_array_from_contents(contents), do: make_array_from_contents(contents, nil)
+
+  defp infer_dimensions(contents, nil) do
+    cond do
+      is_list(contents) and contents != [] ->
+        [length(contents) | infer_dimensions(hd(contents), nil)]
+
+      true ->
+        []
+    end
+  end
+
+  defp infer_dimensions(contents, depth) when depth > 0 do
+    list = seq_to_list(contents)
+
+    case list do
+      [] -> [0 | List.duplicate(0, depth - 1)]
+      [first | _] -> [length(list) | infer_dimensions(first, depth - 1)]
+    end
+  end
+
+  defp infer_dimensions(_contents, 0), do: []
+
   defp flatten_initial_contents(contents, dims) do
     cond do
       is_binary(contents) ->
