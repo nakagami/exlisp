@@ -1451,6 +1451,16 @@ defmodule ExLisp.Builtins do
     (to_string_val(x) == y) |> lisp_bool()
   end
 
+  def equal({:array, [_], _} = x, {:array, [_], _} = y) do
+    if length(x) == length(y) do
+      l1 = seq_to_list(x)
+      l2 = seq_to_list(y)
+      equal(l1, l2)
+    else
+      nil
+    end
+  end
+
   def equal({:array, d1, _} = x, {:array, d2, _} = y) do
     if d1 == d2 do
       l1 = seq_to_list(x)
@@ -5859,6 +5869,7 @@ defmodule ExLisp.Builtins do
           val = aref([arr, idx])
 
           cond do
+            match?(%ExLisp.Character{}, val) -> val.code
             is_integer(val) and val >= 0 and val <= 0x10FFFF -> val
             is_binary(val) and byte_size(val) > 0 -> hd(String.to_charlist(val))
             true -> throw({:not_char, val})
@@ -6543,7 +6554,7 @@ defmodule ExLisp.Builtins do
   defp flatten_initial_contents(contents, dims) do
     cond do
       is_binary(contents) ->
-        String.to_charlist(contents)
+        seq_to_list(contents)
 
       length(dims) <= 1 ->
         if is_list(contents), do: contents, else: seq_to_list(contents)
@@ -6559,7 +6570,7 @@ defmodule ExLisp.Builtins do
 
   defp flatten_multidim_contents(contents, _depth) do
     cond do
-      is_binary(contents) -> String.to_charlist(contents)
+      is_binary(contents) -> seq_to_list(contents)
       is_list(contents) -> contents
       true -> [contents]
     end

@@ -49,16 +49,24 @@
     random_remove_duplicates random_delete_duplicates remove-duplicates.2 remove-duplicates.2a remove-duplicates.3 remove-duplicates.3a remove-duplicates.4 remove-duplicates.5 delete-duplicates.2 delete-duplicates.2a delete-duplicates.3 delete-duplicates.3a delete-duplicates.4 delete-duplicates.5
     replace-list.1 replace-list.2 replace-list.3 replace-list.4 replace-list.5 replace-list.6 replace-list.8 replace-list.9 replace-list.10 replace-list.11 replace-list.12 replace-list.13 replace-list.14 replace-list.15 replace-list.16 replace-list.17 replace-list.18 replace-list.19 replace-list.20 replace-string.1 replace-string.2 replace-string.3 replace-string.4 replace-string.5 replace-string.6 replace-string.8 replace-string.9 replace-string.10 replace-string.11 replace-string.12 replace-string.13 replace-string.14 replace-string.15 replace-string.16 replace-string.17 replace-string.18 replace-string.19 replace-string.21
     sort-vector.4 sort-vector.10 sort-string.1 sort-string.2 stable-sort-vector.4 stable-sort-vector.10 stable-sort-string.1 stable-sort-string.2
+    subseq-list.6
     substitute-string.19 substitute-string.20 substitute-string.21 substitute-string.22 substitute-string.23
     nstring-upcase.1 nstring-upcase.2 nstring-upcase.13
     nstring-downcase.1 nstring-downcase.2 nstring-downcase.13
     nstring-capitalize.1 nstring-capitalize.2 nstring-capitalize.4 nstring-capitalize.14))
 
+(defun %normalize-expected-val (val)
+  (cond
+    ((and (consp val) (member (car val) '(make_array make-array make_array_from_contents make-array-from-contents)))
+     (eval val))
+    (t val)))
+
 (defun %values-equal (actual-list expected-list)
   (if (and (null actual-list) (null expected-list))
       t
       (if (= (length actual-list) (length expected-list))
-          (every #'equal actual-list expected-list)
+          (every #'(lambda (a e) (equal a (%normalize-expected-val e)))
+                 actual-list expected-list)
           nil)))
 
 (defun strip-test-keywords (args)
@@ -106,6 +114,10 @@
                        (setq *test-failed-count* (+ *test-failed-count* 1))
                        (setq *failed-test-names* (cons _test_name_ *failed-test-names*))
                        (format t "[FAIL] ~S: got ~S, expected ~S~%" _test_name_ _actual_list_ _expected_)))))))))
+
+(defmacro assert (test-form &rest rest-args)
+  `(unless ,test-form
+     (error (format nil "Assertion failed: ~S" ',test-form))))
 
 (defmacro def-fold-test (name form)
   `(deftest ,name nil nil))

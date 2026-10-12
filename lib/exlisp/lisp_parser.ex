@@ -782,7 +782,7 @@ defmodule ExLisp.LispParser do
     ast =
       {:list, line,
        [
-         {:id, line, ["make-array"]},
+         {:id, line, ["make_array"]},
          {:lit, length(bits)},
          {:keyword, line, :element_type},
          {:list, line, [{:id, line, ["quote"]}, {:id, line, ["bit"]}]},
@@ -809,7 +809,7 @@ defmodule ExLisp.LispParser do
         ast =
           {:list, line,
            [
-             {:id, line, ["make-array-from-contents"]},
+             {:id, line, ["make_array_from_contents"]},
              quoted_contents,
              rank_node
            ]}
