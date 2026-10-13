@@ -2776,7 +2776,7 @@ defmodule LispBeam do
               [{:clause, 1, [{:var, 1, erl_var_name(raw_args_sym)}], [], compiled_body}]}}
 
           {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Closure}, {:atom, 1, :new}},
-           [raw_fun, {:atom, 1, fn_name}]}
+           [raw_fun, {:atom, 1, fn_name}, {:atom, 1, true}]}
         else
           param_names = extract_param_names(params_node)
           lexical_params = Enum.reject(param_names, &(&1 in specials))
@@ -2872,7 +2872,7 @@ defmodule LispBeam do
               {:fun, 1, {:clauses, [{:clause, 1, [{:var, 1, args_var}], [], [call_dispatcher]}]}}
 
             {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Closure}, {:atom, 1, :new}},
-             [raw_closure_fun, {:atom, 1, name}]}
+             [raw_closure_fun, {:atom, 1, name}, {:atom, 1, true}]}
           end)
 
         dispatcher_clauses =
@@ -3074,7 +3074,7 @@ defmodule LispBeam do
         {:fun, 1,
          {:clauses, [{:clause, 1, [{:var, 1, erl_var_name(raw_args_sym)}], [], compiled_body}]}}
 
-      {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Closure}, {:atom, 1, :new}}, [raw_fun]}
+      {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Closure}, {:atom, 1, :new}}, [raw_fun, {:atom, 1, nil}, {:atom, 1, true}]}
     else
       param_names = extract_param_names(params_node)
       mutated = find_mutated_vars(body_nodes)
@@ -5982,7 +5982,7 @@ defmodule LispBeam do
 
       wrapped_closure =
         {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Closure}, {:atom, 1, :new}},
-         [fun_expr, {:atom, 1, fun_name}]}
+         [fun_expr, {:atom, 1, fun_name}, {:atom, 1, true}]}
 
       put_fun_call =
         {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Env}, {:atom, 1, :put_fun}},

@@ -360,6 +360,11 @@ defmodule ExLisp.Evaluator do
             if doc_str, do: Builtins.set_documentation(fun_sym, :function, doc_str)
             closure = create_closure(params_node, effective_body, env, fun_sym)
             Env.put_fun(fun_sym, closure)
+            defun_name_node = case name_node do
+              {:id, _, _} -> name_node
+              _ -> {:id, 1, [Atom.to_string(fun_sym)]}
+            end
+            Env.put_fun_ast(fun_sym, {:list, 1, [{:id, 1, ["defun"]}, defun_name_node, params_node | effective_body]})
             fun_sym
 
           _ ->
@@ -2975,6 +2980,7 @@ defmodule ExLisp.Evaluator do
   def create_closure(params_node, body_nodes, captured_env, name \\ nil) do
     tag = {:block, name, make_ref()}
     snapshotted_env = snapshot_env(captured_env)
+    lambda_ast = {:list, 1, [{:id, 1, ["lambda"]}, params_node | body_nodes]}
 
     if LispBeam.has_lambda_list_keywords?(params_node) do
       # Use Macro.build_bindings to expand &optional, &rest, &key, etc.
@@ -3002,7 +3008,7 @@ defmodule ExLisp.Evaluator do
         end
       end
 
-      ExLisp.Closure.new(fun, name)
+      ExLisp.Closure.new(fun, name, ast: lambda_ast, env: snapshotted_env, params: params_node, body: body_nodes, compiled: false)
     else
       param_names = LispBeam.extract_param_names(params_node)
 
@@ -3037,7 +3043,7 @@ defmodule ExLisp.Evaluator do
         6 -> fn a, b, c, d, e, f -> base_fun.([a, b, c, d, e, f]) end
         7 -> fn a, b, c, d, e, f, g -> base_fun.([a, b, c, d, e, f, g]) end
         8 -> fn a, b, c, d, e, f, g, h -> base_fun.([a, b, c, d, e, f, g, h]) end
-        _ -> ExLisp.Closure.new(base_fun, name)
+        _ -> ExLisp.Closure.new(base_fun, name, ast: lambda_ast, env: snapshotted_env, params: params_node, body: body_nodes, compiled: false)
       end
     end
   end

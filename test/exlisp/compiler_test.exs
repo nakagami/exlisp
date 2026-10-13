@@ -95,4 +95,26 @@ defmodule ExLisp.CompilerTest do
       assert apply(mod, :count_down, [10, 0]) == 55
     end
   end
+
+  describe "Common Lisp compile and compiled-function-p" do
+    test "compiles lambda directly to BEAM code" do
+      ExLisp.eval("(defparameter *fn* (compile nil '(lambda (x) (* x 3))))")
+      assert ExLisp.eval("(funcall *fn* 7)") == 21
+      assert ExLisp.eval("(compiled-function-p *fn*)") == :t
+    end
+
+    test "compiles named function in environment" do
+      ExLisp.eval("(defun add-five (x) (+ x 5))")
+      assert ExLisp.eval("(add-five 10)") == 15
+      assert ExLisp.eval("(compile 'add-five)") == :add_five
+      assert ExLisp.eval("(add-five 10)") == 15
+      assert ExLisp.eval("(compiled-function-p #'add-five)") == :t
+    end
+
+    test "compiles named function with lambda definition" do
+      assert ExLisp.eval("(compile 'square '(lambda (x) (* x x)))") == :square
+      assert ExLisp.eval("(square 6)") == 36
+      assert ExLisp.eval("(compiled-function-p #'square)") == :t
+    end
+  end
 end

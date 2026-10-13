@@ -371,10 +371,18 @@ defmodule ExLisp.Type do
     end
   end
 
-  defp do_typep(val, type) when type in [:function, :compiled_function] do
+  defp do_typep(val, :function) do
     is_function(val) or match?(%ExLisp.Closure{}, val) or
       (is_atom(val) and val not in [nil, :t, :nil, :false, :true] and
          (BuiltinFunction.builtin?(val) or ExLisp.Env.has_fun?(val)))
+  end
+
+  defp do_typep(val, :compiled_function) do
+    (is_function(val) and not match?(%ExLisp.Closure{}, val)) or
+      match?(%ExLisp.Closure{compiled: true}, val) or
+      (is_atom(val) and val not in [nil, :t, :nil, :false, :true] and
+         (BuiltinFunction.builtin?(val) or
+            (ExLisp.Env.has_fun?(val) and compiled_fun_val?(ExLisp.Env.get_fun(val)))))
   end
 
   defp do_typep(val, :package), do: match?(%ExLisp.Package{}, val)
@@ -599,6 +607,11 @@ defmodule ExLisp.Type do
   end
 
   defp do_typep(_val, _type), do: false
+
+  defp compiled_fun_val?(fun) do
+    (is_function(fun) and not match?(%ExLisp.Closure{}, fun)) or
+      match?(%ExLisp.Closure{compiled: true}, fun)
+  end
 
   defp simple_array_type_check({:array, _, tid}) do
     case :ets.lookup(tid, :__meta__) do

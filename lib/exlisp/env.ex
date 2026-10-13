@@ -85,7 +85,7 @@ defmodule ExLisp.Env do
     ensure_env()
 
     for {{tag, _} = key, _} <- :persistent_term.get(),
-        tag in [:exlisp_var, :exlisp_fun, :exlisp_macro] do
+        tag in [:exlisp_var, :exlisp_fun, :exlisp_macro, :exlisp_fun_ast] do
       :persistent_term.erase(key)
     end
 
@@ -542,6 +542,39 @@ defmodule ExLisp.Env do
     else
       :error
     end
+  end
+
+  @doc """
+  Stores the AST source of a function for compilation or inspection.
+  """
+  def put_fun_ast(name, ast) do
+    ensure_env()
+    fun_name = normalize_name(name)
+    key = {:exlisp_fun_ast, fun_name}
+    :persistent_term.put(key, ast)
+
+    name_str = Atom.to_string(fun_name)
+    h_name = String.replace(name_str, "_", "-") |> String.to_atom()
+    u_name = String.replace(name_str, "-", "_") |> String.to_atom()
+    :persistent_term.put({:exlisp_fun_ast, h_name}, ast)
+    :persistent_term.put({:exlisp_fun_ast, u_name}, ast)
+
+    ast
+  end
+
+  @doc """
+  Retrieves the AST source of a function.
+  """
+  def get_fun_ast(name) do
+    fun_name = normalize_name(name)
+    candidates = symbol_lookup_candidates(fun_name)
+
+    Enum.find_value(candidates, fn cand ->
+      case :persistent_term.get({:exlisp_fun_ast, cand}, :__not_found__) do
+        :__not_found__ -> nil
+        ast -> ast
+      end
+    end)
   end
 
   @doc """

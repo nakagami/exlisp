@@ -5271,18 +5271,45 @@ defmodule ExLisp.Builtins do
   def compile(args) when is_list(args) do
     case args do
       [n, definition | _] when n in [nil, []] ->
-        ast = ExLisp.Macro.lisp_data_to_ast(definition)
-        LispBeam.evaluate_ast(ast)
+        compiled_fun = compile_definition_to_beam(definition)
+        values(compiled_fun, nil, nil)
 
       [name, definition | _] ->
-        ast = ExLisp.Macro.lisp_data_to_ast(definition)
-        fun = LispBeam.evaluate_ast(ast)
+        compiled_res = compile_definition_to_beam(definition, name)
         sym_name = normalize_sym_prop(name)
-        ExLisp.Env.put_fun(sym_name, fun)
-        name
+
+        if is_function(compiled_res) or is_struct(compiled_res, ExLisp.Closure) do
+          ExLisp.Env.put_fun(sym_name, compiled_res)
+        end
+
+        values(name, nil, nil)
 
       [name] ->
-        name
+        sym_name = normalize_sym_prop(name)
+
+        case ExLisp.Env.get_fun_ast(sym_name) do
+          nil ->
+            case ExLisp.Env.get_fun(sym_name) do
+              %ExLisp.Closure{ast: ast} when ast != nil ->
+                compiled_res = compile_ast_to_beam(ast, sym_name)
+
+                if is_function(compiled_res) or is_struct(compiled_res, ExLisp.Closure) do
+                  ExLisp.Env.put_fun(sym_name, compiled_res)
+                end
+
+              _ ->
+                :ok
+            end
+
+          ast ->
+            compiled_res = compile_ast_to_beam(ast, sym_name)
+
+            if is_function(compiled_res) or is_struct(compiled_res, ExLisp.Closure) do
+              ExLisp.Env.put_fun(sym_name, compiled_res)
+            end
+        end
+
+        values(name, nil, nil)
 
       _ ->
         nil
@@ -5291,6 +5318,46 @@ defmodule ExLisp.Builtins do
 
   def compile(name), do: compile([name])
   def compile(name, definition), do: compile([name, definition])
+
+  defp compile_definition_to_beam(definition, name \\ nil) do
+    case definition do
+      %ExLisp.Closure{ast: ast} when ast != nil ->
+        compile_ast_to_beam(ast, name)
+
+      _ ->
+        ast = ExLisp.Macro.lisp_data_to_ast(definition)
+        compile_ast_to_beam(ast, name)
+    end
+  end
+
+  defp compile_ast_to_beam(ast, name) do
+    target_ast =
+      if name != nil and match?({:list, _, [{:id, _, ["lambda"]} | _]}, ast) do
+        {:list, _, [_ | lambda_rest]} = ast
+        name_str = Atom.to_string(normalize_sym_prop(name))
+        {:list, 1, [{:id, 1, ["defun"]}, {:id, 1, [name_str]} | lambda_rest]}
+      else
+        ast
+      end
+
+    try do
+      LispBeam.compile_and_eval_asts([target_ast])
+    rescue
+      _ ->
+        LispBeam.evaluate_ast(target_ast)
+    end
+  end
+
+  def compiled_function_p(args) when is_list(args) do
+    case args do
+      [first | _] -> compiled_function_p(first)
+      _ -> nil
+    end
+  end
+
+  def compiled_function_p(val) do
+    if ExLisp.Type.typep(val, :compiled_function), do: :t, else: nil
+  end
 
   defp subst_tree(tree, match_fn, new_val) do
     if match_fn.(tree) do
