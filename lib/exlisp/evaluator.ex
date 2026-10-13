@@ -49,13 +49,8 @@ defmodule ExLisp.Evaluator do
     eval_quote_node(element)
   end
 
-  def eval({:vector, _pos, elements}, env) do
-    elem_vals =
-      Enum.map(elements, fn el ->
-        eval(el, env) |> Builtins.unwrap_mv_primary()
-      end)
-
-    Builtins.vector(elem_vals)
+  def eval({:vector, _pos, _elements} = node, _env) do
+    eval_quote_node(node)
   end
 
   def eval({:dotted_list, _pos, elements, tail}, env) do
@@ -174,7 +169,7 @@ defmodule ExLisp.Evaluator do
       op in [:prog1, :_cl_prog1_] ->
         case args do
           [first | rest] ->
-            res = eval(first, env)
+            res = eval(first, env) |> Builtins.unwrap_mv_primary()
             eval_progn(rest, env)
             res
 
@@ -186,7 +181,7 @@ defmodule ExLisp.Evaluator do
         case args do
           [first, second | rest] ->
             eval(first, env)
-            res = eval(second, env)
+            res = eval(second, env) |> Builtins.unwrap_mv_primary()
             eval_progn(rest, env)
             res
 
@@ -477,13 +472,12 @@ defmodule ExLisp.Evaluator do
       op in [:prog, :_cl_prog_] ->
         case args do
           [bindings | body] ->
-            {_decls, tagbody_body} = LispBeam.split_declarations(body)
             tag = {:block, nil, make_ref()}
             block_env = Map.put(env, {:block, nil}, tag)
-            bound_env = eval_let_bindings(bindings, block_env)
+            {decls, tagbody_body} = LispBeam.split_declarations(body)
 
             try do
-              eval_tagbody(tagbody_body, bound_env)
+              eval_let([bindings | decls ++ [{:list, 1, [{:id, 1, ["tagbody"]} | tagbody_body]}]], block_env)
               nil
             catch
               {:block_return, ^tag, val} -> val
@@ -496,13 +490,12 @@ defmodule ExLisp.Evaluator do
       op in [:"prog*", :_cl_prog_star_, :prog_star] ->
         case args do
           [bindings | body] ->
-            {_decls, tagbody_body} = LispBeam.split_declarations(body)
             tag = {:block, nil, make_ref()}
             block_env = Map.put(env, {:block, nil}, tag)
-            bound_env = eval_let_star_bindings(bindings, block_env)
+            {decls, tagbody_body} = LispBeam.split_declarations(body)
 
             try do
-              eval_tagbody(tagbody_body, bound_env)
+              eval_let_star([bindings | decls ++ [{:list, 1, [{:id, 1, ["tagbody"]} | tagbody_body]}]], block_env)
               nil
             catch
               {:block_return, ^tag, val} -> val
@@ -551,6 +544,8 @@ defmodule ExLisp.Evaluator do
       op in [:multiple_value_bind, :_cl_multiple_value_bind_, :"multiple-value-bind"] ->
         case args do
           [vars_node, val_form | body_nodes] ->
+            {decls, actual_body} = LispBeam.split_declarations(body_nodes)
+            specials = LispBeam.extract_special_vars(decls)
             var_names = LispBeam.extract_param_names(vars_node)
             mv_res = eval(rewrite_mv_form(val_form), env)
             vals_list = extract_values(mv_res)
@@ -558,15 +553,26 @@ defmodule ExLisp.Evaluator do
             padded_vals =
               vals_list ++ List.duplicate(nil, max(0, length(var_names) - length(vals_list)))
 
+            paired = Enum.zip(var_names, padded_vals)
+
+            {special_pairs, lexical_pairs} =
+              Enum.split_with(paired, fn {var, _} -> var in specials end)
+
             new_env =
-              Enum.zip(var_names, padded_vals)
-              |> Enum.reduce(env, fn {var, val}, acc ->
+              Enum.reduce(lexical_pairs, env, fn {var, val}, acc ->
                 ref = make_ref()
                 :erlang.put(ref, val)
                 Map.put(acc, var, {:box, ref})
               end)
+              |> Map.drop(specials)
 
-            eval_progn(body_nodes, new_env)
+            if special_pairs != [] do
+              Env.with_special_bindings(special_pairs, fn ->
+                eval_progn(actual_body, new_env)
+              end)
+            else
+              eval_progn(actual_body, new_env)
+            end
 
           _ ->
             nil
@@ -630,9 +636,17 @@ defmodule ExLisp.Evaluator do
 
             Enum.zip(var_names, padded)
             |> Enum.each(fn {var, val} ->
-              case Map.get(env, var) do
-                box when is_tuple(box) and elem(box, 0) == :box -> :erlang.put(elem(box, 1), val)
-                _ -> Env.set_var(var, val)
+              cond do
+                Map.has_key?(env, {:symbol_macro, var}) ->
+                  place_ast = Map.get(env, {:symbol_macro, var})
+                  do_eval_setf_place(place_ast, val, env)
+
+                true ->
+                  case Map.get(env, var) do
+                    {:box, ref} -> :erlang.put(ref, val)
+                    {:box, ref, _} -> :erlang.put(ref, val)
+                    _ -> Env.set_var(var, val)
+                  end
               end
             end)
 
@@ -658,12 +672,16 @@ defmodule ExLisp.Evaluator do
         case args do
           [tag_node | body] ->
             tag_val = eval(tag_node, env) |> Builtins.unwrap_mv_primary()
+            active_tags = Process.get(:exlisp_active_catch_tags, [])
+            Process.put(:exlisp_active_catch_tags, [tag_val | active_tags])
 
             try do
               eval_progn(body, env)
             catch
               {:lisp_throw, thrown_tag, val} when thrown_tag == tag_val ->
                 val
+            after
+              Process.put(:exlisp_active_catch_tags, active_tags)
             end
 
           _ ->
@@ -671,18 +689,28 @@ defmodule ExLisp.Evaluator do
         end
 
       op in [:throw, :_cl_throw_] ->
-        case args do
-          [tag_node, val_node | _] ->
-            tag_val = eval(tag_node, env) |> Builtins.unwrap_mv_primary()
-            val = eval(val_node, env)
-            throw({:lisp_throw, tag_val, val})
+        tag_val =
+          case args do
+            [tag_node | _] -> eval(tag_node, env) |> Builtins.unwrap_mv_primary()
+            _ -> nil
+          end
 
-          [tag_node] ->
-            tag_val = eval(tag_node, env) |> Builtins.unwrap_mv_primary()
-            throw({:lisp_throw, tag_val, nil})
+        val =
+          case args do
+            [_, val_node | _] -> eval(val_node, env)
+            _ -> nil
+          end
 
-          _ ->
-            nil
+        active_tags = Process.get(:exlisp_active_catch_tags, [])
+
+        if Enum.any?(active_tags, &(Builtins.eq(tag_val, &1) == :t)) do
+          throw({:lisp_throw, tag_val, val})
+        else
+          ExLisp.Condition.make_condition(:control_error,
+            format_control: "Attempt to throw to non-existent tag: ~S",
+            format_arguments: [tag_val]
+          )
+          |> ExLisp.Condition.error()
         end
 
       op in [:unwind_protect, :_cl_unwind_protect_, :"unwind-protect"] ->
@@ -699,7 +727,10 @@ defmodule ExLisp.Evaluator do
         end
 
       op in [:locally, :_cl_locally_] ->
-        eval_progn(args, env)
+        {decls, body_nodes} = LispBeam.split_declarations(args)
+        specials = LispBeam.extract_special_vars(decls)
+        new_env = Enum.reduce(specials, env, fn var, acc -> Map.delete(acc, var) end)
+        eval_progn(body_nodes, new_env)
 
       op in [:eval_when, :_cl_eval_when_] ->
         case args do
@@ -1106,7 +1137,7 @@ defmodule ExLisp.Evaluator do
 
     if Builtins.truthy?(test_val) do
       if body_nodes == [] do
-        test_res
+        test_val
       else
         eval_progn(body_nodes, env)
       end
@@ -1161,12 +1192,19 @@ defmodule ExLisp.Evaluator do
         end
 
       other ->
-        k = eval_quote_node(other)
+        case eval_quote_node(other) do
+          nil ->
+            nil
 
-        if k in [:t, :otherwise, :_] or Builtins.eql(key_val, k) == :t do
-          {:matched, eval_progn(body_nodes, env)}
-        else
-          nil
+          k when k in [:t, :otherwise, :_] ->
+            {:matched, eval_progn(body_nodes, env)}
+
+          k ->
+            if Builtins.eql(key_val, k) == :t do
+              {:matched, eval_progn(body_nodes, env)}
+            else
+              nil
+            end
         end
     end
   end
@@ -1240,7 +1278,7 @@ defmodule ExLisp.Evaluator do
     val = Builtins.unwrap_mv_primary(res)
 
     if Builtins.truthy?(val) do
-      res
+      val
     else
       eval_or(rest, env)
     end
@@ -1249,44 +1287,69 @@ defmodule ExLisp.Evaluator do
   # --- Let / Let* ---
 
   defp eval_let([bindings_node | body_nodes], env) do
-    new_env = eval_let_bindings(bindings_node, env)
-    eval_progn(body_nodes, new_env)
+    {decls, actual_body} = LispBeam.split_declarations(body_nodes)
+    specials = LispBeam.extract_special_vars(decls)
+    bindings = LispBeam.extract_bindings(bindings_node)
+
+    {special_bindings, lexical_bindings} =
+      Enum.split_with(bindings, fn {var, _} -> var in specials end)
+
+    evaluated_lexical =
+      Enum.map(lexical_bindings, fn {var, init_node} ->
+        val = eval(init_node, env) |> Builtins.unwrap_mv_primary()
+        {var, val}
+      end)
+
+    evaluated_special =
+      Enum.map(special_bindings, fn {var, init_node} ->
+        val = eval(init_node, env) |> Builtins.unwrap_mv_primary()
+        {var, val}
+      end)
+
+    new_env =
+      Enum.reduce(evaluated_lexical, env, fn {var, val}, acc ->
+        ref = make_ref()
+        :erlang.put(ref, val)
+        Map.put(acc, var, {:box, ref})
+      end)
+      |> Map.drop(specials)
+
+    if evaluated_special != [] do
+      Env.with_special_bindings(evaluated_special, fn ->
+        eval_progn(actual_body, new_env)
+      end)
+    else
+      eval_progn(actual_body, new_env)
+    end
   end
 
   defp eval_let([], _env), do: nil
 
-  defp eval_let_bindings(bindings_node, env) do
-    bindings = LispBeam.extract_bindings(bindings_node)
-
-    evaluated =
-      Enum.map(bindings, fn {var_sym, init_node} ->
-        val = eval(init_node, env) |> Builtins.unwrap_mv_primary()
-        {var_sym, val}
-      end)
-
-    Enum.reduce(evaluated, env, fn {var, val}, acc ->
-      ref = make_ref()
-      :erlang.put(ref, val)
-      Map.put(acc, var, {:box, ref})
-    end)
-  end
-
   defp eval_let_star([bindings_node | body_nodes], env) do
-    new_env = eval_let_star_bindings(bindings_node, env)
-    eval_progn(body_nodes, new_env)
+    {decls, actual_body} = LispBeam.split_declarations(body_nodes)
+    specials = LispBeam.extract_special_vars(decls)
+    bindings = LispBeam.extract_bindings(bindings_node)
+    do_eval_let_star(bindings, actual_body, env, specials)
   end
 
   defp eval_let_star([], _env), do: nil
 
-  defp eval_let_star_bindings(bindings_node, env) do
-    bindings = LispBeam.extract_bindings(bindings_node)
+  defp do_eval_let_star([], actual_body, env, _specials), do: eval_progn(actual_body, env)
 
-    Enum.reduce(bindings, env, fn {var_sym, init_node}, acc ->
-      val = eval(init_node, acc) |> Builtins.unwrap_mv_primary()
+  defp do_eval_let_star([{var, init_node} | rest], actual_body, env, specials) do
+    val = eval(init_node, env) |> Builtins.unwrap_mv_primary()
+
+    if var in specials do
+      new_env = Map.delete(env, var)
+      Env.with_special_bindings([{var, val}], fn ->
+        do_eval_let_star(rest, actual_body, new_env, specials)
+      end)
+    else
       ref = make_ref()
       :erlang.put(ref, val)
-      Map.put(acc, var_sym, {:box, ref})
-    end)
+      new_env = Map.put(env, var, {:box, ref})
+      do_eval_let_star(rest, actual_body, new_env, specials)
+    end
   end
 
   # --- Setq / Setf / Mutators ---
@@ -1318,233 +1381,549 @@ defmodule ExLisp.Evaluator do
     end)
   end
 
+  defp is_cxr?(op) do
+    str =
+      to_string(op)
+      |> String.downcase()
+      |> String.replace_prefix("_cl_", "")
+      |> String.replace_suffix("_", "")
+
+    if String.starts_with?(str, "c") and String.ends_with?(str, "r") and String.length(str) >= 4 and
+         String.length(str) <= 6 do
+      middle = String.slice(str, 1..-2//1)
+      chars = String.to_charlist(middle)
+      Enum.all?(chars, fn c -> c in [?a, ?d] end)
+    else
+      false
+    end
+  end
+
+  defp expand_cxr_place(op, place_args, pos) do
+    str =
+      to_string(op)
+      |> String.downcase()
+      |> String.replace_prefix("_cl_", "")
+      |> String.replace_suffix("_", "")
+
+    middle = String.slice(str, 1..-2//1)
+    chars = String.to_charlist(middle)
+
+    Enum.reduce(Enum.reverse(chars), hd(place_args), fn
+      ?a, acc -> {:list, pos, [{:id, pos, ["car"]}, acc]}
+      ?d, acc -> {:list, pos, [{:id, pos, ["cdr"]}, acc]}
+    end)
+  end
+
+  defp is_nth_alias?(op) do
+    op in [
+      :first,
+      :_cl_first_,
+      :rest,
+      :_cl_rest_,
+      :second,
+      :_cl_second_,
+      :third,
+      :_cl_third_,
+      :fourth,
+      :_cl_fourth_,
+      :fifth,
+      :_cl_fifth_,
+      :sixth,
+      :_cl_sixth_,
+      :seventh,
+      :_cl_seventh_,
+      :eighth,
+      :_cl_eighth_,
+      :ninth,
+      :_cl_ninth_,
+      :tenth,
+      :_cl_tenth_
+    ]
+  end
+
+  defp expand_nth_alias_place(op, place_args, pos) do
+    clean_op =
+      to_string(op)
+      |> String.downcase()
+      |> String.replace_prefix("_cl_", "")
+      |> String.replace_suffix("_", "")
+      |> String.to_atom()
+
+    case clean_op do
+      :first -> {:list, pos, [{:id, pos, ["car"]} | place_args]}
+      :rest -> {:list, pos, [{:id, pos, ["cdr"]} | place_args]}
+      :second -> {:list, pos, [{:id, pos, ["cadr"]} | place_args]}
+      :third -> {:list, pos, [{:id, pos, ["caddr"]} | place_args]}
+      :fourth -> {:list, pos, [{:id, pos, ["cadddr"]} | place_args]}
+      :fifth -> {:list, pos, [{:id, pos, ["nth"]}, {:lit, 1, 4} | place_args]}
+      :sixth -> {:list, pos, [{:id, pos, ["nth"]}, {:lit, 1, 5} | place_args]}
+      :seventh -> {:list, pos, [{:id, pos, ["nth"]}, {:lit, 1, 6} | place_args]}
+      :eighth -> {:list, pos, [{:id, pos, ["nth"]}, {:lit, 1, 7} | place_args]}
+      :ninth -> {:list, pos, [{:id, pos, ["nth"]}, {:lit, 1, 8} | place_args]}
+      :tenth -> {:list, pos, [{:id, pos, ["nth"]}, {:lit, 1, 9} | place_args]}
+    end
+  end
+
+  defp get_setf_expansion(place, env) do
+    case place do
+      {:id, _pos, _} ->
+        var_sym = LispBeam.extract_symbol_name(place)
+
+        if Map.has_key?(env, {:symbol_macro, var_sym}) do
+          expansion = Map.get(env, {:symbol_macro, var_sym})
+          get_setf_expansion(expansion, env)
+        else
+          getter = fn -> eval(place, env) end
+
+          setter = fn unwrapped ->
+            case Map.get(env, var_sym) do
+              box when is_tuple(box) and elem(box, 0) == :box ->
+                :erlang.put(elem(box, 1), unwrapped)
+
+              _ ->
+                Env.set_var(var_sym, unwrapped)
+            end
+
+            unwrapped
+          end
+
+          {getter, setter}
+        end
+
+      var_sym when is_atom(var_sym) ->
+        if Map.has_key?(env, {:symbol_macro, var_sym}) do
+          expansion = Map.get(env, {:symbol_macro, var_sym})
+          get_setf_expansion(expansion, env)
+        else
+          getter = fn -> eval(place, env) end
+
+          setter = fn unwrapped ->
+            case Map.get(env, var_sym) do
+              box when is_tuple(box) and elem(box, 0) == :box ->
+                :erlang.put(elem(box, 1), unwrapped)
+
+              _ ->
+                Env.set_var(var_sym, unwrapped)
+            end
+
+            unwrapped
+          end
+
+          {getter, setter}
+        end
+
+      {:list, _pos, [{:id, _, [p]} | forms]} when p in ["progn", "PROGN"] and forms != [] ->
+        init_forms = Enum.drop(forms, -1)
+        last_form = List.last(forms)
+        Enum.each(init_forms, fn f -> eval(f, env) end)
+        get_setf_expansion(last_form, env)
+
+      {:list, pos, [op_node | place_args]} ->
+        op = LispBeam.extract_op_name(op_node)
+
+        cond do
+          is_cxr?(op) ->
+            expanded = expand_cxr_place(op, place_args, pos)
+            get_setf_expansion(expanded, env)
+
+          is_nth_alias?(op) ->
+            expanded = expand_nth_alias_place(op, place_args, pos)
+            get_setf_expansion(expanded, env)
+
+          op in [:car, :_cl_car_] ->
+            [target_node | _] = place_args
+            {target_getter, target_setter} = get_setf_expansion(target_node, env)
+            getter = fn -> Builtins.car(target_getter.()) end
+
+            setter = fn unwrapped ->
+              cur = target_getter.()
+
+              new_target =
+                case cur do
+                  [_ | tail] -> [unwrapped | tail]
+                  _ -> [unwrapped]
+                end
+
+              target_setter.(new_target)
+              unwrapped
+            end
+
+            {getter, setter}
+
+          op in [:cdr, :_cl_cdr_] ->
+            [target_node | _] = place_args
+            {target_getter, target_setter} = get_setf_expansion(target_node, env)
+            getter = fn -> Builtins.cdr(target_getter.()) end
+
+            setter = fn unwrapped ->
+              cur = target_getter.()
+
+              new_target =
+                case cur do
+                  [head | _] -> [head | unwrapped]
+                  _ -> unwrapped
+                end
+
+              target_setter.(new_target)
+              unwrapped
+            end
+
+            {getter, setter}
+
+          op in [:nth, :_cl_nth_] ->
+            [idx_node, target_node | _] = place_args
+            idx = eval(idx_node, env) |> Builtins.unwrap_mv_primary()
+            {target_getter, target_setter} = get_setf_expansion(target_node, env)
+            getter = fn -> Builtins.nth(idx, target_getter.()) end
+
+            setter = fn unwrapped ->
+              cur = target_getter.()
+              new_target = List.replace_at(cur, idx, unwrapped)
+              target_setter.(new_target)
+              unwrapped
+            end
+
+            {getter, setter}
+
+          op in [:getf, :_cl_getf_] ->
+            [target_node, ind_node | rest_args] = place_args
+            {target_getter, target_setter} = get_setf_expansion(target_node, env)
+            ind = eval(ind_node, env) |> Builtins.unwrap_mv_primary()
+
+            _def_val =
+              if rest_args != [],
+                do: eval(hd(rest_args), env) |> Builtins.unwrap_mv_primary(),
+                else: nil
+
+            getter = fn -> Builtins.getf(target_getter.(), ind) end
+
+            setter = fn unwrapped ->
+              cur = target_getter.()
+              new_target = Builtins.put_plist(cur, ind, unwrapped)
+              target_setter.(new_target)
+              unwrapped
+            end
+
+            {getter, setter}
+
+          op in [:char, :_cl_char_, :schar, :_cl_schar_] ->
+            [str_node, idx_node | _] = place_args
+            {str_getter, str_setter} = get_setf_expansion(str_node, env)
+            idx = eval(idx_node, env) |> Builtins.unwrap_mv_primary()
+            getter = fn -> Builtins.char(str_getter.(), idx) end
+
+            setter = fn unwrapped ->
+              cur = str_getter.()
+              new_target = Builtins.set_char_update_seq(cur, idx, unwrapped)
+              str_setter.(new_target)
+              unwrapped
+            end
+
+            {getter, setter}
+
+          op in [:elt, :_cl_elt_] ->
+            [seq_node, idx_node | _] = place_args
+            {seq_getter, seq_setter} = get_setf_expansion(seq_node, env)
+            idx = eval(idx_node, env) |> Builtins.unwrap_mv_primary()
+            getter = fn -> Builtins.elt(seq_getter.(), idx) end
+
+            setter = fn unwrapped ->
+              cur = seq_getter.()
+              new_target = Builtins.set_elt_update_seq(cur, idx, unwrapped)
+              seq_setter.(new_target)
+              unwrapped
+            end
+
+            {getter, setter}
+
+          op in [:subseq, :_cl_subseq_] ->
+            case place_args do
+              [seq_node, start_node] ->
+                {seq_getter, seq_setter} = get_setf_expansion(seq_node, env)
+                start_idx = eval(start_node, env) |> Builtins.unwrap_mv_primary()
+                getter = fn -> Builtins.subseq(seq_getter.(), start_idx) end
+
+                setter = fn unwrapped ->
+                  cur = seq_getter.()
+                  new_target = Builtins.set_subseq_update_seq(cur, start_idx, nil, unwrapped)
+                  seq_setter.(new_target)
+                  unwrapped
+                end
+
+                {getter, setter}
+
+              [seq_node, start_node, end_node | _] ->
+                {seq_getter, seq_setter} = get_setf_expansion(seq_node, env)
+                start_idx = eval(start_node, env) |> Builtins.unwrap_mv_primary()
+                end_idx = eval(end_node, env) |> Builtins.unwrap_mv_primary()
+                getter = fn -> Builtins.subseq(seq_getter.(), start_idx, end_idx) end
+
+                setter = fn unwrapped ->
+                  cur = seq_getter.()
+                  new_target = Builtins.set_subseq_update_seq(cur, start_idx, end_idx, unwrapped)
+                  seq_setter.(new_target)
+                  unwrapped
+                end
+
+                {getter, setter}
+            end
+
+          op in [:ldb, :_cl_ldb_] ->
+            [bytespec_node, target_place | _] = place_args
+            bytespec = eval(bytespec_node, env) |> Builtins.unwrap_mv_primary()
+            {target_getter, target_setter} = get_setf_expansion(target_place, env)
+            getter = fn -> Builtins.ldb(bytespec, target_getter.()) end
+
+            setter = fn unwrapped ->
+              cur = target_getter.()
+              cur_int = if is_integer(cur), do: cur, else: 0
+              new_target = Builtins.dpb(unwrapped, bytespec, cur_int)
+              target_setter.(new_target)
+              unwrapped
+            end
+
+            {getter, setter}
+
+          op in [:get, :_cl_get_] ->
+            case place_args do
+              [sym_node, ind_node, def_node | _] ->
+                sym = eval(sym_node, env) |> Builtins.unwrap_mv_primary()
+                ind = eval(ind_node, env) |> Builtins.unwrap_mv_primary()
+                _def_val = eval(def_node, env)
+                getter = fn -> Builtins.get(sym, ind) end
+                setter = fn unwrapped -> Builtins.set_get(sym, ind, unwrapped) end
+                {getter, setter}
+
+              [sym_node, ind_node | _] ->
+                sym = eval(sym_node, env) |> Builtins.unwrap_mv_primary()
+                ind = eval(ind_node, env) |> Builtins.unwrap_mv_primary()
+                getter = fn -> Builtins.get(sym, ind) end
+                setter = fn unwrapped -> Builtins.set_get(sym, ind, unwrapped) end
+                {getter, setter}
+            end
+
+          op in [:gethash, :_cl_gethash_] ->
+            [key_node, tbl_node | _] = place_args
+            key = eval(key_node, env) |> Builtins.unwrap_mv_primary()
+            tbl = eval(tbl_node, env) |> Builtins.unwrap_mv_primary()
+            getter = fn -> Builtins.gethash(key, tbl) end
+            setter = fn unwrapped -> Builtins.set_gethash(key, tbl, unwrapped) end
+            {getter, setter}
+
+          op in [:aref, :_cl_aref_] ->
+            [arr_node | idx_nodes] = place_args
+            arr = eval(arr_node, env) |> Builtins.unwrap_mv_primary()
+            idxs = Enum.map(idx_nodes, &(eval(&1, env) |> Builtins.unwrap_mv_primary()))
+            getter = fn -> Builtins.aref([arr | idxs]) end
+            setter = fn unwrapped -> Builtins.set_aref(arr, idxs, unwrapped) end
+            {getter, setter}
+
+          op in [:svref, :_cl_svref_] ->
+            [vec_node, idx_node | _] = place_args
+            vec = eval(vec_node, env) |> Builtins.unwrap_mv_primary()
+            idx = eval(idx_node, env) |> Builtins.unwrap_mv_primary()
+            getter = fn -> Builtins.svref(vec, idx) end
+            setter = fn unwrapped -> Builtins.set_svref(vec, idx, unwrapped) end
+            {getter, setter}
+
+          op in [:row_major_aref, :_cl_row_major_aref_, :"row-major-aref"] ->
+            [arr_node, idx_node | _] = place_args
+            arr = eval(arr_node, env) |> Builtins.unwrap_mv_primary()
+            idx = eval(idx_node, env) |> Builtins.unwrap_mv_primary()
+            getter = fn -> Builtins.row_major_aref(arr, idx) end
+            setter = fn unwrapped -> Builtins.set_row_major_aref(arr, idx, unwrapped) end
+            {getter, setter}
+
+          op in [:symbol_value, :_cl_symbol_value_, :"symbol-value"] ->
+            [sym_node | _] = place_args
+            sym = eval(sym_node, env) |> Builtins.unwrap_mv_primary()
+            getter = fn -> Builtins.symbol_value(sym) end
+            setter = fn unwrapped -> Builtins.set_symbol_value(sym, unwrapped) end
+            {getter, setter}
+
+          op in [:symbol_plist, :_cl_symbol_plist_, :"symbol-plist"] ->
+            [sym_node | _] = place_args
+            sym = eval(sym_node, env) |> Builtins.unwrap_mv_primary()
+            getter = fn -> Builtins.symbol_plist(sym) end
+            setter = fn unwrapped -> Builtins.set_symbol_plist(sym, unwrapped) end
+            {getter, setter}
+
+          op in [
+                :symbol_function,
+                :_cl_symbol_function_,
+                :"symbol-function",
+                :fdefinition,
+                :_cl_fdefinition_
+              ] ->
+            [sym_node | _] = place_args
+            sym = eval(sym_node, env) |> Builtins.unwrap_mv_primary()
+            getter = fn -> Builtins.symbol_function(sym) end
+            setter = fn unwrapped -> Builtins.set_symbol_function(sym, unwrapped) end
+            {getter, setter}
+
+          op in [:fill_pointer, :_cl_fill_pointer_, :"fill-pointer"] ->
+            [arr_node | _] = place_args
+            arr = eval(arr_node, env) |> Builtins.unwrap_mv_primary()
+            getter = fn -> Builtins.fill_pointer(arr) end
+            setter = fn unwrapped -> Builtins.set_fill_pointer(arr, unwrapped) end
+            {getter, setter}
+
+          op in [:slot_value, :_cl_slot_value_, :"slot-value"] ->
+            [obj_node, slot_node | _] = place_args
+            obj = eval(obj_node, env) |> Builtins.unwrap_mv_primary()
+            slot = eval(slot_node, env) |> Builtins.unwrap_mv_primary()
+            getter = fn -> ExLisp.CLOS.slot_value(obj, slot) end
+            setter = fn unwrapped -> ExLisp.CLOS.set_slot_value(obj, slot, unwrapped) end
+            {getter, setter}
+
+          op in [:documentation, :_cl_documentation_] ->
+            case place_args do
+              [target_node, type_node] ->
+                target = eval(target_node, env) |> Builtins.unwrap_mv_primary()
+                type = eval(type_node, env) |> Builtins.unwrap_mv_primary()
+                getter = fn -> Builtins.documentation(target, type) end
+                setter = fn unwrapped -> Builtins.set_documentation(target, type, unwrapped) end
+                {getter, setter}
+
+              [target_node] ->
+                target = eval(target_node, env) |> Builtins.unwrap_mv_primary()
+                getter = fn -> Builtins.documentation(target, :function) end
+
+                setter = fn unwrapped ->
+                  Builtins.set_documentation(target, :function, unwrapped)
+                end
+
+                {getter, setter}
+            end
+
+          true ->
+            cond do
+              Map.has_key?(env, {:macro, op}) ->
+                macro_fun = Map.get(env, {:macro, op})
+                expanded = apply_macro(macro_fun, place_args, place)
+                get_setf_expansion(expanded, env)
+
+              Env.has_macro?(op) ->
+                macro_fun = Env.get_macro(op)
+                expanded = apply_macro(macro_fun, place_args, place)
+                get_setf_expansion(expanded, env)
+
+              true ->
+                getter = fn -> eval(place, env) end
+                setter = fn unwrapped -> do_fallback_setf_place(place, unwrapped, env) end
+                {getter, setter}
+            end
+        end
+
+      other ->
+        getter = fn -> eval(other, env) end
+        setter = fn unwrapped -> do_fallback_setf_place(other, unwrapped, env) end
+        {getter, setter}
+    end
+  end
+
   defp eval_setf(args, env) do
     pairs = Enum.chunk_every(args, 2)
 
     Enum.reduce(pairs, nil, fn
       [place, val_node], _acc ->
-        val = eval(val_node, env)
-        do_eval_setf_place(place, val, env)
+        eval_setf_pair(place, val_node, env)
 
       [place], _acc ->
         do_eval_setf_place(place, nil, env)
     end)
   end
 
+  defp eval_setf_pair(place, val_node, env) do
+    case place do
+      {:list, _pos, [op_node | _]}
+      when op_node in [
+             {:id, 1, ["values"]},
+             {:id, 1, ["VALUES"]},
+             {:id, 1, ["_cl_values_"]}
+           ] ->
+        val = eval(val_node, env)
+        do_eval_setf_place(place, val, env)
+
+      _ ->
+        {_getter, setter} = get_setf_expansion(place, env)
+        val = eval(val_node, env)
+        unwrapped = Builtins.unwrap_mv_primary(val)
+        setter.(unwrapped)
+        val
+    end
+  end
+
   defp do_eval_setf_place(place, val, env) do
     unwrapped = Builtins.unwrap_mv_primary(val)
 
     case place do
-      {:id, _pos, _} ->
-        var_sym = LispBeam.extract_symbol_name(place)
+      {:list, _pos, [op_node | _]}
+      when op_node in [
+             {:id, 1, ["values"]},
+             {:id, 1, ["VALUES"]},
+             {:id, 1, ["_cl_values_"]}
+           ] ->
+        vals = extract_values(val)
+        place_args = elem(place, 2) |> tl()
 
-        case Map.get(env, var_sym) do
-          box when is_tuple(box) and elem(box, 0) == :box -> :erlang.put(elem(box, 1), unwrapped)
-          _ -> Env.set_var(var_sym, unwrapped)
-        end
+        Enum.zip(
+          place_args,
+          vals ++ List.duplicate(nil, max(0, length(place_args) - length(vals)))
+        )
+        |> Enum.each(fn {p, v} -> do_eval_setf_place(p, v, env) end)
 
+        Enum.take(vals, length(place_args)) |> Builtins.values()
+
+      _ ->
+        {_getter, setter} = get_setf_expansion(place, env)
+        setter.(unwrapped)
         val
+    end
+  end
 
-      var_sym when is_atom(var_sym) ->
-        case Map.get(env, var_sym) do
-          box when is_tuple(box) and elem(box, 0) == :box -> :erlang.put(elem(box, 1), unwrapped)
-          _ -> Env.set_var(var_sym, unwrapped)
-        end
-
-        val
-
+  defp do_fallback_setf_place(place, unwrapped, env) do
+    case place do
       {:list, _pos, [op_node | place_args]} ->
         op = LispBeam.extract_op_name(op_node)
+        setf_fn_sym = :"setf_#{op}"
 
-        case op do
-          name when name in [:get, :_cl_get_] ->
-            [sym_node, ind_node | _] = place_args
-            sym = eval(sym_node, env) |> Builtins.unwrap_mv_primary()
-            ind = eval(ind_node, env) |> Builtins.unwrap_mv_primary()
-            Builtins.set_get(sym, ind, unwrapped)
-            val
+        cond do
+          Env.has_fun?(setf_fn_sym) ->
+            args = [
+              unwrapped
+              | Enum.map(place_args, &(eval(&1, env) |> Builtins.unwrap_mv_primary()))
+            ]
 
-          name when name in [:symbol_plist, :_cl_symbol_plist_, :"symbol-plist"] ->
-            [sym_node | _] = place_args
-            sym = eval(sym_node, env) |> Builtins.unwrap_mv_primary()
-            Builtins.set_symbol_plist(sym, unwrapped)
-            val
+            Builtins.invoke_fn(Env.get_fun(setf_fn_sym), args)
+            unwrapped
 
-          name when name in [:symbol_value, :_cl_symbol_value_, :"symbol-value"] ->
-            [sym_node | _] = place_args
-            sym = eval(sym_node, env) |> Builtins.unwrap_mv_primary()
-            Builtins.set_symbol_value(sym, unwrapped)
-            val
+          true ->
+            [struct_node | _] = place_args
+            struct_val = eval(struct_node, env) |> Builtins.unwrap_mv_primary()
 
-          name when name in [:symbol_function, :_cl_symbol_function_, :"symbol-function"] ->
-            [sym_node | _] = place_args
-            sym = eval(sym_node, env) |> Builtins.unwrap_mv_primary()
-            Builtins.set_symbol_function(sym, unwrapped)
-            val
+            slot_name =
+              case struct_val do
+                {:struct, s_name, _tid} ->
+                  s_prefix = "#{s_name}_"
+                  op_str = to_string(op)
 
-          name when name in [:car, :_cl_car_, :first] ->
-            [target_node | _] = place_args
-            target = eval(target_node, env) |> Builtins.unwrap_mv_primary()
-            Builtins.rplaca(target, unwrapped)
-            val
-
-          name when name in [:cdr, :_cl_cdr_, :rest] ->
-            [target_node | _] = place_args
-            target = eval(target_node, env) |> Builtins.unwrap_mv_primary()
-            Builtins.rplacd(target, unwrapped)
-            val
-
-          name when name in [:nth, :_cl_nth_] ->
-            [idx_node, target_node | _] = place_args
-            idx = eval(idx_node, env) |> Builtins.unwrap_mv_primary()
-            target = eval(target_node, env) |> Builtins.unwrap_mv_primary()
-            Builtins.set_nth(idx, target, unwrapped)
-            val
-
-          name when name in [:elt, :_cl_elt_] ->
-            [seq_node, idx_node | _] = place_args
-            seq = eval(seq_node, env) |> Builtins.unwrap_mv_primary()
-            idx = eval(idx_node, env) |> Builtins.unwrap_mv_primary()
-            Builtins.set_elt(seq, idx, unwrapped)
-            val
-
-          name when name in [:aref, :_cl_aref_] ->
-            [arr_node | idx_nodes] = place_args
-            arr = eval(arr_node, env) |> Builtins.unwrap_mv_primary()
-            idxs = Enum.map(idx_nodes, &(eval(&1, env) |> Builtins.unwrap_mv_primary()))
-            Builtins.set_aref(arr, idxs, unwrapped)
-            val
-
-          name when name in [:svref, :_cl_svref_] ->
-            [vec_node, idx_node | _] = place_args
-            vec = eval(vec_node, env) |> Builtins.unwrap_mv_primary()
-            idx = eval(idx_node, env) |> Builtins.unwrap_mv_primary()
-            Builtins.set_svref(vec, idx, unwrapped)
-            val
-
-          name when name in [:row_major_aref, :_cl_row_major_aref_, :"row-major-aref"] ->
-            [arr_node, idx_node | _] = place_args
-            arr = eval(arr_node, env) |> Builtins.unwrap_mv_primary()
-            idx = eval(idx_node, env) |> Builtins.unwrap_mv_primary()
-            Builtins.set_row_major_aref(arr, idx, unwrapped)
-            val
-
-          name when name in [:gethash, :_cl_gethash_] ->
-            [key_node, tbl_node | _] = place_args
-            key = eval(key_node, env) |> Builtins.unwrap_mv_primary()
-            tbl = eval(tbl_node, env) |> Builtins.unwrap_mv_primary()
-            Builtins.set_gethash(key, tbl, unwrapped)
-            val
-
-          name when name in [:slot_value, :_cl_slot_value_, :"slot-value"] ->
-            [obj_node, slot_node | _] = place_args
-            obj = eval(obj_node, env) |> Builtins.unwrap_mv_primary()
-            slot = eval(slot_node, env) |> Builtins.unwrap_mv_primary()
-            ExLisp.CLOS.set_slot_value(obj, slot, unwrapped)
-            val
-
-          name when name in [:documentation, :_cl_documentation_] ->
-            case place_args do
-              [target_node, type_node] ->
-                target = eval(target_node, env) |> Builtins.unwrap_mv_primary()
-                type = eval(type_node, env) |> Builtins.unwrap_mv_primary()
-                Builtins.set_documentation(target, type, unwrapped)
-
-              [target_node] ->
-                target = eval(target_node, env) |> Builtins.unwrap_mv_primary()
-                Builtins.set_documentation(target, :function, unwrapped)
-            end
-
-            val
-
-          name when name in [:values, :_cl_values_] ->
-            vals = extract_values(val)
-
-            Enum.zip(
-              place_args,
-              vals ++ List.duplicate(nil, max(0, length(place_args) - length(vals)))
-            )
-            |> Enum.each(fn {p, v} -> do_eval_setf_place(p, v, env) end)
-
-            val
-
-          name when name in [:getf, :_cl_getf_] ->
-            [target_node, ind_node | _] = place_args
-            target = eval(target_node, env) |> Builtins.unwrap_mv_primary()
-            ind = eval(ind_node, env) |> Builtins.unwrap_mv_primary()
-            updated_plist = Builtins.put_plist(target, ind, unwrapped)
-            do_eval_setf_place(target_node, updated_plist, env)
-            val
-
-          name when name in [:subseq, :_cl_subseq_] ->
-            case place_args do
-              [seq_node, start_node] ->
-                seq = eval(seq_node, env) |> Builtins.unwrap_mv_primary()
-                start_idx = eval(start_node, env) |> Builtins.unwrap_mv_primary()
-                updated = Builtins.set_subseq_update_seq(seq, start_idx, nil, unwrapped)
-                do_eval_setf_place(seq_node, updated, env)
-
-              [seq_node, start_node, end_node] ->
-                seq = eval(seq_node, env) |> Builtins.unwrap_mv_primary()
-                start_idx = eval(start_node, env) |> Builtins.unwrap_mv_primary()
-                end_idx = eval(end_node, env) |> Builtins.unwrap_mv_primary()
-                updated = Builtins.set_subseq_update_seq(seq, start_idx, end_idx, unwrapped)
-                do_eval_setf_place(seq_node, updated, env)
-            end
-
-            val
-
-          name when name in [:ldb, :_cl_ldb_] ->
-            [bytespec_node, target_place | _] = place_args
-            bytespec = eval(bytespec_node, env) |> Builtins.unwrap_mv_primary()
-            cur_target_val = eval(target_place, env) |> Builtins.unwrap_mv_primary()
-            cur_int = if is_integer(cur_target_val), do: cur_target_val, else: 0
-            new_target_val = Builtins.dpb(unwrapped, bytespec, cur_int)
-            do_eval_setf_place(target_place, new_target_val, env)
-            val
-
-          # Structure accessor or custom setf function
-          _ ->
-            setf_fn_sym = :"setf_#{op}"
-
-            cond do
-              Env.has_fun?(setf_fn_sym) ->
-                args = [
-                  unwrapped
-                  | Enum.map(place_args, &(eval(&1, env) |> Builtins.unwrap_mv_primary()))
-                ]
-
-                Builtins.invoke_fn(Env.get_fun(setf_fn_sym), args)
-                val
-
-              # Struct slot accessor: struct_slot
-              true ->
-                [struct_node | _] = place_args
-                struct_val = eval(struct_node, env) |> Builtins.unwrap_mv_primary()
-
-                slot_name =
-                  case struct_val do
-                    {:struct, s_name, _tid} ->
-                      s_prefix = "#{s_name}_"
-                      op_str = to_string(op)
-
-                      if String.starts_with?(op_str, s_prefix) do
-                        String.replace_prefix(op_str, s_prefix, "") |> String.to_atom()
-                      else
-                        op
-                      end
-
-                    _ ->
-                      op
+                  if String.starts_with?(op_str, s_prefix) do
+                    String.replace_prefix(op_str, s_prefix, "") |> String.to_atom()
+                  else
+                    op
                   end
 
-                Builtins.set_struct_slot(struct_val, slot_name, unwrapped)
-                val
-            end
+                _ ->
+                  op
+              end
+
+            Builtins.set_struct_slot(struct_val, slot_name, unwrapped)
+            unwrapped
         end
 
       _ ->
-        val
+        unwrapped
     end
   end
 
@@ -1623,9 +2002,10 @@ defmodule ExLisp.Evaluator do
     case args do
       [item_node, place_node | _] ->
         item_val = eval(item_node, env) |> Builtins.unwrap_mv_primary()
-        cur_val = eval(place_node, env) |> Builtins.unwrap_mv_primary()
+        {getter, setter} = get_setf_expansion(place_node, env)
+        cur_val = getter.() |> Builtins.unwrap_mv_primary()
         new_list = [item_val | if(cur_val in [nil, []], do: [], else: cur_val)]
-        do_eval_setf_place(place_node, new_list, env)
+        setter.(new_list)
         new_list
 
       _ ->
@@ -1637,10 +2017,11 @@ defmodule ExLisp.Evaluator do
     case args do
       [item_node, place_node | rest_opts] ->
         item_val = eval(item_node, env) |> Builtins.unwrap_mv_primary()
-        cur_val = eval(place_node, env) |> Builtins.unwrap_mv_primary()
+        {getter, setter} = get_setf_expansion(place_node, env)
         opt_vals = Enum.map(rest_opts, &(eval(&1, env) |> Builtins.unwrap_mv_primary()))
-        new_list = apply(Builtins, :adjoin, [item_val, cur_val | opt_vals])
-        do_eval_setf_place(place_node, new_list, env)
+        cur_val = getter.() |> Builtins.unwrap_mv_primary()
+        new_list = Builtins.adjoin([item_val, cur_val | opt_vals])
+        setter.(new_list)
         new_list
 
       _ ->
@@ -1651,15 +2032,16 @@ defmodule ExLisp.Evaluator do
   defp eval_pop(args, env) do
     case args do
       [place_node | _] ->
-        cur_val = eval(place_node, env) |> Builtins.unwrap_mv_primary()
+        {getter, setter} = get_setf_expansion(place_node, env)
+        cur_val = getter.() |> Builtins.unwrap_mv_primary()
 
         case cur_val do
           [head | tail] ->
-            do_eval_setf_place(place_node, tail, env)
+            setter.(tail)
             head
 
           _ ->
-            do_eval_setf_place(place_node, nil, env)
+            setter.(nil)
             nil
         end
 
@@ -1671,10 +2053,15 @@ defmodule ExLisp.Evaluator do
   defp eval_remf(args, env) do
     case args do
       [place_node, ind_node | _] ->
+        {getter, setter} = get_setf_expansion(place_node, env)
         ind_val = eval(ind_node, env) |> Builtins.unwrap_mv_primary()
-        cur_val = eval(place_node, env) |> Builtins.unwrap_mv_primary()
+        cur_val = getter.() |> Builtins.unwrap_mv_primary()
         [new_plist, removed] = Builtins.rem_plist(cur_val, ind_val)
-        do_eval_setf_place(place_node, new_plist, env)
+
+        if removed != nil and removed != false do
+          setter.(new_plist)
+        end
+
         removed
 
       _ ->
@@ -2451,6 +2838,8 @@ defmodule ExLisp.Evaluator do
   # --- Flet / Labels / Macrolet / Symbol-macrolet ---
 
   defp eval_flet([bindings_node | body_nodes], env) do
+    {decls, actual_body} = LispBeam.split_declarations(body_nodes)
+    specials = LispBeam.extract_special_vars(decls)
     fn_defs = LispBeam.extract_fn_bindings(bindings_node)
 
     closures =
@@ -2459,13 +2848,15 @@ defmodule ExLisp.Evaluator do
         {{:fun, name}, closure}
       end)
 
-    new_env = Map.merge(env, Map.new(closures))
-    eval_progn(body_nodes, new_env)
+    new_env = Map.merge(env, Map.new(closures)) |> Map.drop(specials)
+    eval_progn(actual_body, new_env)
   end
 
   defp eval_flet([], _env), do: nil
 
   defp eval_labels([bindings_node | body_nodes], env) do
+    {decls, actual_body} = LispBeam.split_declarations(body_nodes)
+    specials = LispBeam.extract_special_vars(decls)
     fn_defs = LispBeam.extract_fn_bindings(bindings_node)
     dispatcher_ref = make_ref()
 
@@ -2488,11 +2879,11 @@ defmodule ExLisp.Evaluator do
         {{:fun, name}, closure}
       end)
 
-    final_env = Map.merge(rec_env, Map.new(actual_closures))
+    final_env = Map.merge(rec_env, Map.new(actual_closures)) |> Map.drop(specials)
     :erlang.put(dispatcher_ref, final_env)
 
     try do
-      eval_progn(body_nodes, final_env)
+      eval_progn(actual_body, final_env)
     after
       :erlang.erase(dispatcher_ref)
     end
@@ -2501,6 +2892,8 @@ defmodule ExLisp.Evaluator do
   defp eval_labels([], _env), do: nil
 
   defp eval_macrolet([bindings_node | body_nodes], env) do
+    {decls, actual_body} = LispBeam.split_declarations(body_nodes)
+    specials = LispBeam.extract_special_vars(decls)
     macro_defs = LispBeam.extract_fn_bindings(bindings_node)
 
     macro_bindings =
@@ -2510,13 +2903,15 @@ defmodule ExLisp.Evaluator do
         {{:macro, name}, macro_fun}
       end)
 
-    new_env = Map.merge(env, Map.new(macro_bindings))
-    eval_progn(body_nodes, new_env)
+    new_env = Map.merge(env, Map.new(macro_bindings)) |> Map.drop(specials)
+    eval_progn(actual_body, new_env)
   end
 
   defp eval_macrolet([], _env), do: nil
 
   defp eval_symbol_macrolet([bindings_node | body_nodes], env) do
+    {decls, actual_body} = LispBeam.split_declarations(body_nodes)
+    specials = LispBeam.extract_special_vars(decls)
     bindings = LispBeam.extract_bindings(bindings_node)
 
     macro_bindings =
@@ -2524,8 +2919,8 @@ defmodule ExLisp.Evaluator do
         {{:symbol_macro, sym}, expansion_ast}
       end)
 
-    new_env = Map.merge(env, Map.new(macro_bindings))
-    eval_progn(body_nodes, new_env)
+    new_env = Map.merge(env, Map.new(macro_bindings)) |> Map.drop(specials)
+    eval_progn(actual_body, new_env)
   end
 
   defp eval_symbol_macrolet([], _env), do: nil

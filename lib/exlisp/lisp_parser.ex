@@ -168,7 +168,7 @@ defmodule ExLisp.LispParser do
   # Uninterned symbols (#:name, #|...|)
   defp tokenize_chars([?#, ?:, ?| | rest], line, acc) do
     {sym_str, rem} = read_pipe_symbol_chars(rest, [])
-    uninterned = :"#:UNINTERNED_#{System.unique_integer([:positive, :monotonic])}_|#{sym_str}|"
+    uninterned = :"#:UNINTERNED_#{rem(System.unique_integer([:positive]), 2000)}_|#{sym_str}|"
     tokenize_chars(rem, line, [{:symbol, line, uninterned} | acc])
   end
 
@@ -176,7 +176,7 @@ defmodule ExLisp.LispParser do
     {tok_chars, rem} = read_token_chars(rest, [])
     tok_str = List.to_string(tok_chars)
     normalized = normalize_symbol_name(tok_str)
-    uninterned = :"#:UNINTERNED_#{System.unique_integer([:positive, :monotonic])}_#{normalized}"
+    uninterned = :"#:UNINTERNED_#{rem(System.unique_integer([:positive]), 2000)}_#{normalized}"
     tokenize_chars(rem, line, [{:symbol, line, uninterned} | acc])
   end
 
@@ -621,10 +621,47 @@ defmodule ExLisp.LispParser do
   end
 
   defp is_remote_call?(str) do
-    cleaned = if String.starts_with?(str, ":"), do: String.slice(str, 1..-1//1), else: str
+    cond do
+      str in [":", "."] ->
+        false
 
-    (String.contains?(cleaned, ":") or String.contains?(cleaned, ".")) and
-      str not in [":", "."]
+      String.starts_with?(str, ":") ->
+        cleaned = String.slice(str, 1..-1//1)
+
+        cond do
+          String.contains?(cleaned, ":") ->
+            true
+
+          String.contains?(cleaned, ".") ->
+            [mod_str | _] = String.split(cleaned, ".")
+            is_beam_module?(mod_str)
+
+          true ->
+            false
+        end
+
+      String.contains?(str, ":") or String.contains?(str, ".") ->
+        true
+
+      true ->
+        false
+    end
+  end
+
+  defp is_beam_module?(mod_str) do
+    mod_atom =
+      try do
+        String.to_existing_atom(String.downcase(mod_str))
+      rescue
+        _ -> nil
+      end
+
+    if mod_atom != nil and
+         (:code.is_loaded(mod_atom) != false or :code.which(mod_atom) != :non_existing) do
+      true
+    else
+      false
+    end
   end
 
   defp split_remote_parts(str) do

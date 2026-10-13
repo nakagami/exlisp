@@ -203,7 +203,7 @@ defmodule LispBeam do
     chunks = chunk_by_macro_defs(asts)
 
     Enum.reduce(chunks, nil, fn chunk, _acc ->
-      unique_id = counter || System.unique_integer([:positive, :monotonic])
+      unique_id = counter || unique_id()
       module_name = Module.concat(["LispReplModule#{unique_id}"])
       module_atom = module_name
 
@@ -608,7 +608,7 @@ defmodule LispBeam do
         {:var, 1, renamed}
 
       MapSet.member?(local_env, {:mutated, var_atom}) ->
-        lex_var = :"V_lex_#{System.unique_integer([:positive, :monotonic])}"
+        lex_var = :"V_lex_#{unique_id()}"
 
         {:case, 1,
          {:call, 1, {:remote, 1, {:atom, 1, :erlang}, {:atom, 1, :get}}, [{:atom, 1, var_atom}]},
@@ -740,8 +740,8 @@ defmodule LispBeam do
         case args do
           [arg] ->
             c_arg = compile_expr(arg, local_env)
-            h_var = :"V_h_#{System.unique_integer([:positive])}"
-            other_var = :"V_other_#{System.unique_integer([:positive])}"
+            h_var = :"V_h_#{unique_id()}"
+            other_var = :"V_other_#{unique_id()}"
 
             {:case, 1, c_arg,
              [
@@ -764,8 +764,8 @@ defmodule LispBeam do
         case args do
           [arg] ->
             c_arg = compile_expr(arg, local_env)
-            t_var = :"V_t_#{System.unique_integer([:positive])}"
-            other_var = :"V_other_#{System.unique_integer([:positive])}"
+            t_var = :"V_t_#{unique_id()}"
+            other_var = :"V_other_#{unique_id()}"
 
             {:case, 1, c_arg,
              [
@@ -885,7 +885,7 @@ defmodule LispBeam do
         case args do
           [arg] ->
             c_arg = compile_expr(arg, local_env)
-            v = :"V_zp_#{System.unique_integer([:positive, :monotonic])}"
+            v = :"V_zp_#{unique_id()}"
 
             {:case, 1, c_arg,
              [
@@ -906,7 +906,7 @@ defmodule LispBeam do
         case args do
           [arg] ->
             c_arg = compile_expr(arg, local_env)
-            v = :"V_pp_#{System.unique_integer([:positive, :monotonic])}"
+            v = :"V_pp_#{unique_id()}"
 
             {:case, 1, c_arg,
              [
@@ -932,7 +932,7 @@ defmodule LispBeam do
         case args do
           [arg] ->
             c_arg = compile_expr(arg, local_env)
-            v = :"V_mp_#{System.unique_integer([:positive, :monotonic])}"
+            v = :"V_mp_#{unique_id()}"
 
             {:case, 1, c_arg,
              [
@@ -958,7 +958,7 @@ defmodule LispBeam do
         case args do
           [arg] ->
             c_arg = compile_expr(arg, local_env)
-            v = :"V_ep_#{System.unique_integer([:positive, :monotonic])}"
+            v = :"V_ep_#{unique_id()}"
 
             {:case, 1, c_arg,
              [
@@ -981,7 +981,7 @@ defmodule LispBeam do
         case args do
           [arg] ->
             c_arg = compile_expr(arg, local_env)
-            v = :"V_op_#{System.unique_integer([:positive, :monotonic])}"
+            v = :"V_op_#{unique_id()}"
 
             {:case, 1, c_arg,
              [
@@ -1367,7 +1367,7 @@ defmodule LispBeam do
       name when name in [:push, :_cl_push_] ->
         case args do
           [item_node, place_node | _] ->
-            uid = System.unique_integer([:positive, :monotonic])
+            uid = unique_id()
             item_var = {:id, 1, ["__push_item_#{uid}"]}
             {bound_place, arg_bindings} = decompose_macro_place(place_node, "push")
 
@@ -1393,12 +1393,12 @@ defmodule LispBeam do
       name when name in [:pushnew, :_cl_pushnew_] ->
         case args do
           [item_node, place_node | rest_opts] ->
-            uid = System.unique_integer([:positive, :monotonic])
+            uid = unique_id()
             item_var = {:id, 1, ["__pushnew_item_#{uid}"]}
 
             opt_vars =
               Enum.map(rest_opts, fn _ ->
-                {:id, 1, ["__pushnew_opt_#{System.unique_integer([:positive, :monotonic])}"]}
+                {:id, 1, ["__pushnew_opt_#{unique_id()}"]}
               end)
 
             opt_bindings =
@@ -1432,20 +1432,20 @@ defmodule LispBeam do
       name when name in [:remf, :_cl_remf_] ->
         case args do
           [place_node, indicator_node | _] ->
-            ind_var = {:id, 1, ["__remf_ind_#{System.unique_integer([:positive, :monotonic])}"]}
-            tmp_res = {:id, 1, ["__remf_res_#{System.unique_integer([:positive, :monotonic])}"]}
+            ind_var = {:id, 1, ["__remf_ind_#{unique_id()}"]}
+            tmp_res = {:id, 1, ["__remf_res_#{unique_id()}"]}
 
             tmp_plist =
-              {:id, 1, ["__remf_plist_#{System.unique_integer([:positive, :monotonic])}"]}
+              {:id, 1, ["__remf_plist_#{unique_id()}"]}
 
             tmp_removed =
-              {:id, 1, ["__remf_rem_#{System.unique_integer([:positive, :monotonic])}"]}
+              {:id, 1, ["__remf_rem_#{unique_id()}"]}
 
             case place_node do
               {:list, pos, [acc_op | acc_args]} ->
                 arg_vars =
                   Enum.map(acc_args, fn _ ->
-                    {:id, 1, ["__remf_arg_#{System.unique_integer([:positive, :monotonic])}"]}
+                    {:id, 1, ["__remf_arg_#{unique_id()}"]}
                   end)
 
                 arg_bindings =
@@ -1520,7 +1520,7 @@ defmodule LispBeam do
       name when name in [:pop, :_cl_pop_] ->
         case args do
           [place_node | _] ->
-            uid = System.unique_integer([:positive, :monotonic])
+            uid = unique_id()
             tmp_val = {:id, 1, ["__pop_val_#{uid}"]}
             {bound_place, arg_bindings} = decompose_macro_place(place_node, "pop")
 
@@ -1927,7 +1927,7 @@ defmodule LispBeam do
 
               case body_nodes do
                 [] ->
-                  temp_var = :"V_cond_#{System.unique_integer([:positive, :monotonic])}"
+                  temp_var = :"V_cond_#{unique_id()}"
 
                   {:block, 1,
                    [
@@ -1970,7 +1970,7 @@ defmodule LispBeam do
   end
 
   def compile_case([key_node | clauses], local_env) do
-    key_var_sym = :"__case_key_#{System.unique_integer([:positive, :monotonic])}"
+    key_var_sym = :"__case_key_#{unique_id()}"
     key_var_str = Atom.to_string(key_var_sym)
     key_var_ast = {:id, 1, [key_var_str]}
 
@@ -2065,7 +2065,7 @@ defmodule LispBeam do
   def compile_ecase([], _local_env), do: {:atom, 1, nil}
 
   def compile_typecase([key_node | clauses], local_env) do
-    key_var_sym = :"__typecase_key_#{System.unique_integer([:positive, :monotonic])}"
+    key_var_sym = :"__typecase_key_#{unique_id()}"
     key_var_str = Atom.to_string(key_var_sym)
     key_var_ast = {:id, 1, [key_var_str]}
 
@@ -2168,7 +2168,7 @@ defmodule LispBeam do
   def compile_the(args, local_env) do
     case args do
       [typespec_node, value_node | _] ->
-        temp_var = {:id, 1, ["__the_val_#{System.unique_integer([:positive, :monotonic])}"]}
+        temp_var = {:id, 1, ["__the_val_#{unique_id()}"]}
 
         ast =
           {:list, 1,
@@ -2248,7 +2248,7 @@ defmodule LispBeam do
   end
 
   def compile_prog1([first | rest], local_env) do
-    temp_var = :"V_prog1_#{System.unique_integer([:positive, :monotonic])}"
+    temp_var = :"V_prog1_#{unique_id()}"
     compiled_first = compile_expr(first, local_env)
     compiled_rest = Enum.map(rest, &compile_expr(&1, local_env))
 
@@ -2265,7 +2265,7 @@ defmodule LispBeam do
   def compile_prog1([], _local_env), do: {:atom, 1, nil}
 
   def compile_prog2([first, second | rest], local_env) do
-    temp_var = :"V_prog2_#{System.unique_integer([:positive, :monotonic])}"
+    temp_var = :"V_prog2_#{unique_id()}"
     compiled_first = compile_expr(first, local_env)
     compiled_second = compile_expr(second, local_env)
     compiled_rest = Enum.map(rest, &compile_expr(&1, local_env))
@@ -2676,7 +2676,7 @@ defmodule LispBeam do
     end
   end
 
-  defp extract_special_vars(decls) do
+  def extract_special_vars(decls) do
     Enum.flat_map(decls, fn
       {:list, _pos, [{:id, _pos2, _} | decl_clauses]} ->
         Enum.flat_map(decl_clauses, fn
@@ -2859,11 +2859,11 @@ defmodule LispBeam do
       _ ->
         fn_names = Enum.map(fn_defs, &elem(&1, 0))
         all_fn_env = Enum.reduce(fn_names, local_env, &MapSet.put(&2, {:closure_fn, &1}))
-        dispatcher_var = :"V_disp_#{System.unique_integer([:positive])}"
+        dispatcher_var = :"V_disp_#{unique_id()}"
 
         fn_wrappers =
           Enum.map(fn_defs, fn {name, _params_node, _} ->
-            args_var = :"V_args_#{System.unique_integer([:positive])}"
+            args_var = :"V_args_#{unique_id()}"
 
             call_dispatcher =
               {:call, 1, {:var, 1, dispatcher_var}, [{:atom, 1, name}, {:var, 1, args_var}]}
@@ -2877,7 +2877,7 @@ defmodule LispBeam do
 
         dispatcher_clauses =
           Enum.map(fn_defs, fn {name, params_node, fn_body_nodes} ->
-            args_var_sym = :"__fn_args_#{System.unique_integer([:positive])}"
+            args_var_sym = :"__fn_args_#{unique_id()}"
 
             fn_body_ast =
               if has_lambda_list_keywords?(params_node) do
@@ -3012,7 +3012,7 @@ defmodule LispBeam do
   def compile_or([single], local_env), do: compile_expr(single, local_env)
 
   def compile_or([first | rest], local_env) do
-    temp_var = :"V_or_#{System.unique_integer([:positive, :monotonic])}"
+    temp_var = :"V_or_#{unique_id()}"
     rest_compiled = compile_or(rest, local_env)
 
     {:case, 1, compile_expr(first, local_env),
@@ -3178,7 +3178,7 @@ defmodule LispBeam do
                 arg_vars =
                   Enum.map(rest_args, fn _ ->
                     {:id, 1,
-                     ["__#{prefix}_arg_#{System.unique_integer([:positive, :monotonic])}"]}
+                     ["__#{prefix}_arg_#{unique_id()}"]}
                   end)
 
                 arg_bindings =
@@ -3196,7 +3196,7 @@ defmodule LispBeam do
             case acc_args do
               [idx_node, target_node] ->
                 idx_var =
-                  {:id, 1, ["__#{prefix}_idx_#{System.unique_integer([:positive, :monotonic])}"]}
+                  {:id, 1, ["__#{prefix}_idx_#{unique_id()}"]}
 
                 bound_place = {:list, pos, [acc_op, idx_var, target_node]}
                 {bound_place, [{:list, 1, [idx_var, idx_node]}]}
@@ -3217,7 +3217,7 @@ defmodule LispBeam do
                 arg_vars =
                   Enum.map(acc_args, fn _ ->
                     {:id, 1,
-                     ["__#{prefix}_arg_#{System.unique_integer([:positive, :monotonic])}"]}
+                     ["__#{prefix}_arg_#{unique_id()}"]}
                   end)
 
                 arg_bindings =
@@ -3242,7 +3242,7 @@ defmodule LispBeam do
       {:list, _pos, [{:id, _, [p]} | forms]} when p in ["progn", "PROGN"] and forms != [] ->
         init_forms = Enum.drop(forms, -1)
         last_form = List.last(forms)
-        dummy_var = {:id, 1, ["__place_init_#{System.unique_integer([:positive, :monotonic])}"]}
+        dummy_var = {:id, 1, ["__place_init_#{unique_id()}"]}
 
         progn_binding =
           if init_forms == [] do
@@ -3257,7 +3257,7 @@ defmodule LispBeam do
       {:list, pos, [acc_op | acc_args]} ->
         arg_vars =
           Enum.map(acc_args, fn _ ->
-            {:id, 1, ["__place_arg_#{System.unique_integer([:positive, :monotonic])}"]}
+            {:id, 1, ["__place_arg_#{unique_id()}"]}
           end)
 
         arg_bindings =
@@ -3268,7 +3268,7 @@ defmodule LispBeam do
         {:accessor, bound_target, arg_bindings}
 
       other ->
-        var = {:id, 1, ["__place_expr_#{System.unique_integer([:positive, :monotonic])}"]}
+        var = {:id, 1, ["__place_expr_#{unique_id()}"]}
         {:expr, var, [{:list, 1, [var, other]}]}
     end
   end
@@ -3287,7 +3287,7 @@ defmodule LispBeam do
             []
           else
             dummy_var =
-              {:id, 1, ["__place_progn_#{System.unique_integer([:positive, :monotonic])}"]}
+              {:id, 1, ["__place_progn_#{unique_id()}"]}
 
             [{:list, 1, [dummy_var, {:list, 1, [{:id, 1, ["progn"]} | init_forms]}]}]
           end
@@ -3296,7 +3296,7 @@ defmodule LispBeam do
         {progn_binding ++ last_bindings, last_var}
 
       _ ->
-        temp_var = {:id, 1, ["__place_sub_#{System.unique_integer([:positive, :monotonic])}"]}
+        temp_var = {:id, 1, ["__place_sub_#{unique_id()}"]}
         {[{:list, 1, [temp_var, sub_arg]}], temp_var}
     end
   end
@@ -3331,7 +3331,7 @@ defmodule LispBeam do
 
   defp compile_setf_values(place_args, val_node, local_env) do
     {sub_bindings, rewritten_places} = decompose_places(place_args)
-    mv_var = {:id, 1, ["__mv_setf_#{System.unique_integer([:positive, :monotonic])}"]}
+    mv_var = {:id, 1, ["__mv_setf_#{unique_id()}"]}
     mv_form = rewrite_mv_form(val_node)
 
     setf_exprs =
@@ -3422,6 +3422,89 @@ defmodule LispBeam do
     compile_expr(ast, local_env)
   end
 
+  defp is_cxr?(op) do
+    str =
+      to_string(op)
+      |> String.downcase()
+      |> String.replace_prefix("_cl_", "")
+      |> String.replace_suffix("_", "")
+
+    if String.starts_with?(str, "c") and String.ends_with?(str, "r") and String.length(str) >= 4 and
+         String.length(str) <= 6 do
+      middle = String.slice(str, 1..-2//1)
+      chars = String.to_charlist(middle)
+      Enum.all?(chars, fn c -> c in [?a, ?d] end)
+    else
+      false
+    end
+  end
+
+  defp expand_cxr_place(op, place_args, pos) do
+    str =
+      to_string(op)
+      |> String.downcase()
+      |> String.replace_prefix("_cl_", "")
+      |> String.replace_suffix("_", "")
+
+    middle = String.slice(str, 1..-2//1)
+    chars = String.to_charlist(middle)
+
+    Enum.reduce(Enum.reverse(chars), hd(place_args), fn
+      ?a, acc -> {:list, pos, [{:id, pos, ["car"]}, acc]}
+      ?d, acc -> {:list, pos, [{:id, pos, ["cdr"]}, acc]}
+    end)
+  end
+
+  defp is_nth_alias?(op) do
+    op in [
+      :first,
+      :_cl_first_,
+      :rest,
+      :_cl_rest_,
+      :second,
+      :_cl_second_,
+      :third,
+      :_cl_third_,
+      :fourth,
+      :_cl_fourth_,
+      :fifth,
+      :_cl_fifth_,
+      :sixth,
+      :_cl_sixth_,
+      :seventh,
+      :_cl_seventh_,
+      :eighth,
+      :_cl_eighth_,
+      :ninth,
+      :_cl_ninth_,
+      :tenth,
+      :_cl_tenth_
+    ]
+  end
+
+  defp expand_nth_alias_place(op, place_args, pos) do
+    clean_op =
+      to_string(op)
+      |> String.downcase()
+      |> String.replace_prefix("_cl_", "")
+      |> String.replace_suffix("_", "")
+      |> String.to_atom()
+
+    case clean_op do
+      :first -> {:list, pos, [{:id, pos, ["car"]} | place_args]}
+      :rest -> {:list, pos, [{:id, pos, ["cdr"]} | place_args]}
+      :second -> {:list, pos, [{:id, pos, ["cadr"]} | place_args]}
+      :third -> {:list, pos, [{:id, pos, ["caddr"]} | place_args]}
+      :fourth -> {:list, pos, [{:id, pos, ["cadddr"]} | place_args]}
+      :fifth -> {:list, pos, [{:id, pos, ["nth"]}, {:lit, 1, 4} | place_args]}
+      :sixth -> {:list, pos, [{:id, pos, ["nth"]}, {:lit, 1, 5} | place_args]}
+      :seventh -> {:list, pos, [{:id, pos, ["nth"]}, {:lit, 1, 6} | place_args]}
+      :eighth -> {:list, pos, [{:id, pos, ["nth"]}, {:lit, 1, 7} | place_args]}
+      :ninth -> {:list, pos, [{:id, pos, ["nth"]}, {:lit, 1, 8} | place_args]}
+      :tenth -> {:list, pos, [{:id, pos, ["nth"]}, {:lit, 1, 9} | place_args]}
+    end
+  end
+
   defp compile_single_setf(place, val_node, local_env) do
     case place do
       {:list, _pos, [{:id, _, [p]} | forms]} when p in ["progn", "PROGN"] and forms != [] ->
@@ -3437,9 +3520,21 @@ defmodule LispBeam do
           local_env
         )
 
-      {:list, _pos, [op_node | place_args]} ->
-        case extract_op_name(op_node) do
-          name when name in [:documentation, :_cl_documentation_] ->
+      {:list, pos, [op_node | place_args]} ->
+        op = extract_op_name(op_node)
+
+        cond do
+          is_cxr?(op) ->
+            expanded = expand_cxr_place(op, place_args, pos)
+            compile_single_setf(expanded, val_node, local_env)
+
+          is_nth_alias?(op) ->
+            expanded = expand_nth_alias_place(op, place_args, pos)
+            compile_single_setf(expanded, val_node, local_env)
+
+          true ->
+            case op do
+              name when name in [:documentation, :_cl_documentation_] ->
             case place_args do
               [target_node, type_node] ->
                 {:call, 1,
@@ -3485,7 +3580,7 @@ defmodule LispBeam do
 
                   _ ->
                     val_var =
-                      {:id, 1, ["__setf_val_#{System.unique_integer([:positive, :monotonic])}"]}
+                      {:id, 1, ["__setf_val_#{unique_id()}"]}
 
                     ast =
                       {:list, 1,
@@ -3532,7 +3627,7 @@ defmodule LispBeam do
 
                   _ ->
                     val_var =
-                      {:id, 1, ["__setf_val_#{System.unique_integer([:positive, :monotonic])}"]}
+                      {:id, 1, ["__setf_val_#{unique_id()}"]}
 
                     ast =
                       {:list, 1,
@@ -3583,10 +3678,10 @@ defmodule LispBeam do
 
                   _ ->
                     val_var =
-                      {:id, 1, ["__setf_val_#{System.unique_integer([:positive, :monotonic])}"]}
+                      {:id, 1, ["__setf_val_#{unique_id()}"]}
 
                     idx_var =
-                      {:id, 1, ["__setf_idx_#{System.unique_integer([:positive, :monotonic])}"]}
+                      {:id, 1, ["__setf_idx_#{unique_id()}"]}
 
                     ast =
                       {:list, 1,
@@ -3625,15 +3720,15 @@ defmodule LispBeam do
                 default_node = List.first(default_rest)
 
                 val_var =
-                  {:id, 1, ["__setf_val_#{System.unique_integer([:positive, :monotonic])}"]}
+                  {:id, 1, ["__setf_val_#{unique_id()}"]}
 
                 ind_var =
-                  {:id, 1, ["__setf_ind_#{System.unique_integer([:positive, :monotonic])}"]}
+                  {:id, 1, ["__setf_ind_#{unique_id()}"]}
 
                 def_bindings =
                   if default_node do
                     def_var =
-                      {:id, 1, ["__setf_def_#{System.unique_integer([:positive, :monotonic])}"]}
+                      {:id, 1, ["__setf_def_#{unique_id()}"]}
 
                     [{:list, 1, [def_var, default_node]}]
                   else
@@ -3651,7 +3746,7 @@ defmodule LispBeam do
 
                           dummy_var =
                             {:id, 1,
-                             ["__setf_init_#{System.unique_integer([:positive, :monotonic])}"]}
+                             ["__setf_init_#{unique_id()}"]}
 
                           progn_init = {:list, 1, [{:id, 1, ["progn"]} | init_forms]}
 
@@ -3663,7 +3758,7 @@ defmodule LispBeam do
                         other_arg, {b_acc, a_acc} ->
                           arg_var =
                             {:id, 1,
-                             ["__setf_arg_#{System.unique_integer([:positive, :monotonic])}"]}
+                             ["__setf_arg_#{unique_id()}"]}
 
                           {b_acc ++ [{:list, 1, [arg_var, other_arg]}], a_acc ++ [arg_var]}
                       end)
@@ -3773,10 +3868,10 @@ defmodule LispBeam do
                 {kind, target, target_bindings} = decompose_place_target(seq_node)
 
                 idx_var =
-                  {:id, 1, ["__setf_char_idx_#{System.unique_integer([:positive, :monotonic])}"]}
+                  {:id, 1, ["__setf_char_idx_#{unique_id()}"]}
 
                 val_var =
-                  {:id, 1, ["__setf_char_val_#{System.unique_integer([:positive, :monotonic])}"]}
+                  {:id, 1, ["__setf_char_val_#{unique_id()}"]}
 
                 all_bindings =
                   target_bindings ++
@@ -3822,10 +3917,10 @@ defmodule LispBeam do
                 {kind, target, target_bindings} = decompose_place_target(seq_node)
 
                 idx_var =
-                  {:id, 1, ["__setf_elt_idx_#{System.unique_integer([:positive, :monotonic])}"]}
+                  {:id, 1, ["__setf_elt_idx_#{unique_id()}"]}
 
                 val_var =
-                  {:id, 1, ["__setf_elt_val_#{System.unique_integer([:positive, :monotonic])}"]}
+                  {:id, 1, ["__setf_elt_val_#{unique_id()}"]}
 
                 all_bindings =
                   target_bindings ++
@@ -3872,11 +3967,11 @@ defmodule LispBeam do
 
                 start_var =
                   {:id, 1,
-                   ["__setf_subseq_start_#{System.unique_integer([:positive, :monotonic])}"]}
+                   ["__setf_subseq_start_#{unique_id()}"]}
 
                 val_var =
                   {:id, 1,
-                   ["__setf_subseq_val_#{System.unique_integer([:positive, :monotonic])}"]}
+                   ["__setf_subseq_val_#{unique_id()}"]}
 
                 all_bindings =
                   target_bindings ++
@@ -3917,15 +4012,15 @@ defmodule LispBeam do
 
                 start_var =
                   {:id, 1,
-                   ["__setf_subseq_start_#{System.unique_integer([:positive, :monotonic])}"]}
+                   ["__setf_subseq_start_#{unique_id()}"]}
 
                 end_var =
                   {:id, 1,
-                   ["__setf_subseq_end_#{System.unique_integer([:positive, :monotonic])}"]}
+                   ["__setf_subseq_end_#{unique_id()}"]}
 
                 val_var =
                   {:id, 1,
-                   ["__setf_subseq_val_#{System.unique_integer([:positive, :monotonic])}"]}
+                   ["__setf_subseq_val_#{unique_id()}"]}
 
                 all_bindings =
                   target_bindings ++
@@ -3970,9 +4065,9 @@ defmodule LispBeam do
           name when name in [:row_major_aref, :_cl_row_major_aref_, :"row-major-aref"] ->
             case place_args do
               [arr_node, idx_node] ->
-                arr_var = :"V_arr_#{System.unique_integer([:positive, :monotonic])}"
-                idx_var = :"V_idx_#{System.unique_integer([:positive, :monotonic])}"
-                val_var = :"V_val_#{System.unique_integer([:positive, :monotonic])}"
+                arr_var = :"V_arr_#{unique_id()}"
+                idx_var = :"V_idx_#{unique_id()}"
+                val_var = :"V_val_#{unique_id()}"
 
                 {:block, 1,
                  [
@@ -3991,9 +4086,9 @@ defmodule LispBeam do
           name when name in [:svref, :_cl_svref_] ->
             case place_args do
               [arr_node, idx_node] ->
-                arr_var = :"V_arr_#{System.unique_integer([:positive, :monotonic])}"
-                idx_var = :"V_idx_#{System.unique_integer([:positive, :monotonic])}"
-                val_var = :"V_val_#{System.unique_integer([:positive, :monotonic])}"
+                arr_var = :"V_arr_#{unique_id()}"
+                idx_var = :"V_idx_#{unique_id()}"
+                val_var = :"V_val_#{unique_id()}"
 
                 {:block, 1,
                  [
@@ -4011,9 +4106,9 @@ defmodule LispBeam do
           name when name in [:aref, :_cl_aref_, :bit, :_cl_bit_, :sbit, :_cl_sbit_] ->
             case place_args do
               [arr_node, idx_node] ->
-                arr_var = :"V_arr_#{System.unique_integer([:positive, :monotonic])}"
-                idx_var = :"V_idx_#{System.unique_integer([:positive, :monotonic])}"
-                val_var = :"V_val_#{System.unique_integer([:positive, :monotonic])}"
+                arr_var = :"V_arr_#{unique_id()}"
+                idx_var = :"V_idx_#{unique_id()}"
+                val_var = :"V_val_#{unique_id()}"
 
                 {:block, 1,
                  [
@@ -4025,12 +4120,12 @@ defmodule LispBeam do
                  ]}
 
               [arr_node | idx_nodes] ->
-                arr_var = :"V_arr_#{System.unique_integer([:positive, :monotonic])}"
-                val_var = :"V_val_#{System.unique_integer([:positive, :monotonic])}"
+                arr_var = :"V_arr_#{unique_id()}"
+                val_var = :"V_val_#{unique_id()}"
 
                 idx_vars =
                   Enum.map(idx_nodes, fn _ ->
-                    :"V_idx_#{System.unique_integer([:positive, :monotonic])}"
+                    :"V_idx_#{unique_id()}"
                   end)
 
                 arr_match = {:match, 1, {:var, 1, arr_var}, compile_expr(arr_node, local_env)}
@@ -4058,7 +4153,7 @@ defmodule LispBeam do
                 compile_setq([place, val_node], local_env)
             end
 
-          :get ->
+          name when name in [:get, :_cl_get_] ->
             case place_args do
               [sym_node, prop_node] ->
                 {:call, 1,
@@ -4070,8 +4165,8 @@ defmodule LispBeam do
                  ]}
 
               [sym_node, prop_node, def_node] ->
-                sym_var = :"V_getsym_#{System.unique_integer([:positive, :monotonic])}"
-                prop_var = :"V_getprop_#{System.unique_integer([:positive, :monotonic])}"
+                sym_var = :"V_getsym_#{unique_id()}"
+                prop_var = :"V_getprop_#{unique_id()}"
 
                 {:block, 1,
                  [
@@ -4211,6 +4306,7 @@ defmodule LispBeam do
                 end
             end
         end
+        end
 
       _ ->
         compile_setq([place, val_node], local_env)
@@ -4305,7 +4401,7 @@ defmodule LispBeam do
 
   def compile_block([name_node | body_nodes], local_env) do
     block_name = to_atom_symbol(name_node)
-    unique_tag = :"__block_#{block_name}_#{System.unique_integer([:positive])}"
+    unique_tag = :"__block_#{block_name}_#{unique_id()}"
 
     filtered_env =
       Enum.reject(local_env, fn
@@ -4322,7 +4418,7 @@ defmodule LispBeam do
         _ -> Enum.map(body_nodes, &compile_expr(&1, new_local_env))
       end
 
-    ret_var = :"V_ret_#{System.unique_integer([:positive])}"
+    ret_var = :"V_ret_#{unique_id()}"
 
     {:try, 1, compiled_body, [],
      [
@@ -4409,7 +4505,7 @@ defmodule LispBeam do
     else
       # Implicit (block nil ...)
       block_name = nil
-      unique_tag = :"__block_nil_#{System.unique_integer([:positive])}"
+      unique_tag = :"__block_nil_#{unique_id()}"
 
       filtered_env =
         Enum.reject(local_env, fn
@@ -4420,7 +4516,7 @@ defmodule LispBeam do
 
       new_local_env = MapSet.put(filtered_env, {:__block__, block_name, unique_tag})
 
-      loop_fun_name = :"Loop_#{System.unique_integer([:positive, :monotonic])}"
+      loop_fun_name = :"Loop_#{unique_id()}"
       compiled_body = Enum.map(body_nodes, &compile_expr(&1, new_local_env))
 
       loop_clauses = [
@@ -4429,7 +4525,7 @@ defmodule LispBeam do
 
       loop_call = {:call, 1, {:named_fun, 1, loop_fun_name, loop_clauses}, []}
 
-      ret_var = :"V_ret_#{System.unique_integer([:positive])}"
+      ret_var = :"V_ret_#{unique_id()}"
 
       {:try, 1, [loop_call], [],
        [
@@ -4852,7 +4948,7 @@ defmodule LispBeam do
             m -> {m, []}
           end
 
-        uid = System.unique_integer([:positive, :monotonic])
+        uid = unique_id()
         mutex_var = {:id, 1, ["__mutex_#{uid}"]}
         got_var = {:id, 1, ["__mutex_got_#{uid}"]}
 
@@ -4939,7 +5035,7 @@ defmodule LispBeam do
   defp do_parse_restart_opts(other, acc), do: {acc, other}
 
   defp wrap_block_nil(local_env, callback) do
-    unique_tag = :"__block_nil_#{System.unique_integer([:positive])}"
+    unique_tag = :"__block_nil_#{unique_id()}"
 
     filtered_env =
       Enum.reject(local_env, fn
@@ -4950,7 +5046,7 @@ defmodule LispBeam do
 
     block_env = MapSet.put(filtered_env, {:__block__, nil, unique_tag})
     compiled_ast = callback.(block_env)
-    ret_var = :"V_ret_#{System.unique_integer([:positive])}"
+    ret_var = :"V_ret_#{unique_id()}"
 
     {:try, 1, [compiled_ast], [],
      [
@@ -4974,7 +5070,7 @@ defmodule LispBeam do
     init_nodes = Enum.map(bindings, &elem(&1, 1))
     step_nodes = Enum.map(bindings, &elem(&1, 2))
 
-    loop_fn_sym = {:id, 1, ["__do_loop_#{System.unique_integer([:positive, :monotonic])}"]}
+    loop_fn_sym = {:id, 1, ["__do_loop_#{unique_id()}"]}
 
     let_bindings =
       Enum.zip(var_nodes, init_nodes)
@@ -5037,7 +5133,7 @@ defmodule LispBeam do
     init_nodes = Enum.map(bindings, &elem(&1, 1))
     step_nodes = Enum.map(bindings, &elem(&1, 2))
 
-    loop_fn_sym = {:id, 1, ["__do_star_loop_#{System.unique_integer([:positive, :monotonic])}"]}
+    loop_fn_sym = {:id, 1, ["__do_star_loop_#{unique_id()}"]}
 
     let_bindings =
       Enum.zip(var_nodes, init_nodes)
@@ -5143,8 +5239,8 @@ defmodule LispBeam do
 
   def compile_tagbody(elements, local_env) do
     segments = group_tagbody_segments(elements)
-    unique_tag = :"__tagbody_#{System.unique_integer([:positive])}"
-    loop_fun_name = :"TagbodyLoop_#{System.unique_integer([:positive, :monotonic])}"
+    unique_tag = :"__tagbody_#{unique_id()}"
+    loop_fun_name = :"TagbodyLoop_#{unique_id()}"
 
     tag_set =
       Enum.map(segments, &elem(&1, 0))
@@ -5164,10 +5260,10 @@ defmodule LispBeam do
         MapSet.put(acc, {:__tagbody_tag__, t, unique_tag})
       end)
 
-    v_tag = :"V_tag_#{System.unique_integer([:positive])}"
-    v_next = :"V_next_#{System.unique_integer([:positive])}"
-    v_throw_dest = :"V_throw_dest_#{System.unique_integer([:positive])}"
-    v_dest_tag = :"V_dest_tag_#{System.unique_integer([:positive])}"
+    v_tag = :"V_tag_#{unique_id()}"
+    v_next = :"V_next_#{unique_id()}"
+    v_throw_dest = :"V_throw_dest_#{unique_id()}"
+    v_dest_tag = :"V_dest_tag_#{unique_id()}"
 
     case_clauses =
       Enum.map(segments, fn {tag, expr_nodes, next_tag} ->
@@ -5315,7 +5411,7 @@ defmodule LispBeam do
   end
 
   defp compile_standard_dotimes(var_name, count_node, result_node, body_nodes, local_env) do
-    loop_fun_name = :"Loop_#{System.unique_integer([:positive, :monotonic])}"
+    loop_fun_name = :"Loop_#{unique_id()}"
     var_erl = erl_var_name(var_name)
     body_env = MapSet.put(local_env, var_name)
 
@@ -5350,7 +5446,7 @@ defmodule LispBeam do
          threaded_vars,
          local_env
        ) do
-    loop_fun_name = :"Loop_#{System.unique_integer([:positive, :monotonic])}"
+    loop_fun_name = :"Loop_#{unique_id()}"
     var_erl = erl_var_name(var_name)
 
     initial_threaded_map = Map.new(threaded_vars, fn v -> {v, erl_var_name(v)} end)
@@ -5437,7 +5533,7 @@ defmodule LispBeam do
   end
 
   defp compile_standard_dolist(var_name, list_node, result_node, body_nodes, local_env) do
-    loop_fun_name = :"Loop_#{System.unique_integer([:positive, :monotonic])}"
+    loop_fun_name = :"Loop_#{unique_id()}"
     var_erl = erl_var_name(var_name)
     body_env = MapSet.put(local_env, var_name)
 
@@ -5475,7 +5571,7 @@ defmodule LispBeam do
          threaded_vars,
          local_env
        ) do
-    loop_fun_name = :"Loop_#{System.unique_integer([:positive, :monotonic])}"
+    loop_fun_name = :"Loop_#{unique_id()}"
     var_erl = erl_var_name(var_name)
 
     initial_threaded_map = Map.new(threaded_vars, fn v -> {v, erl_var_name(v)} end)
@@ -5668,7 +5764,7 @@ defmodule LispBeam do
                   compiled_val = compile_expr(val_node, inner_env)
 
                   if MapSet.member?(threaded_set, v) do
-                    new_erl_var = :"V_#{v}_#{System.unique_integer([:positive, :monotonic])}"
+                    new_erl_var = :"V_#{v}_#{unique_id()}"
                     match_expr = {:match, 1, {:var, 1, new_erl_var}, compiled_val}
                     {inner_exprs ++ [match_expr], Map.put(inner_map, v, new_erl_var)}
                   else
@@ -5684,7 +5780,7 @@ defmodule LispBeam do
                   v = extract_symbol_name(var_node)
 
                   if MapSet.member?(threaded_set, v) do
-                    new_erl_var = :"V_#{v}_#{System.unique_integer([:positive, :monotonic])}"
+                    new_erl_var = :"V_#{v}_#{unique_id()}"
                     match_expr = {:match, 1, {:var, 1, new_erl_var}, {:atom, 1, nil}}
                     {inner_exprs ++ [match_expr], Map.put(inner_map, v, new_erl_var)}
                   else
@@ -5706,7 +5802,7 @@ defmodule LispBeam do
                   compiled_val = compile_expr(add_ast, env)
 
                   if MapSet.member?(threaded_set, v) do
-                    new_erl_var = :"V_#{v}_#{System.unique_integer([:positive, :monotonic])}"
+                    new_erl_var = :"V_#{v}_#{unique_id()}"
                     match_expr = {:match, 1, {:var, 1, new_erl_var}, compiled_val}
                     {exprs_acc ++ [match_expr], Map.put(cur_map, v, new_erl_var)}
                   else
@@ -5731,7 +5827,7 @@ defmodule LispBeam do
                   compiled_val = compile_expr(sub_ast, env)
 
                   if MapSet.member?(threaded_set, v) do
-                    new_erl_var = :"V_#{v}_#{System.unique_integer([:positive, :monotonic])}"
+                    new_erl_var = :"V_#{v}_#{unique_id()}"
                     match_expr = {:match, 1, {:var, 1, new_erl_var}, compiled_val}
                     {exprs_acc ++ [match_expr], Map.put(cur_map, v, new_erl_var)}
                   else
@@ -6684,7 +6780,7 @@ defmodule LispBeam do
     if is_atom(clean) and not is_nil(clean) do
       erl_var_name(clean)
     else
-      String.to_atom("V_#{System.unique_integer([:positive])}")
+      String.to_atom("V_#{unique_id()}")
     end
   end
 
@@ -6785,9 +6881,9 @@ defmodule LispBeam do
     case args do
       [tag_node | body_nodes] ->
         compiled_tag = compile_expr(tag_node, local_env)
-        tag_var = :"V_tag_#{System.unique_integer([:positive, :monotonic])}"
-        val_var = :"V_val_#{System.unique_integer([:positive, :monotonic])}"
-        caught_tag_var = :"V_ctag_#{System.unique_integer([:positive, :monotonic])}"
+        tag_var = :"V_tag_#{unique_id()}"
+        val_var = :"V_val_#{unique_id()}"
+        caught_tag_var = :"V_ctag_#{unique_id()}"
 
         compiled_body =
           case body_nodes do
@@ -6920,7 +7016,7 @@ defmodule LispBeam do
     case args do
       [vars_node, values_form | body_nodes] ->
         var_names = extract_symbols(vars_node)
-        mv_var = {:id, 1, ["__mv_res_#{System.unique_integer([:positive, :monotonic])}"]}
+        mv_var = {:id, 1, ["__mv_res_#{unique_id()}"]}
         mv_form = rewrite_mv_form(values_form)
 
         bindings =
@@ -6973,7 +7069,7 @@ defmodule LispBeam do
   def compile_multiple_value_list(args, local_env) do
     case args do
       [form] ->
-        temp = :"V_mv_#{System.unique_integer([:positive])}"
+        temp = :"V_mv_#{unique_id()}"
         compiled_form = compile_expr(form, local_env)
 
         {:case, 1, compiled_form,
@@ -7035,7 +7131,7 @@ defmodule LispBeam do
           end
 
         {sub_bindings, rewritten_vars} = decompose_places(var_nodes)
-        mv_var = {:id, 1, ["__mv_setq_#{System.unique_integer([:positive, :monotonic])}"]}
+        mv_var = {:id, 1, ["__mv_setq_#{unique_id()}"]}
         mv_form = rewrite_mv_form(form)
 
         setf_exprs =
@@ -7101,7 +7197,7 @@ defmodule LispBeam do
   def compile_multiple_value_prog1(args, local_env) do
     case args do
       [first_form | body_nodes] ->
-        mv_var = {:id, 1, ["__mv_prog1_#{System.unique_integer([:positive, :monotonic])}"]}
+        mv_var = {:id, 1, ["__mv_prog1_#{unique_id()}"]}
 
         ast =
           {:list, 1,
@@ -7139,7 +7235,7 @@ defmodule LispBeam do
   def compile_destructuring_bind(args, local_env) do
     case args do
       [pattern, expr_node | body_nodes] ->
-        temp_var = {:id, 1, ["__destruct_#{System.unique_integer([:positive, :monotonic])}"]}
+        temp_var = {:id, 1, ["__destruct_#{unique_id()}"]}
         bindings = build_destructuring_bindings(pattern, temp_var)
 
         ast =
@@ -7175,7 +7271,7 @@ defmodule LispBeam do
   end
 
   defp do_build_destruct_list(elems, src_expr) do
-    curr_src = {:id, 1, ["__cur_src_#{System.unique_integer([:positive, :monotonic])}"]}
+    curr_src = {:id, 1, ["__cur_src_#{unique_id()}"]}
     init_binding = {:list, 1, [curr_src, src_expr]}
 
     {bindings, _} =
@@ -7184,7 +7280,7 @@ defmodule LispBeam do
           is_list_node?(elem) ->
             sub_val = {:list, 1, [{:id, 1, ["car"]}, cur]}
             sub_bindings = build_destructuring_bindings(elem, sub_val)
-            next_cur = {:id, 1, ["__cur_src_#{System.unique_integer([:positive, :monotonic])}"]}
+            next_cur = {:id, 1, ["__cur_src_#{unique_id()}"]}
             step_binding = {:list, 1, [next_cur, {:list, 1, [{:id, 1, ["cdr"]}, cur]}]}
             {acc ++ sub_bindings ++ [step_binding], next_cur}
 
@@ -7193,7 +7289,7 @@ defmodule LispBeam do
 
           true ->
             val_binding = {:list, 1, [elem, {:list, 1, [{:id, 1, ["car"]}, cur]}]}
-            next_cur = {:id, 1, ["__cur_src_#{System.unique_integer([:positive, :monotonic])}"]}
+            next_cur = {:id, 1, ["__cur_src_#{unique_id()}"]}
             step_binding = {:list, 1, [next_cur, {:list, 1, [{:id, 1, ["cdr"]}, cur]}]}
             {acc ++ [val_binding, step_binding], next_cur}
         end
@@ -7218,7 +7314,7 @@ defmodule LispBeam do
 
     temps =
       Enum.map(pairs, fn [var_node, val_node] ->
-        temp_var = {:id, 1, ["__psetq_#{System.unique_integer([:positive, :monotonic])}"]}
+        temp_var = {:id, 1, ["__psetq_#{unique_id()}"]}
         {var_node, val_node, temp_var}
       end)
 
@@ -7248,7 +7344,7 @@ defmodule LispBeam do
 
     temps =
       Enum.map(pairs, fn [place_node, val_node] ->
-        temp_var = {:id, 1, ["__psetf_#{System.unique_integer([:positive, :monotonic])}"]}
+        temp_var = {:id, 1, ["__psetf_#{unique_id()}"]}
         {place_node, val_node, temp_var}
       end)
 
@@ -7284,7 +7380,7 @@ defmodule LispBeam do
       places ->
         temps =
           Enum.map(places, fn p ->
-            temp_var = {:id, 1, ["__rot_#{System.unique_integer([:positive, :monotonic])}"]}
+            temp_var = {:id, 1, ["__rot_#{unique_id()}"]}
             {p, temp_var}
           end)
 
@@ -7324,7 +7420,7 @@ defmodule LispBeam do
         compile_expr(single, local_env)
 
       [place, newval] ->
-        old_temp = {:id, 1, ["__shift_old_#{System.unique_integer([:positive, :monotonic])}"]}
+        old_temp = {:id, 1, ["__shift_old_#{unique_id()}"]}
 
         ast =
           {:list, 1,
@@ -7343,14 +7439,14 @@ defmodule LispBeam do
 
         temps =
           Enum.map(places, fn p ->
-            temp_var = {:id, 1, ["__shift_#{System.unique_integer([:positive, :monotonic])}"]}
+            temp_var = {:id, 1, ["__shift_#{unique_id()}"]}
             {p, temp_var}
           end)
 
         old_first_temp =
-          {:id, 1, ["__shift_old1_#{System.unique_integer([:positive, :monotonic])}"]}
+          {:id, 1, ["__shift_old1_#{unique_id()}"]}
 
-        temp_newval = {:id, 1, ["__shift_new_#{System.unique_integer([:positive, :monotonic])}"]}
+        temp_newval = {:id, 1, ["__shift_new_#{unique_id()}"]}
 
         temp_bindings =
           [{:list, 1, [old_first_temp, hd(places)]}] ++
@@ -7537,5 +7633,9 @@ defmodule LispBeam do
       _ ->
         {:atom, 1, :t}
     end
+  end
+
+  defp unique_id do
+    rem(System.unique_integer([:positive]), 2000)
   end
 end

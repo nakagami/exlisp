@@ -1143,6 +1143,33 @@ defmodule ExLisp.Package do
     end
   end
 
+  def present_symbols_list(pkg_desig) do
+    pkg = find_package!(pkg_desig)
+    MapSet.union(pkg.internal_symbols, pkg.external_symbols)
+    |> Enum.map(&str_to_symbol/1)
+  end
+
+  def external_symbols_list(pkg_desig) do
+    pkg = find_package!(pkg_desig)
+    pkg.external_symbols
+    |> Enum.map(&str_to_symbol/1)
+  end
+
+  def all_symbols_list(pkg_desig) do
+    pkg = find_package!(pkg_desig)
+    used_externals =
+      Enum.flat_map(pkg.use_list, fn u_name ->
+        if u_pkg = find_package(u_name) do
+          MapSet.to_list(u_pkg.external_symbols)
+        else
+          []
+        end
+      end)
+    MapSet.union(pkg.internal_symbols, pkg.external_symbols)
+    |> MapSet.union(MapSet.new(used_externals))
+    |> Enum.map(&str_to_symbol/1)
+  end
+
   def list_all_packages do
     ensure_tables()
 
@@ -1337,6 +1364,10 @@ defmodule ExLisp.Package do
       "EXPORT" ->
         syms = Enum.map(args, &symbol_to_str/1) |> Enum.reject(&(&1 == ""))
         %{pkg | external_symbols: MapSet.union(pkg.external_symbols, MapSet.new(syms))}
+
+      "INTERN" ->
+        syms = Enum.map(args, &symbol_to_str/1) |> Enum.reject(&(&1 == ""))
+        %{pkg | internal_symbols: MapSet.union(pkg.internal_symbols, MapSet.new(syms))}
 
       "IMPORT_FROM" ->
         case args do

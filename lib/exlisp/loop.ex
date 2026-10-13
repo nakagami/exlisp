@@ -57,6 +57,7 @@ defmodule ExLisp.Loop do
   """
   def expand(nodes) do
     parsed = parse_loop(nodes)
+    check_duplicate_loop_vars!(parsed)
     build_ast(parsed)
   end
 
@@ -268,6 +269,8 @@ defmodule ExLisp.Loop do
 
   # Parse for/as clauses
   defp parse_for_clause([var_node | rest]) do
+    {var_node, rest} = strip_for_type_spec(var_node, rest)
+
     case rest do
       [kw_node | after_kw] ->
         case kw_name(kw_node) do
@@ -328,6 +331,9 @@ defmodule ExLisp.Loop do
                 raise ArgumentError, "loop for across requires a vector expression"
             end
 
+          :being ->
+            parse_being_clause(var_node, after_kw)
+
           range_kw
           when range_kw in [
                  :from,
@@ -349,6 +355,141 @@ defmodule ExLisp.Loop do
         raise ArgumentError, "Incomplete loop for clause"
     end
   end
+
+  defp strip_for_type_spec(var_node, [kw_node, _type_node | rem] = tokens) do
+    if kw_name(kw_node) in [:of_type, :"of-type"] do
+      {var_node, rem}
+    else
+      check_simple_type(var_node, tokens)
+    end
+  end
+
+  defp strip_for_type_spec(var_node, tokens), do: check_simple_type(var_node, tokens)
+
+  defp check_simple_type(var_node, [_type_node, next_kw | rem] = tokens) do
+    if kw_name(next_kw) in [
+         :=,
+         :in,
+         :on,
+         :across,
+         :being,
+         :from,
+         :upfrom,
+         :downfrom,
+         :to,
+         :upto,
+         :downto,
+         :below,
+         :above,
+         :then
+       ] do
+      {var_node, [next_kw | rem]}
+    else
+      {var_node, tokens}
+    end
+  end
+
+  defp check_simple_type(var_node, tokens), do: {var_node, tokens}
+
+  defp parse_being_clause(var_node, tokens) do
+    tokens =
+      case tokens do
+        [kw | rem] ->
+          if kw_name(kw) in [:the, :each] do
+            rem
+          else
+            tokens
+          end
+
+        _ ->
+          tokens
+      end
+
+    case tokens do
+      [what_node | after_what] ->
+        what = kw_name(what_node)
+        {source_node, rem_after_source} = parse_being_source(after_what)
+        {_using_type, using_var, final_rem} = parse_being_using(rem_after_source)
+
+        case what do
+          k when k in [:hash_key, :hash_keys, :"hash-key", :"hash-keys"] ->
+            if using_var do
+              {{:hash_table_pairs, var_node, using_var, :key_value, source_node}, final_rem}
+            else
+              {{:in, var_node, {:list, {1, 1}, [symbol_node(:_cl_hash_table_keys_), source_node]},
+                nil}, final_rem}
+            end
+
+          k when k in [:hash_value, :hash_values, :"hash-value", :"hash-values"] ->
+            if using_var do
+              {{:hash_table_pairs, using_var, var_node, :key_value, source_node}, final_rem}
+            else
+              {{:in, var_node,
+                {:list, {1, 1}, [symbol_node(:_cl_hash_table_values_), source_node]}, nil},
+               final_rem}
+            end
+
+          k when k in [:symbol, :symbols] ->
+            src = source_node || symbol_node(:"*package*")
+
+            {{:in, var_node, {:list, {1, 1}, [symbol_node(:_cl_all_symbols_list_), src]}, nil},
+             final_rem}
+
+          k
+          when k in [
+                 :external_symbol,
+                 :external_symbols,
+                 :"external-symbol",
+                 :"external-symbols"
+               ] ->
+            src = source_node || symbol_node(:"*package*")
+
+            {{:in, var_node, {:list, {1, 1}, [symbol_node(:_cl_external_symbols_list_), src]},
+              nil}, final_rem}
+
+          k when k in [:present_symbol, :present_symbols, :"present-symbol", :"present-symbols"] ->
+            src = source_node || symbol_node(:"*package*")
+
+            {{:in, var_node, {:list, {1, 1}, [symbol_node(:_cl_present_symbols_list_), src]}, nil},
+             final_rem}
+
+          _ ->
+            raise ArgumentError, "Unknown being clause: #{inspect(what_node)}"
+        end
+
+      [] ->
+        raise ArgumentError, "Incomplete being clause"
+    end
+  end
+
+  defp parse_being_source([in_of_node, source_expr | rest]) do
+    if kw_name(in_of_node) in [:in, :of] do
+      {source_expr, rest}
+    else
+      {nil, [in_of_node, source_expr | rest]}
+    end
+  end
+
+  defp parse_being_source(tokens), do: {nil, tokens}
+
+  defp parse_being_using([using_kw, using_spec | rest]) do
+    if kw_name(using_kw) == :using do
+      case using_spec do
+        {:list, _, [u_type, u_var]} ->
+          {kw_name(u_type), u_var, rest}
+
+        [u_type, u_var] ->
+          {kw_name(u_type), u_var, rest}
+
+        _ ->
+          {nil, nil, rest}
+      end
+    else
+      {nil, nil, [using_kw, using_spec | rest]}
+    end
+  end
+
+  defp parse_being_using(tokens), do: {nil, nil, tokens}
 
   defp parse_range_clause(var_node, tokens) do
     # Default values
@@ -615,10 +756,13 @@ defmodule ExLisp.Loop do
     {init_bindings, loop_params, loop_inits, step_updates, end_checks, var_bindings} =
       build_for_machinery(parsed.for)
 
-    # with bindings
+    # with bindings (with destructuring support)
     with_bindings =
-      Enum.map(parsed.with, fn {var_node, val_node} ->
-        {:list, {1, 1}, [var_node, val_node]}
+      Enum.flat_map(parsed.with, fn {var_node, val_node} ->
+        destructure_var_spec(var_node, val_node)
+      end)
+      |> Enum.map(fn {var_sym, val_expr} ->
+        {:list, {1, 1}, [var_sym, val_expr]}
       end)
 
     # Initial accumulator bindings and loop arguments
@@ -628,7 +772,7 @@ defmodule ExLisp.Loop do
     all_inits = loop_inits ++ acc_inits
 
     # Loop body expressions
-    loop_fn_name = symbol_node(:"__loop_fn_#{System.unique_integer([:positive, :monotonic])}")
+    loop_fn_name = symbol_node(:"__loop_fn_#{unique_loop_id()}")
 
     # Recursive call: (loop_fn <next_loop_vars> <next_acc_vars>)
     recur_call_builder = fn next_acc_vars ->
@@ -886,8 +1030,7 @@ defmodule ExLisp.Loop do
             }
 
           {:in, var_node, list_expr, step_fn} ->
-            list_sym = symbol_node(:"__list_#{System.unique_integer([:positive, :monotonic])}")
-            var_sym = symbol_node(LispBeam.extract_symbol_name(var_node))
+            list_sym = symbol_node(:"__list_#{unique_loop_id()}")
 
             # Termination check: (null list_sym)
             check = {:list, {1, 1}, [symbol_node(:null), list_sym]}
@@ -899,8 +1042,8 @@ defmodule ExLisp.Loop do
                 {:list, {1, 1}, [symbol_node(:cdr), list_sym]}
               end
 
-            # var binding in each iteration: (car list_sym)
-            var_binding = {var_sym, {:list, {1, 1}, [symbol_node(:car), list_sym]}}
+            val_expr = {:list, {1, 1}, [symbol_node(:car), list_sym]}
+            var_bindings = destructure_var_spec(var_node, val_expr)
 
             {
               inits_acc ++ [{:list, {1, 1}, [list_sym, list_expr]}],
@@ -908,64 +1051,34 @@ defmodule ExLisp.Loop do
               inits_val_acc ++ [list_sym],
               steps_acc ++ [next_list],
               checks_acc ++ [check],
-              bindings_acc ++ [var_binding]
+              bindings_acc ++ var_bindings
             }
 
           {:on, var_node, list_expr, step_fn} ->
-            case var_node do
-              {:list, _, [head_node, {:id, _, ["."]}, tail_node]} ->
-                sublist_sym =
-                  symbol_node(:"__on_#{System.unique_integer([:positive, :monotonic])}")
+            sublist_sym = symbol_node(:"__on_#{unique_loop_id()}")
+            check = {:list, {1, 1}, [symbol_node(:null), sublist_sym]}
 
-                check = {:list, {1, 1}, [symbol_node(:null), sublist_sym]}
+            next_list =
+              if step_fn do
+                {:list, {1, 1}, [symbol_node(:funcall), step_fn, sublist_sym]}
+              else
+                {:list, {1, 1}, [symbol_node(:cdr), sublist_sym]}
+              end
 
-                next_list =
-                  if step_fn do
-                    {:list, {1, 1}, [symbol_node(:funcall), step_fn, sublist_sym]}
-                  else
-                    {:list, {1, 1}, [symbol_node(:cdr), sublist_sym]}
-                  end
+            var_bindings = destructure_var_spec(var_node, sublist_sym)
 
-                head_sym = symbol_node(LispBeam.extract_symbol_name(head_node))
-                tail_sym = symbol_node(LispBeam.extract_symbol_name(tail_node))
-
-                head_binding = {head_sym, {:list, {1, 1}, [symbol_node(:car), sublist_sym]}}
-                tail_binding = {tail_sym, {:list, {1, 1}, [symbol_node(:cdr), sublist_sym]}}
-
-                {
-                  inits_acc ++ [{:list, {1, 1}, [sublist_sym, list_expr]}],
-                  params_acc ++ [sublist_sym],
-                  inits_val_acc ++ [sublist_sym],
-                  steps_acc ++ [next_list],
-                  checks_acc ++ [check],
-                  bindings_acc ++ [head_binding, tail_binding]
-                }
-
-              _ ->
-                var_sym = symbol_node(LispBeam.extract_symbol_name(var_node))
-                check = {:list, {1, 1}, [symbol_node(:null), var_sym]}
-
-                next_list =
-                  if step_fn do
-                    {:list, {1, 1}, [symbol_node(:funcall), step_fn, var_sym]}
-                  else
-                    {:list, {1, 1}, [symbol_node(:cdr), var_sym]}
-                  end
-
-                {
-                  inits_acc ++ [{:list, {1, 1}, [var_sym, list_expr]}],
-                  params_acc ++ [var_sym],
-                  inits_val_acc ++ [var_sym],
-                  steps_acc ++ [next_list],
-                  checks_acc ++ [check],
-                  bindings_acc
-                }
-            end
+            {
+              inits_acc ++ [{:list, {1, 1}, [sublist_sym, list_expr]}],
+              params_acc ++ [sublist_sym],
+              inits_val_acc ++ [sublist_sym],
+              steps_acc ++ [next_list],
+              checks_acc ++ [check],
+              bindings_acc ++ var_bindings
+            }
 
           {:across, var_node, vec_expr} ->
-            vec_sym = symbol_node(:"__vec_#{System.unique_integer([:positive, :monotonic])}")
-            idx_sym = symbol_node(:"__idx_#{System.unique_integer([:positive, :monotonic])}")
-            var_sym = symbol_node(LispBeam.extract_symbol_name(var_node))
+            vec_sym = symbol_node(:"__vec_#{unique_loop_id()}")
+            idx_sym = symbol_node(:"__idx_#{unique_loop_id()}")
 
             check =
               {:list, {1, 1},
@@ -976,9 +1089,8 @@ defmodule ExLisp.Loop do
                ]}
 
             next_idx = {:list, {1, 1}, [symbol_node(:+), idx_sym, int_node(1)]}
-
-            var_binding =
-              {var_sym, {:list, {1, 1}, [symbol_node(:aref), vec_sym, idx_sym]}}
+            val_expr = {:list, {1, 1}, [symbol_node(:aref), vec_sym, idx_sym]}
+            var_bindings = destructure_var_spec(var_node, val_expr)
 
             {
               inits_acc ++
@@ -990,24 +1102,79 @@ defmodule ExLisp.Loop do
               inits_val_acc ++ [vec_sym, idx_sym],
               steps_acc ++ [vec_sym, next_idx],
               checks_acc ++ [check],
-              bindings_acc ++ [var_binding]
+              bindings_acc ++ var_bindings
+            }
+
+          {:hash_table_pairs, key_var_node, val_var_node, order, table_expr} ->
+            pairs_sym = symbol_node(:"__pairs_#{unique_loop_id()}")
+            pair_temp = symbol_node(:"__pair_#{unique_loop_id()}")
+            check = {:list, {1, 1}, [symbol_node(:null), pairs_sym]}
+            next_pairs = {:list, {1, 1}, [symbol_node(:cdr), pairs_sym]}
+            curr_pair = {:list, {1, 1}, [symbol_node(:car), pairs_sym]}
+
+            {key_expr, val_expr} =
+              case order do
+                :key_value ->
+                  {{:list, {1, 1}, [symbol_node(:car), pair_temp]},
+                   {:list, {1, 1}, [symbol_node(:cdr), pair_temp]}}
+
+                :value_key ->
+                  {{:list, {1, 1}, [symbol_node(:cdr), pair_temp]},
+                   {:list, {1, 1}, [symbol_node(:car), pair_temp]}}
+              end
+
+            key_bindings =
+              if key_var_node, do: destructure_var_spec(key_var_node, key_expr), else: []
+
+            val_bindings =
+              if val_var_node, do: destructure_var_spec(val_var_node, val_expr), else: []
+
+            var_bindings = [{pair_temp, curr_pair}] ++ key_bindings ++ val_bindings
+
+            {
+              inits_acc ++
+                [
+                  {:list, {1, 1},
+                   [
+                     pairs_sym,
+                     {:list, {1, 1}, [symbol_node(:_cl_hash_table_pairs_), table_expr]}
+                   ]}
+                ],
+              params_acc ++ [pairs_sym],
+              inits_val_acc ++ [pairs_sym],
+              steps_acc ++ [next_pairs],
+              checks_acc ++ [check],
+              bindings_acc ++ var_bindings
             }
 
           {:equals_then, var_node, init_expr, step_expr} ->
-            var_sym = symbol_node(LispBeam.extract_symbol_name(var_node))
+            if is_simple_var?(var_node) and not is_nil_node?(var_node) do
+              var_sym = symbol_node(LispBeam.extract_symbol_name(var_node))
 
-            {
-              inits_acc ++ [{:list, {1, 1}, [var_sym, init_expr]}],
-              params_acc ++ [var_sym],
-              inits_val_acc ++ [var_sym],
-              steps_acc ++ [step_expr],
-              checks_acc,
-              bindings_acc
-            }
+              {
+                inits_acc ++ [{:list, {1, 1}, [var_sym, init_expr]}],
+                params_acc ++ [var_sym],
+                inits_val_acc ++ [var_sym],
+                steps_acc ++ [step_expr],
+                checks_acc,
+                bindings_acc
+              }
+            else
+              temp_sym = symbol_node(:"__eq_#{unique_loop_id()}")
+              var_bindings = destructure_var_spec(var_node, temp_sym)
+
+              {
+                inits_acc ++ [{:list, {1, 1}, [temp_sym, init_expr]}],
+                params_acc ++ [temp_sym],
+                inits_val_acc ++ [temp_sym],
+                steps_acc ++ [step_expr],
+                checks_acc,
+                bindings_acc ++ var_bindings
+              }
+            end
 
           {:equals_always, var_node, expr} ->
-            var_sym = symbol_node(LispBeam.extract_symbol_name(var_node))
-            var_binding = {var_sym, expr}
+            var_bindings = destructure_var_spec(var_node, expr)
 
             {
               inits_acc,
@@ -1015,11 +1182,11 @@ defmodule ExLisp.Loop do
               inits_val_acc,
               steps_acc,
               checks_acc,
-              bindings_acc ++ [var_binding]
+              bindings_acc ++ var_bindings
             }
 
           {:repeat, count_expr} ->
-            cnt_sym = symbol_node(:"__cnt_#{System.unique_integer([:positive, :monotonic])}")
+            cnt_sym = symbol_node(:"__cnt_#{unique_loop_id()}")
             check = {:list, {1, 1}, [symbol_node(:<=), cnt_sym, int_node(0)]}
             next_cnt = {:list, {1, 1}, [symbol_node(:-), cnt_sym, int_node(1)]}
 
@@ -1034,6 +1201,188 @@ defmodule ExLisp.Loop do
         end
       end
     )
+  end
+
+  # --- Destructuring and Variable Helpers ---
+
+  def is_nil_node?(node) do
+    case node do
+      nil -> true
+      {:lit, nil} -> true
+      {:id, _, ["nil"]} -> true
+      {:id, _, ["NIL"]} -> true
+      _ -> false
+    end
+  end
+
+  def is_simple_var?(node) do
+    case node do
+      {:id, _, [_]} -> true
+      a when is_atom(a) -> not is_nil_node?(a)
+      s when is_binary(s) -> true
+      _ -> false
+    end
+  end
+
+  def destructure_var_spec(var_node, val_expr) do
+    cond do
+      is_nil_node?(var_node) ->
+        []
+
+      is_simple_var?(var_node) ->
+        var_sym = symbol_node(LispBeam.extract_symbol_name(var_node))
+        [{var_sym, val_expr}]
+
+      true ->
+        temp_sym = symbol_node(:"__d_#{unique_loop_id()}")
+        [{temp_sym, val_expr} | do_destructure_pattern(var_node, temp_sym)]
+    end
+  end
+
+  defp do_destructure_pattern(pattern_node, current_val_expr) do
+    cond do
+      is_nil(pattern_node) or is_nil_node?(pattern_node) ->
+        []
+
+      is_simple_var?(pattern_node) ->
+        var_sym = symbol_node(LispBeam.extract_symbol_name(pattern_node))
+        [{var_sym, current_val_expr}]
+
+      true ->
+        case pattern_node do
+          {:list, pos, elements} ->
+            do_destructure_elements(elements, current_val_expr, pos)
+
+          {:quoted, pos, elements} when is_list(elements) ->
+            do_destructure_elements(elements, current_val_expr, pos)
+
+          {:dotted_list, pos, elements, tail} ->
+            do_destructure_elements(elements ++ [{:id, pos, ["."]}, tail], current_val_expr, pos)
+
+          elements when is_list(elements) ->
+            do_destructure_elements(elements, current_val_expr, {1, 1})
+
+          _ ->
+            []
+        end
+    end
+  end
+
+  defp do_destructure_elements([], _current_val_expr, _pos), do: []
+
+  defp do_destructure_elements([head, {:id, _, ["."]}, tail], current_val_expr, _pos) do
+    car_expr = {:list, {1, 1}, [symbol_node(:car), current_val_expr]}
+    cdr_expr = {:list, {1, 1}, [symbol_node(:cdr), current_val_expr]}
+    do_destructure_pattern(head, car_expr) ++ do_destructure_pattern(tail, cdr_expr)
+  end
+
+  defp do_destructure_elements([head | tail], current_val_expr, pos) do
+    car_expr = {:list, {1, 1}, [symbol_node(:car), current_val_expr]}
+    cdr_expr = {:list, {1, 1}, [symbol_node(:cdr), current_val_expr]}
+
+    head_bindings = do_destructure_pattern(head, car_expr)
+
+    tail_bindings =
+      case tail do
+        [] ->
+          []
+
+        [{:id, _, ["."]}, actual_tail] ->
+          do_destructure_pattern(actual_tail, cdr_expr)
+
+        _ ->
+          do_destructure_pattern({:list, pos, tail}, cdr_expr)
+      end
+
+    head_bindings ++ tail_bindings
+  end
+
+  def collect_vars_in_spec(node) do
+    cond do
+      is_nil_node?(node) ->
+        []
+
+      is_simple_var?(node) ->
+        [LispBeam.extract_symbol_name(node)]
+
+      true ->
+        case node do
+          {:list, _, elements} ->
+            Enum.flat_map(elements, fn
+              {:id, _, ["."]} -> []
+              elem -> collect_vars_in_spec(elem)
+            end)
+
+          {:quoted, _, elements} when is_list(elements) ->
+            Enum.flat_map(elements, fn
+              {:id, _, ["."]} -> []
+              elem -> collect_vars_in_spec(elem)
+            end)
+
+          {:dotted_list, _, elements, tail} ->
+            Enum.flat_map(elements, &collect_vars_in_spec/1) ++ collect_vars_in_spec(tail)
+
+          elements when is_list(elements) ->
+            Enum.flat_map(elements, fn
+              {:id, _, ["."]} -> []
+              elem -> collect_vars_in_spec(elem)
+            end)
+
+          _ ->
+            []
+        end
+    end
+  end
+
+  defp check_duplicate_loop_vars!(parsed) do
+    with_vars =
+      Enum.flat_map(parsed.with, fn {var_node, _} -> collect_vars_in_spec(var_node) end)
+
+    for_vars =
+      Enum.flat_map(parsed.for, fn
+        {:range, var_node, _, _, _, _, _} ->
+          collect_vars_in_spec(var_node)
+
+        {:in, var_node, _, _} ->
+          collect_vars_in_spec(var_node)
+
+        {:on, var_node, _, _} ->
+          collect_vars_in_spec(var_node)
+
+        {:across, var_node, _} ->
+          collect_vars_in_spec(var_node)
+
+        {:equals_then, var_node, _, _} ->
+          collect_vars_in_spec(var_node)
+
+        {:equals_always, var_node, _} ->
+          collect_vars_in_spec(var_node)
+
+        {:hash_table_pairs, var1, var2, _, _} ->
+          collect_vars_in_spec(var1) ++ collect_vars_in_spec(var2)
+
+        {:repeat, _} ->
+          []
+
+        _ ->
+          []
+      end)
+
+    body_vars =
+      Enum.flat_map(parsed.body, fn
+        {_, _, into_var} when into_var != nil -> collect_vars_in_spec(into_var)
+        _ -> []
+      end)
+
+    all_vars = Enum.reject(with_vars ++ for_vars ++ body_vars, &is_nil/1)
+
+    Enum.reduce(all_vars, MapSet.new(), fn var, seen ->
+      if MapSet.member?(seen, var) do
+        raise ArgumentError, "Duplicate loop variable: #{var}"
+      else
+        MapSet.put(seen, var)
+      end
+    end)
   end
 
   # --- Code generation for loop body steps ---
@@ -1116,7 +1465,7 @@ defmodule ExLisp.Loop do
          ]}
 
       {:thereis, test_expr} ->
-        temp_sym = symbol_node(:"__val_#{System.unique_integer([:positive, :monotonic])}")
+        temp_sym = symbol_node(:"__val_#{unique_loop_id()}")
 
         rest_expr =
           do_build_body_steps(rest, acc_info, recur_call_builder, all_params, final_val)
@@ -1234,7 +1583,7 @@ defmodule ExLisp.Loop do
   end
 
   defp build_acc_step(:maximize, acc_sym, expr) do
-    temp_sym = symbol_node(:"__m_#{System.unique_integer([:positive, :monotonic])}")
+    temp_sym = symbol_node(:"__m_#{unique_loop_id()}")
 
     {:list, {1, 1},
      [
@@ -1256,7 +1605,7 @@ defmodule ExLisp.Loop do
   end
 
   defp build_acc_step(:minimize, acc_sym, expr) do
-    temp_sym = symbol_node(:"__m_#{System.unique_integer([:positive, :monotonic])}")
+    temp_sym = symbol_node(:"__m_#{unique_loop_id()}")
 
     {:list, {1, 1},
      [
@@ -1275,5 +1624,9 @@ defmodule ExLisp.Loop do
           acc_sym
         ]}
      ]}
+  end
+
+  defp unique_loop_id do
+    rem(System.unique_integer([:positive]), 1000)
   end
 end

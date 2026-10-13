@@ -328,7 +328,7 @@ defmodule ExLisp.Macro do
   end
 
   defp unique_macro_var(prefix) do
-    id = System.unique_integer([:positive, :monotonic])
+    id = rem(System.unique_integer([:positive]), 1000)
     :"__#{prefix}_#{id}"
   end
 

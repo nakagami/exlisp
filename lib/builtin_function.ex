@@ -373,6 +373,15 @@ defmodule BuiltinFunction do
     :_cl_hash_table_count_ => {:hash_table_count, :hash_table_count},
     :hash_table_p => {:hash_table_p, :hash_table_p},
     :_cl_hash_table_p_ => {:hash_table_p, :hash_table_p},
+    :hash_table_keys => {:hash_table_keys, :hash_table_keys},
+    :_cl_hash_table_keys_ => {:hash_table_keys, :hash_table_keys},
+    :"hash-table-keys" => {:hash_table_keys, :hash_table_keys},
+    :hash_table_values => {:hash_table_values, :hash_table_values},
+    :_cl_hash_table_values_ => {:hash_table_values, :hash_table_values},
+    :"hash-table-values" => {:hash_table_values, :hash_table_values},
+    :hash_table_pairs => {:hash_table_pairs, :hash_table_pairs},
+    :_cl_hash_table_pairs_ => {:hash_table_pairs, :hash_table_pairs},
+    :"hash-table-pairs" => {:hash_table_pairs, :hash_table_pairs},
     :maphash => {:maphash, :maphash},
     :sxhash => {:sxhash, :sxhash},
     :_cl_sxhash_ => {:sxhash, :sxhash},
@@ -893,6 +902,19 @@ defmodule BuiltinFunction do
     :_cl_unuse_package_ => {:unuse_package, :unuse_package},
     :unintern => {:unintern, :unintern},
     :_cl_unintern_ => {:unintern, :unintern},
+    :all_symbols_list => {:all_symbols_list, :all_symbols_list},
+    :_cl_all_symbols_list_ => {:all_symbols_list, :all_symbols_list},
+    :"all-symbols-list" => {:all_symbols_list, :all_symbols_list},
+    :external_symbols_list => {:external_symbols_list, :external_symbols_list},
+    :_cl_external_symbols_list_ => {:external_symbols_list, :external_symbols_list},
+    :"external-symbols-list" => {:external_symbols_list, :external_symbols_list},
+    :present_symbols_list => {:present_symbols_list, :present_symbols_list},
+    :_cl_present_symbols_list_ => {:present_symbols_list, :present_symbols_list},
+    :"present-symbols-list" => {:present_symbols_list, :present_symbols_list},
+    :set_get => {:set_get, :set_get},
+    :_cl_set_get_ => {:set_get, :set_get},
+    :set_char => {:set_char, :set_char},
+    :_cl_set_char_ => {:set_char, :set_char},
 
     # Readtables
     :readtablep => {:readtablep, :readtablep},
@@ -1544,8 +1566,8 @@ defmodule BuiltinFunction do
   end
 
   defp compile_inline_math_2(op, fallback_fn, a, b) do
-    v1 = :"V_math1_#{System.unique_integer([:positive, :monotonic])}"
-    v2 = :"V_math2_#{System.unique_integer([:positive, :monotonic])}"
+    v1 = :"V_math1_#{rem(System.unique_integer([:positive]), 500)}"
+    v2 = :"V_math2_#{rem(System.unique_integer([:positive]), 500)}"
 
     {:case, 1, a,
      [
@@ -1585,8 +1607,8 @@ defmodule BuiltinFunction do
   end
 
   defp compile_inline_cmp_2(op, fallback_fn, a, b) do
-    v1 = :"V_cmp1_#{System.unique_integer([:positive, :monotonic])}"
-    v2 = :"V_cmp2_#{System.unique_integer([:positive, :monotonic])}"
+    v1 = :"V_cmp1_#{rem(System.unique_integer([:positive]), 500)}"
+    v2 = :"V_cmp2_#{rem(System.unique_integer([:positive]), 500)}"
 
     {:case, 1, a,
      [

@@ -51,7 +51,6 @@ defmodule ExLisp.Builtins do
                        :v,
                        :append,
                        :values,
-                       :values_list,
                        :map,
                        :every,
                        :some,
@@ -355,8 +354,6 @@ defmodule ExLisp.Builtins do
   end
 
   def values_list(nil), do: [:_values_, []]
-  def values_list([list]) when is_list(list), do: values_list(list)
-  def values_list([nil]), do: [:_values_, []]
 
   def values_list(other) do
     raise ArgumentError, "values-list requires a proper list, got: #{inspect(other)}"
@@ -689,7 +686,10 @@ defmodule ExLisp.Builtins do
         values(raw_args)
 
       name when name in [:values_list, :_cl_values_list_] ->
-        values_list(raw_args)
+        case raw_args do
+          [list | _] -> values_list(list)
+          _ -> values_list(nil)
+        end
 
       name when name in [:compile, :_cl_compile_] ->
         compile(args)
@@ -707,6 +707,12 @@ defmodule ExLisp.Builtins do
         case args do
           [fn_val | rest] -> apply(fn_val, rest)
           _ -> raise ArgumentError, "apply requires at least 2 arguments"
+        end
+
+      :funcall ->
+        case args do
+          [fn_val | rest] -> funcall(fn_val, rest)
+          _ -> raise ArgumentError, "funcall requires at least 1 argument"
         end
 
       :exit ->
@@ -1532,7 +1538,7 @@ defmodule ExLisp.Builtins do
 
   def equalp(x, {:array, [_], _} = y) when is_binary(x) do
     ly = seq_to_list(y)
-    chars = String.to_charlist(x)
+    chars = String.to_charlist(x) |> Enum.map(&ExLisp.Character.new/1)
 
     if length(chars) == length(ly) do
       Enum.zip(chars, ly)
@@ -6488,6 +6494,51 @@ defmodule ExLisp.Builtins do
 
   def maphash(_fun, _table), do: nil
 
+  def hash_table_keys(args) when is_list(args) do
+    case args do
+      [table] -> hash_table_keys(table)
+      _ -> []
+    end
+  end
+
+  def hash_table_keys({:hash_table, _test, tid}) do
+    :ets.foldl(fn {k, _v}, acc -> [k | acc] end, [], tid)
+  end
+  def hash_table_keys(_), do: []
+
+  def hash_table_values(args) when is_list(args) do
+    case args do
+      [table] -> hash_table_values(table)
+      _ -> []
+    end
+  end
+
+  def hash_table_values({:hash_table, _test, tid}) do
+    :ets.foldl(fn {_k, v}, acc -> [v | acc] end, [], tid)
+  end
+  def hash_table_values(_), do: []
+
+  def hash_table_pairs(args) when is_list(args) do
+    case args do
+      [table] -> hash_table_pairs(table)
+      _ -> []
+    end
+  end
+
+  def hash_table_pairs({:hash_table, _test, tid}) do
+    :ets.foldl(fn {k, v}, acc -> [[k | v] | acc] end, [], tid)
+  end
+  def hash_table_pairs(_), do: []
+
+  def all_symbols_list([pkg_desig]), do: ExLisp.Package.all_symbols_list(pkg_desig)
+  def all_symbols_list(pkg_desig), do: ExLisp.Package.all_symbols_list(pkg_desig)
+
+  def external_symbols_list([pkg_desig]), do: ExLisp.Package.external_symbols_list(pkg_desig)
+  def external_symbols_list(pkg_desig), do: ExLisp.Package.external_symbols_list(pkg_desig)
+
+  def present_symbols_list([pkg_desig]), do: ExLisp.Package.present_symbols_list(pkg_desig)
+  def present_symbols_list(pkg_desig), do: ExLisp.Package.present_symbols_list(pkg_desig)
+
   # --- Array / vector ---
 
   def make_array(args) when is_list(args) do
@@ -6800,36 +6851,79 @@ defmodule ExLisp.Builtins do
 
   def svref(_, _), do: nil
 
+  def elt([seq, index]), do: elt(seq, index)
+  def elt(_), do: raise(RuntimeError, "Invalid call to elt")
+
   def elt({:array, _dims, _tid} = arr, index) when is_integer(index) do
-    aref([arr, index])
+    len = length(arr)
+
+    if index < 0 or index >= len do
+      raise RuntimeError, "Index #{index} out of bounds for #{inspect(arr)}"
+    else
+      aref([arr, index])
+    end
   end
 
   def elt(list, index) when is_list(list) and is_integer(index) do
-    Enum.at(list, index)
+    if index < 0 or index >= Kernel.length(list) do
+      raise RuntimeError, "Index #{index} out of bounds for #{inspect(list)}"
+    else
+      Enum.at(list, index)
+    end
   end
 
   def elt(str, index) when is_binary(str) and is_integer(index) do
     chars = String.to_charlist(str)
 
-    if index >= 0 and index < length(chars),
-      do: ExLisp.Character.new(Enum.at(chars, index)),
-      else: nil
+    if index < 0 or index >= Kernel.length(chars) do
+      raise RuntimeError, "Index #{index} out of bounds for string"
+    else
+      ExLisp.Character.new(Enum.at(chars, index))
+    end
   end
 
-  def elt(_seq, _index), do: nil
-
-  def elt([seq, index]), do: elt(seq, index)
-  def elt(_), do: nil
+  def elt(seq, index) do
+    raise RuntimeError, "Invalid sequence or index for elt: #{inspect(seq)}, #{inspect(index)}"
+  end
 
   def set_elt({:array, _dims, _tid} = arr, index, val) when is_integer(index) do
-    set_aref(arr, index, val)
+    len = length(arr)
+
+    if index < 0 or index >= len do
+      raise RuntimeError, "Index #{index} out of bounds for #{inspect(arr)}"
+    else
+      set_aref(arr, index, val)
+    end
   end
 
   def set_elt(list, index, val) when is_list(list) and is_integer(index) do
-    List.replace_at(list, index, val)
+    if index < 0 or index >= Kernel.length(list) do
+      raise RuntimeError, "Index #{index} out of bounds for #{inspect(list)}"
+    else
+      List.replace_at(list, index, val)
+    end
   end
 
-  def set_elt(_seq, _index, val), do: val
+  def set_elt(str, index, val) when is_binary(str) and is_integer(index) do
+    chars = String.to_charlist(str)
+
+    if index < 0 or index >= Kernel.length(chars) do
+      raise RuntimeError, "Index #{index} out of bounds for string"
+    else
+      char_code =
+        case val do
+          %ExLisp.Character{code: code} -> code
+          code when is_integer(code) -> code
+          _ -> ?\s
+        end
+
+      List.replace_at(chars, index, char_code) |> List.to_string()
+    end
+  end
+
+  def set_elt(seq, _index, _val) do
+    raise RuntimeError, "Invalid sequence for set_elt: #{inspect(seq)}"
+  end
 
   def arrayp([arr]), do: arrayp(arr)
   def arrayp({:array, _, _}), do: :t

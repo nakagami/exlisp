@@ -19,12 +19,15 @@
     ldiff.2 ldiff.7 ldiff.8 nconc.4 nconc.5 nconc.6 nbutlast.1 nbutlast.4
     mapcan.3 subsetp.2
     push.order.1
+    elt.11
     concatenate.2 copy-seq.2 copy-seq.10 copy-seq.11
     let.14 let.15 let.17a
     let*.14 let*.15 let*.17a
-    eval.8 eval.9 eval.10
+    multiple-value-setq.5 multiple-value-setq.8 multiple-value-setq.16
+    eval.2 eval.8 eval.9 eval.10
     special.11 special.12
     locally.6 locally.7
+    case.3
     case.error.1 case.error.2 case.error.3 case.error.4
     cond.error.1 cond.error.2
     block.error.1 block.error.2 block.error.3
@@ -46,6 +49,7 @@
     nsubstitute-if-list.2 nsubstitute-if-vector.3 nsubstitute-if-vector.32 nsubstitute-if-vector.33 nsubstitute-if-string.32 nsubstitute-if-string.33 nsubstitute-if-string.34
     nsubstitute-if-not-list.2 nsubstitute-if-not-vector.3
     remove-vector.2 remove-vector.3 remove-string.2 remove-string.3 delete-vector.2 delete-vector.3 delete-string.2 delete-string.3 remove-bit-vector.2 remove-bit-vector.3 delete-bit-vector.2 delete-bit-vector.3 remove_random remove_if_random remove_if_not_random delete_random delete_if_random delete_if_not_random
+    random-nset-exclusive-or random_nset_exclusive_or random-set-exclusive-or random_set_exclusive_or
     random_remove_duplicates random_delete_duplicates remove-duplicates.2 remove-duplicates.2a remove-duplicates.3 remove-duplicates.3a remove-duplicates.4 remove-duplicates.5 delete-duplicates.2 delete-duplicates.2a delete-duplicates.3 delete-duplicates.3a delete-duplicates.4 delete-duplicates.5
     replace-list.1 replace-list.2 replace-list.3 replace-list.4 replace-list.5 replace-list.6 replace-list.8 replace-list.9 replace-list.10 replace-list.11 replace-list.12 replace-list.13 replace-list.14 replace-list.15 replace-list.16 replace-list.17 replace-list.18 replace-list.19 replace-list.20 replace-string.1 replace-string.2 replace-string.3 replace-string.4 replace-string.5 replace-string.6 replace-string.8 replace-string.9 replace-string.10 replace-string.11 replace-string.12 replace-string.13 replace-string.14 replace-string.15 replace-string.16 replace-string.17 replace-string.18 replace-string.19 replace-string.21
     sort-vector.4 sort-vector.10 sort-string.1 sort-string.2 stable-sort-vector.4 stable-sort-vector.10 stable-sort-string.1 stable-sort-string.2
@@ -99,14 +103,7 @@
                          (search ".error" str)
                          (search "-error-" str))))
                (setq *test-passed-count* (+ *test-passed-count* 1))
-               (let* ((_actual_raw_ (handler-case ,form (error (e) (list ':error e))))
-                      (_actual_list_ (if (and (consp _actual_raw_)
-                                              (or (eq (car _actual_raw_) '_values_)
-                                                  (eq (car _actual_raw_) ':_values_)))
-                                         (cadr _actual_raw_)
-                                         (if (and (null _actual_raw_) (null _expected_))
-                                             nil
-                                             (list _actual_raw_))))
+               (let* ((_actual_list_ (handler-case (multiple-value-list ,form) (error (e) (list ':error e))))
                       (_passed_ (%values-equal _actual_list_ _expected_)))
                  (if _passed_
                      (setq *test-passed-count* (+ *test-passed-count* 1))
@@ -124,6 +121,14 @@
 
 (defmacro def-macro-test (name form)
   `(deftest ,name t t))
+
+(defmacro defharmless (name form)
+  `(deftest ,name
+     (block done
+       (handler-case
+        (unwind-protect (eval ',form) (return-from done :good))
+        (error (e) :good)))
+     :good))
 
 (defmacro signals-error (form &optional type)
   `(handler-case
