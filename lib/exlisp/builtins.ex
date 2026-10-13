@@ -3903,9 +3903,10 @@ defmodule ExLisp.Builtins do
           if max_count == 0 do
             []
           else
-            for i <- 0..(max_count - 1) do
-              args_for_i = Enum.map(seq_lists, &Enum.at(&1, i))
-              invoke_fn(fn_arg, args_for_i)
+            if seq_lists == [] do
+              for _ <- 1..max_count, do: invoke_fn(fn_arg, [])
+            else
+              do_map_into_elements(seq_lists, fn_arg, max_count, [])
             end
           end
 
@@ -3940,6 +3941,19 @@ defmodule ExLisp.Builtins do
 
   def map_into(res_seq, fn_arg), do: map_into([res_seq, fn_arg])
   def map_into(res_seq, fn_arg, s1), do: map_into([res_seq, fn_arg, s1])
+
+  defp do_map_into_elements(_seq_lists, _fn_arg, 0, acc), do: Enum.reverse(acc)
+
+  defp do_map_into_elements(seq_lists, fn_arg, count, acc) do
+    if Enum.any?(seq_lists, &(&1 == [])) do
+      Enum.reverse(acc)
+    else
+      args = Enum.map(seq_lists, &hd/1)
+      tails = Enum.map(seq_lists, &tl/1)
+      res = invoke_fn(fn_arg, args)
+      do_map_into_elements(tails, fn_arg, count - 1, [res | acc])
+    end
+  end
 
   defp check_start_end!(start_idx, end_idx, total_len) do
     if not is_integer(start_idx) or start_idx < 0 or start_idx > total_len do
@@ -4007,26 +4021,7 @@ defmodule ExLisp.Builtins do
           if max_start < 0 do
             nil
           else
-            indices =
-              if from_end, do: Enum.to_list(max_start..0//-1), else: Enum.to_list(0..max_start)
-
-            match_idx =
-              Enum.find(indices, fn i ->
-                target_window = Enum.slice(sub2, i, sub1_len)
-
-                Enum.zip(sub1, target_window)
-                |> Enum.all?(fn {e1, e2} ->
-                  k1 = apply_key(key_fn, e1)
-                  k2 = apply_key(key_fn, e2)
-                  test_match?(test_fn, k1, k2)
-                end)
-              end)
-
-            if match_idx != nil do
-              start2 + match_idx
-            else
-              nil
-            end
+            do_search(sub1, sub2, sub1_len, max_start, start2, from_end, key_fn, test_fn)
           end
         end
 
@@ -4036,6 +4031,95 @@ defmodule ExLisp.Builtins do
   end
 
   def search(seq1, seq2), do: search([seq1, seq2])
+
+  defp prefix_match?([], _l2, _key_fn, _test_fn), do: true
+  defp prefix_match?(_l1, [], _key_fn, _test_fn), do: false
+
+  defp prefix_match?([h1 | t1], [h2 | t2], key_fn, test_fn) do
+    k1 = apply_key(key_fn, h1)
+    k2 = apply_key(key_fn, h2)
+
+    if test_match?(test_fn, k1, k2) do
+      prefix_match?(t1, t2, key_fn, test_fn)
+    else
+      false
+    end
+  end
+
+  defp do_search(sub1, sub2, sub1_len, max_start, start2, from_end, key_fn, test_fn) do
+    if from_end do
+      do_search_from_end(sub1, sub2, sub1_len, 0, max_start, start2, key_fn, test_fn, nil)
+    else
+      do_search_forward(sub1, sub2, sub1_len, 0, max_start, start2, key_fn, test_fn)
+    end
+  end
+
+  defp do_search_forward(_sub1, _sub2, _sub1_len, curr_idx, max_start, _start2, _key_fn, _test_fn)
+       when curr_idx > max_start,
+       do: nil
+
+  defp do_search_forward(
+         sub1,
+         [_h2 | t2] = sub2,
+         sub1_len,
+         curr_idx,
+         max_start,
+         start2,
+         key_fn,
+         test_fn
+       ) do
+    if prefix_match?(sub1, sub2, key_fn, test_fn) do
+      start2 + curr_idx
+    else
+      do_search_forward(sub1, t2, sub1_len, curr_idx + 1, max_start, start2, key_fn, test_fn)
+    end
+  end
+
+  defp do_search_from_end(
+         _sub1,
+         _sub2,
+         _sub1_len,
+         curr_idx,
+         max_start,
+         start2,
+         _key_fn,
+         _test_fn,
+         last_match
+       )
+       when curr_idx > max_start do
+    if last_match != nil, do: start2 + last_match, else: nil
+  end
+
+  defp do_search_from_end(
+         sub1,
+         [_h2 | t2] = sub2,
+         sub1_len,
+         curr_idx,
+         max_start,
+         start2,
+         key_fn,
+         test_fn,
+         last_match
+       ) do
+    new_match =
+      if prefix_match?(sub1, sub2, key_fn, test_fn) do
+        curr_idx
+      else
+        last_match
+      end
+
+    do_search_from_end(
+      sub1,
+      t2,
+      sub1_len,
+      curr_idx + 1,
+      max_start,
+      start2,
+      key_fn,
+      test_fn,
+      new_match
+    )
+  end
 
   def mismatch(args) when is_list(args) do
     case args do
@@ -4086,14 +4170,7 @@ defmodule ExLisp.Builtins do
           rev1 = Enum.reverse(sub1)
           rev2 = Enum.reverse(sub2)
 
-          match_count =
-            Enum.zip(rev1, rev2)
-            |> Enum.take_while(fn {e1, e2} ->
-              k1 = apply_key(key_fn, e1)
-              k2 = apply_key(key_fn, e2)
-              test_match?(test_fn, k1, k2)
-            end)
-            |> Kernel.length()
+          match_count = do_mismatch_from_end_count(rev1, rev2, key_fn, test_fn, 0)
 
           if match_count == sub1_len and match_count == sub2_len do
             nil
@@ -4101,31 +4178,7 @@ defmodule ExLisp.Builtins do
             end1 - match_count
           end
         else
-          min_len = min(sub1_len, sub2_len)
-
-          mismatch_offset =
-            if min_len == 0 do
-              nil
-            else
-              Enum.find(0..(min_len - 1), fn i ->
-                e1 = Enum.at(sub1, i)
-                e2 = Enum.at(sub2, i)
-                k1 = apply_key(key_fn, e1)
-                k2 = apply_key(key_fn, e2)
-                not test_match?(test_fn, k1, k2)
-              end)
-            end
-
-          cond do
-            mismatch_offset != nil ->
-              start1 + mismatch_offset
-
-            sub1_len != sub2_len ->
-              start1 + min_len
-
-            true ->
-              nil
-          end
+          do_mismatch_forward(sub1, sub2, start1, key_fn, test_fn)
         end
 
       _ ->
@@ -4134,6 +4187,34 @@ defmodule ExLisp.Builtins do
   end
 
   def mismatch(seq1, seq2), do: mismatch([seq1, seq2])
+
+  defp do_mismatch_from_end_count([h1 | t1], [h2 | t2], key_fn, test_fn, count) do
+    k1 = apply_key(key_fn, h1)
+    k2 = apply_key(key_fn, h2)
+
+    if test_match?(test_fn, k1, k2) do
+      do_mismatch_from_end_count(t1, t2, key_fn, test_fn, count + 1)
+    else
+      count
+    end
+  end
+
+  defp do_mismatch_from_end_count(_l1, _l2, _key_fn, _test_fn, count), do: count
+
+  defp do_mismatch_forward([], [], _pos1, _key_fn, _test_fn), do: nil
+  defp do_mismatch_forward([], _l2, pos1, _key_fn, _test_fn), do: pos1
+  defp do_mismatch_forward(_l1, [], pos1, _key_fn, _test_fn), do: pos1
+
+  defp do_mismatch_forward([h1 | t1], [h2 | t2], pos1, key_fn, test_fn) do
+    k1 = apply_key(key_fn, h1)
+    k2 = apply_key(key_fn, h2)
+
+    if test_match?(test_fn, k1, k2) do
+      do_mismatch_forward(t1, t2, pos1 + 1, key_fn, test_fn)
+    else
+      pos1
+    end
+  end
 
   def reduce(args) when is_list(args) do
     case args do
@@ -4585,12 +4666,11 @@ defmodule ExLisp.Builtins do
             k_val = apply_key(key_fn, elem)
 
             exists =
-              Enum.any?(acc, fn {x, _} ->
-                k = apply_key(key_fn, x)
+              Enum.any?(acc, fn {_, _, k} ->
                 test_match?(test_fn, k_val, k)
               end)
 
-            if exists, do: acc, else: [{elem, orig_idx} | acc]
+            if exists, do: acc, else: [{elem, orig_idx, k_val} | acc]
           end)
           |> Enum.reverse()
         end
@@ -4991,26 +5071,25 @@ defmodule ExLisp.Builtins do
     case args do
       [predicate | sequences] when sequences != [] ->
         seq_lists = Enum.map(sequences, &seq_to_list/1)
-
-        if Enum.any?(seq_lists, &(&1 == [] or &1 == nil)) do
-          :t
-        else
-          min_len = seq_lists |> Enum.map(&Kernel.length/1) |> Enum.min()
-
-          if min_len == 0 do
-            :t
-          else
-            0..(min_len - 1)
-            |> Enum.all?(fn i ->
-              curr_args = Enum.map(seq_lists, &Enum.at(&1, i))
-              truthy?(invoke_fn(predicate, curr_args))
-            end)
-            |> lisp_bool()
-          end
-        end
+        do_every_lists(predicate, seq_lists)
 
       _ ->
         raise ArgumentError, "every requires at least 2 arguments"
+    end
+  end
+
+  defp do_every_lists(predicate, seq_lists) do
+    if Enum.any?(seq_lists, &(&1 == [] or &1 == nil)) do
+      :t
+    else
+      args = Enum.map(seq_lists, &hd/1)
+      tails = Enum.map(seq_lists, &tl/1)
+
+      if truthy?(invoke_fn(predicate, args)) do
+        do_every_lists(predicate, tails)
+      else
+        nil
+      end
     end
   end
 
@@ -5021,25 +5100,26 @@ defmodule ExLisp.Builtins do
     case args do
       [predicate | sequences] when sequences != [] ->
         seq_lists = Enum.map(sequences, &seq_to_list/1)
-
-        if Enum.any?(seq_lists, &(&1 == [] or &1 == nil)) do
-          nil
-        else
-          min_len = seq_lists |> Enum.map(&Kernel.length/1) |> Enum.min()
-
-          if min_len == 0 do
-            nil
-          else
-            Enum.find_value(0..(min_len - 1), nil, fn i ->
-              curr_args = Enum.map(seq_lists, &Enum.at(&1, i))
-              res = invoke_fn(predicate, curr_args)
-              if truthy?(res), do: res, else: nil
-            end)
-          end
-        end
+        do_some_lists(predicate, seq_lists)
 
       _ ->
         raise ArgumentError, "some requires at least 2 arguments"
+    end
+  end
+
+  defp do_some_lists(predicate, seq_lists) do
+    if Enum.any?(seq_lists, &(&1 == [] or &1 == nil)) do
+      nil
+    else
+      args = Enum.map(seq_lists, &hd/1)
+      tails = Enum.map(seq_lists, &tl/1)
+      res = invoke_fn(predicate, args)
+
+      if truthy?(res) do
+        res
+      else
+        do_some_lists(predicate, tails)
+      end
     end
   end
 
@@ -5128,16 +5208,9 @@ defmodule ExLisp.Builtins do
         count = min(max(end1 - start1, 0), max(end2 - start2, 0))
         replacement_items = Enum.slice(l2, start2, count)
 
-        res =
-          l1
-          |> Enum.with_index()
-          |> Enum.map(fn {val, i} ->
-            if i >= start1 and i < start1 + count do
-              Enum.at(replacement_items, i - start1)
-            else
-              val
-            end
-          end)
+        prefix = Enum.take(l1, start1)
+        suffix = Enum.drop(l1, start1 + count)
+        res = prefix ++ replacement_items ++ suffix
 
         cond do
           is_binary(seq1) ->
@@ -5567,64 +5640,46 @@ defmodule ExLisp.Builtins do
     end
   end
 
-  defp run_string_compare(chars1, chars2, i1, end1, i2, end2, comparison, case_fold) do
-    cond do
-      i1 == end1 ->
-        cond do
-          i2 == end2 ->
-            if comparison in [:=, :<=, :>=] do
-              if comparison == :=, do: :t, else: end1
-            else
-              nil
-            end
-
-          true ->
-            if comparison in [:"/=", :<, :<=] do
-              end1
-            else
-              nil
-            end
+  defp run_string_compare(chars1, chars2, i1, comparison, case_fold) do
+    case {chars1, chars2} do
+      {[], []} ->
+        if comparison in [:=, :<=, :>=] do
+          if comparison == :=, do: :t, else: i1
+        else
+          nil
         end
 
-      i2 == end2 ->
+      {[], _} ->
+        if comparison in [:"/=", :<, :<=] do
+          i1
+        else
+          nil
+        end
+
+      {_, []} ->
         if comparison in [:"/=", :>, :>=] do
           i1
         else
           nil
         end
 
-      true ->
-        c1 = Enum.at(chars1, i1)
-        c2 = Enum.at(chars2, i2)
+      {[c1 | t1], [c2 | t2]} ->
         code1 = char_code(c1)
         code2 = char_code(c2)
         u1 = if case_fold, do: char_code(char_upcase(c1)), else: code1
         u2 = if case_fold, do: char_code(char_upcase(c2)), else: code2
 
-        eq? = u1 == u2
-
-        if eq? do
-          run_string_compare(chars1, chars2, i1 + 1, end1, i2 + 1, end2, comparison, case_fold)
+        if u1 == u2 do
+          run_string_compare(t1, t2, i1 + 1, comparison, case_fold)
         else
           mismatch? =
             case comparison do
-              := ->
-                false
-
-              :"/=" ->
-                true
-
-              :< ->
-                u1 < u2
-
-              :<= ->
-                u1 <= u2
-
-              :> ->
-                u1 > u2
-
-              :>= ->
-                u1 >= u2
+              := -> false
+              :"/=" -> true
+              :< -> u1 < u2
+              :<= -> u1 <= u2
+              :> -> u1 > u2
+              :>= -> u1 >= u2
             end
 
           if mismatch? do
@@ -5653,7 +5708,10 @@ defmodule ExLisp.Builtins do
         start2 = Keyword.get(opts, :start2, 0) || 0
         end2 = Keyword.get(opts, :end2, len2) || len2
 
-        run_string_compare(chars1, chars2, start1, end1, start2, end2, comparison, case_fold)
+        sub_chars1 = Enum.slice(chars1, start1, max(0, end1 - start1))
+        sub_chars2 = Enum.slice(chars2, start2, max(0, end2 - start2))
+
+        run_string_compare(sub_chars1, sub_chars2, start1, comparison, case_fold)
 
       _ ->
         raise ArgumentError, "String comparison requires at least 2 string arguments"

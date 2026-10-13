@@ -268,6 +268,28 @@ end)
 
 ExLisp.load_file(Path.expand("examples/ansi_test_harness.lisp", __DIR__))
 
+functions_to_compile = [
+  "%values-equal",
+  "%normalize-expected-val",
+  "subseq-equalp",
+  "search-check",
+  "remove-check",
+  "remove-duplicates-check",
+  "sort-check",
+  "subseq-check",
+  "substitute-check",
+  "make-random-element",
+  "make-random-remove-input"
+]
+
+Enum.each(functions_to_compile, fn f ->
+  try do
+    ExLisp.eval("(compile '#{f})")
+  rescue
+    _ -> :ok
+  end
+end)
+
 cli_args = System.argv()
 
 target_suites =

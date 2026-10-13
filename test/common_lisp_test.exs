@@ -1435,16 +1435,27 @@ defmodule CommonLispTest do
   describe "SBCL quit and exit functions" do
     @tag timeout: 300_000
     test "sb-ext:quit and quit exit with expected status codes" do
-      {_, 0} = System.cmd("mix", ["run", "-e", ~s{ExLisp.eval("(sb-ext:quit)")}])
-      {_, 42} = System.cmd("mix", ["run", "-e", ~s{ExLisp.eval("(sb-ext:quit :unix-status 42)")}])
-      {_, 7} = System.cmd("mix", ["run", "-e", ~s{ExLisp.eval("(sb-ext:quit :code 7)")}])
+      ebin_args = :code.get_path() |> Enum.flat_map(&["-pa", to_string(&1)])
 
-      {_, 10} =
-        System.cmd("mix", ["run", "-e", ~s{ExLisp.eval("(sb-ext::quit :unix-status 10)")}])
+      cases = [
+        {"(sb-ext:quit)", 0},
+        {"(sb-ext:quit :unix-status 42)", 42},
+        {"(sb-ext:quit :code 7)", 7},
+        {"(sb-ext::quit :unix-status 10)", 10},
+        {"(quit 15)", 15},
+        {"(exit :code 99)", 99},
+        {"(sb-ext:exit :code 3 :abort t)", 3}
+      ]
 
-      {_, 15} = System.cmd("mix", ["run", "-e", ~s{ExLisp.eval("(quit 15)")}])
-      {_, 99} = System.cmd("mix", ["run", "-e", ~s{ExLisp.eval("(exit :code 99)")}])
-      {_, 3} = System.cmd("mix", ["run", "-e", ~s{ExLisp.eval("(sb-ext:exit :code 3 :abort t)")}])
+      cases
+      |> Task.async_stream(
+        fn {expr, expected_status} ->
+          {_, status} = System.cmd("elixir", ebin_args ++ ["-e", ~s{ExLisp.eval("#{expr}")}])
+          assert status == expected_status
+        end,
+        max_concurrency: 7
+      )
+      |> Stream.run()
     end
   end
 end
