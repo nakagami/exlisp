@@ -1068,25 +1068,35 @@ defmodule ExLisp.Evaluator do
   # --- Macro expansion helper ---
 
   defp apply_macro(macro_fun, args, full_form) do
-    lisp_args = Enum.map(args, &ExLisp.Macro.ast_to_lisp_data/1)
-    lisp_whole = ExLisp.Macro.ast_to_lisp_data(full_form)
+    cache_key = {:"$macro_cache$", macro_fun, full_form}
 
-    expanded_data =
-      case macro_fun do
-        %ExLisp.Closure{fun: fun} ->
-          fun.([lisp_args, lisp_whole])
+    case :erlang.get(cache_key) do
+      :undefined ->
+        lisp_args = Enum.map(args, &ExLisp.Macro.ast_to_lisp_data/1)
+        lisp_whole = ExLisp.Macro.ast_to_lisp_data(full_form)
 
-        fun when is_function(fun, 2) ->
-          fun.(lisp_args, lisp_whole)
+        expanded_data =
+          case macro_fun do
+            %ExLisp.Closure{fun: fun} ->
+              fun.([lisp_args, lisp_whole])
 
-        fun when is_function(fun, 1) ->
-          fun.([lisp_args, lisp_whole])
+            fun when is_function(fun, 2) ->
+              fun.(lisp_args, lisp_whole)
 
-        _ ->
-          raise "Invalid macro function: #{inspect(macro_fun)}"
-      end
+            fun when is_function(fun, 1) ->
+              fun.([lisp_args, lisp_whole])
 
-    ExLisp.Macro.lisp_data_to_ast(expanded_data)
+            _ ->
+              raise "Invalid macro function: #{inspect(macro_fun)}"
+          end
+
+        expanded_ast = ExLisp.Macro.lisp_data_to_ast(expanded_data)
+        :erlang.put(cache_key, expanded_ast)
+        expanded_ast
+
+      cached_ast ->
+        cached_ast
+    end
   end
 
   # --- Function / Call evaluation ---

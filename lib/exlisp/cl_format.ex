@@ -30,36 +30,36 @@ defmodule ExLisp.CLFormat do
   # Returns {output_string, remaining_args}
   defp format_internal(fmt_str, args, all_top_args, context \\ %{}) do
     chars = String.to_charlist(fmt_str)
-    do_format_chars(chars, args, all_top_args, [], context)
+    do_format_chars(chars, args, all_top_args, [], 0, true, context)
   end
 
-  defp do_format_chars([], args, _all_args, acc, _ctx) do
-    {acc |> Enum.reverse() |> List.to_string(), args}
+  defp do_format_chars([], args, _all_args, acc, _col, _at_nl, _ctx) do
+    {IO.iodata_to_binary(Enum.reverse(acc)), args}
   end
 
-  defp do_format_chars([?~ | rest], args, all_args, acc, ctx) do
+  defp do_format_chars([?~ | rest], args, all_args, acc, col, at_nl, ctx) do
     {params, rest_after_params} = parse_directive_params(rest, args)
     {colons, ats, rest_after_mods} = parse_directive_modifiers(rest_after_params)
 
     case rest_after_mods do
       [] ->
-        {acc |> Enum.reverse() |> List.to_string(), args}
+        {IO.iodata_to_binary(Enum.reverse(acc)), args}
 
       # --- Conditional: ~[ ... ~] ---
       [?[ | after_bracket] ->
-        handle_conditional(after_bracket, params, colons, ats, args, all_args, acc, ctx)
+        handle_conditional(after_bracket, params, colons, ats, args, all_args, acc, col, at_nl, ctx)
 
       # --- Iteration: ~{ ... ~} ---
       [?{ | after_brace] ->
-        handle_iteration(after_brace, params, colons, ats, args, all_args, acc, ctx)
+        handle_iteration(after_brace, params, colons, ats, args, all_args, acc, col, at_nl, ctx)
 
       # --- Case conversion: ~( ... ~) ---
       [?( | after_paren] ->
-        handle_case_conversion(after_paren, colons, ats, args, all_args, acc, ctx)
+        handle_case_conversion(after_paren, colons, ats, args, all_args, acc, col, at_nl, ctx)
 
       # --- Justification: ~< ... ~> ---
       [?< | after_angle] ->
-        handle_justification(after_angle, params, colons, ats, args, all_args, acc, ctx)
+        handle_justification(after_angle, params, colons, ats, args, all_args, acc, col, at_nl, ctx)
 
       # --- Escape: ~^ ---
       [?^ | after_caret] ->
@@ -76,27 +76,49 @@ defmodule ExLisp.CLFormat do
 
         if escape_now do
           # Stop processing rest of this format segment
-          {acc |> Enum.reverse() |> List.to_string(), args}
+          {IO.iodata_to_binary(Enum.reverse(acc)), args}
         else
-          do_format_chars(after_caret, args, all_args, acc, ctx)
+          do_format_chars(after_caret, args, all_args, acc, col, at_nl, ctx)
         end
 
       # --- Standard directives ---
       [d | after_dir] ->
         dir_char = if d >= ?a and d <= ?z, do: d - 32, else: d
-        {out_str, new_args} = execute_directive(dir_char, params, colons, ats, args, all_args, acc)
-        new_acc = Enum.reverse(String.to_charlist(out_str)) ++ acc
-        do_format_chars(after_dir, new_args, all_args, new_acc, ctx)
+        {out_str, new_args} = execute_directive(dir_char, params, colons, ats, args, all_args, col, at_nl)
+        {new_acc, new_col, new_at_nl} = append_output(acc, col, at_nl, out_str)
+        do_format_chars(after_dir, new_args, all_args, new_acc, new_col, new_at_nl, ctx)
     end
   end
 
-  defp do_format_chars([c | rest], args, all_args, acc, ctx) do
-    do_format_chars(rest, args, all_args, [c | acc], ctx)
+  defp do_format_chars([?\n | rest], args, all_args, acc, _col, _at_nl, ctx) do
+    do_format_chars(rest, args, all_args, [?\n | acc], 0, true, ctx)
+  end
+
+  defp do_format_chars([c | rest], args, all_args, acc, col, _at_nl, ctx) do
+    do_format_chars(rest, args, all_args, [c | acc], col + 1, false, ctx)
+  end
+
+  defp append_output(acc, col, at_nl, "") do
+    {acc, col, at_nl}
+  end
+
+  defp append_output(acc, col, _at_nl, str) when is_binary(str) do
+    case :binary.matches(str, "\n") do
+      [] ->
+        {[str | acc], col + String.length(str), false}
+
+      matches ->
+        {last_pos, _} = List.last(matches)
+        after_nl_bytes = byte_size(str) - (last_pos + 1)
+        after_nl = :binary.part(str, last_pos + 1, after_nl_bytes)
+        col_after = String.length(after_nl)
+        {[str | acc], col_after, col_after == 0}
+    end
   end
 
   # --- Directive execution ---
 
-  defp execute_directive(?A, params, colons, _ats, args, _all_args, _acc) do
+  defp execute_directive(?A, params, colons, _ats, args, _all_args, _col, _at_nl) do
     {val, rem_args} = pop_arg(args)
     str =
       cond do
@@ -113,7 +135,7 @@ defmodule ExLisp.CLFormat do
     {padded, rem_args}
   end
 
-  defp execute_directive(?S, params, colons, _ats, args, _all_args, _acc) do
+  defp execute_directive(?S, params, colons, _ats, args, _all_args, _col, _at_nl) do
     {val, rem_args} = pop_arg(args)
     str =
       cond do
@@ -125,12 +147,12 @@ defmodule ExLisp.CLFormat do
     {padded, rem_args}
   end
 
-  defp execute_directive(?W, _params, _colons, _ats, args, _all_args, _acc) do
+  defp execute_directive(?W, _params, _colons, _ats, args, _all_args, _col, _at_nl) do
     {val, rem_args} = pop_arg(args)
     {lisp_display(val), rem_args}
   end
 
-  defp execute_directive(?C, _params, colons, ats, args, _all_args, _acc) do
+  defp execute_directive(?C, _params, colons, ats, args, _all_args, _col, _at_nl) do
     {val, rem_args} = pop_arg(args)
     char_str =
       case val do
@@ -158,31 +180,31 @@ defmodule ExLisp.CLFormat do
     {char_str, rem_args}
   end
 
-  defp execute_directive(?D, params, colons, ats, args, _all_args, _acc) do
+  defp execute_directive(?D, params, colons, ats, args, _all_args, _col, _at_nl) do
     {val, rem_args} = pop_arg(args)
     str = format_integer(val, 10, params, colons, ats)
     {str, rem_args}
   end
 
-  defp execute_directive(?B, params, colons, ats, args, _all_args, _acc) do
+  defp execute_directive(?B, params, colons, ats, args, _all_args, _col, _at_nl) do
     {val, rem_args} = pop_arg(args)
     str = format_integer(val, 2, params, colons, ats)
     {str, rem_args}
   end
 
-  defp execute_directive(?O, params, colons, ats, args, _all_args, _acc) do
+  defp execute_directive(?O, params, colons, ats, args, _all_args, _col, _at_nl) do
     {val, rem_args} = pop_arg(args)
     str = format_integer(val, 8, params, colons, ats)
     {str, rem_args}
   end
 
-  defp execute_directive(?X, params, colons, ats, args, _all_args, _acc) do
+  defp execute_directive(?X, params, colons, ats, args, _all_args, _col, _at_nl) do
     {val, rem_args} = pop_arg(args)
     str = format_integer(val, 16, params, colons, ats)
     {str, rem_args}
   end
 
-  defp execute_directive(?R, params, colons, ats, args, _all_args, _acc) do
+  defp execute_directive(?R, params, colons, ats, args, _all_args, _col, _at_nl) do
     {val, rem_args} = pop_arg(args)
     str =
       case params do
@@ -209,7 +231,7 @@ defmodule ExLisp.CLFormat do
     {str, rem_args}
   end
 
-  defp execute_directive(?P, _params, colons, ats, args, all_args, _acc) do
+  defp execute_directive(?P, _params, colons, ats, args, all_args, _col, _at_nl) do
     target_val =
       if colons do
         # Look at previous argument
@@ -235,58 +257,57 @@ defmodule ExLisp.CLFormat do
     {out, rem_args}
   end
 
-  defp execute_directive(?F, params, _colons, ats, args, _all_args, _acc) do
+  defp execute_directive(?F, params, _colons, ats, args, _all_args, _col, _at_nl) do
     {val, rem_args} = pop_arg(args)
     str = format_float_f(val, params, ats)
     {str, rem_args}
   end
 
-  defp execute_directive(?E, params, _colons, ats, args, _all_args, _acc) do
+  defp execute_directive(?E, params, _colons, ats, args, _all_args, _col, _at_nl) do
     {val, rem_args} = pop_arg(args)
     str = format_float_e(val, params, ats)
     {str, rem_args}
   end
 
-  defp execute_directive(?G, params, _colons, ats, args, _all_args, _acc) do
+  defp execute_directive(?G, params, _colons, ats, args, _all_args, _col, _at_nl) do
     {val, rem_args} = pop_arg(args)
     str = format_float_g(val, params, ats)
     {str, rem_args}
   end
 
-  defp execute_directive(?$, params, colons, ats, args, _all_args, _acc) do
+  defp execute_directive(?$, params, colons, ats, args, _all_args, _col, _at_nl) do
     {val, rem_args} = pop_arg(args)
     str = format_monetary(val, params, colons, ats)
     {str, rem_args}
   end
 
-  defp execute_directive(?%, params, _colons, _ats, args, _all_args, _acc) do
+  defp execute_directive(?%, params, _colons, _ats, args, _all_args, _col, _at_nl) do
     n = case params do [count | _] when is_integer(count) and count >= 0 -> count; _ -> 1 end
     {String.duplicate("\n", n), args}
   end
 
-  defp execute_directive(?&, params, _colons, _ats, args, _all_args, acc) do
+  defp execute_directive(?&, params, _colons, _ats, args, _all_args, _col, at_newline?) do
     n = case params do [count | _] when is_integer(count) and count >= 0 -> count; _ -> 1 end
     if n == 0 do
       {"", args}
     else
       # If start of output or previous char is newline, output n-1 newlines
-      at_newline? = acc == [] or hd(acc) == ?\n
       count = if at_newline?, do: n - 1, else: n
       {String.duplicate("\n", max(0, count)), args}
     end
   end
 
-  defp execute_directive(?|, params, _colons, _ats, args, _all_args, _acc) do
+  defp execute_directive(?|, params, _colons, _ats, args, _all_args, _col, _at_nl) do
     n = case params do [count | _] when is_integer(count) and count >= 0 -> count; _ -> 1 end
     {String.duplicate("\f", n), args}
   end
 
-  defp execute_directive(?~, params, _colons, _ats, args, _all_args, _acc) do
+  defp execute_directive(?~, params, _colons, _ats, args, _all_args, _col, _at_nl) do
     n = case params do [count | _] when is_integer(count) and count >= 0 -> count; _ -> 1 end
     {String.duplicate("~", n), args}
   end
 
-  defp execute_directive(?*, params, colons, ats, args, all_args, _acc) do
+  defp execute_directive(?*, params, colons, ats, args, all_args, _col, _at_nl) do
     n = case params do [count | _] when is_integer(count) -> count; _ -> 1 end
 
     new_args =
@@ -309,7 +330,7 @@ defmodule ExLisp.CLFormat do
     {"", new_args}
   end
 
-  defp execute_directive(??, _params, _colons, ats, args, all_args, _acc) do
+  defp execute_directive(??, _params, _colons, ats, args, all_args, _col, _at_nl) do
     {fmt_arg, rem1} = pop_arg(args)
     if ats do
       # ~@? takes fmt_control and uses remaining args
@@ -324,13 +345,7 @@ defmodule ExLisp.CLFormat do
     end
   end
 
-  defp execute_directive(?T, params, colons, _ats, args, _all_args, acc) do
-    current_col =
-      case Enum.find_index(acc, &(&1 == ?\n)) do
-        nil -> length(acc)
-        idx -> idx
-      end
-
+  defp execute_directive(?T, params, colons, _ats, args, _all_args, current_col, _at_nl) do
     colnum = case params do [c | _] when is_integer(c) -> c; _ -> 1 end
     colinc = case params do [_, inc | _] when is_integer(inc) and inc > 0 -> inc; _ -> 1 end
 
@@ -353,13 +368,13 @@ defmodule ExLisp.CLFormat do
     {spaces, args}
   end
 
-  defp execute_directive(_other, _params, _colons, _ats, args, _all_args, _acc) do
+  defp execute_directive(_other, _params, _colons, _ats, args, _all_args, _col, _at_nl) do
     {"", args}
   end
 
   # --- Conditionals (~[ ... ~]) ---
 
-  defp handle_conditional(after_bracket, params, colons, ats, args, all_args, acc, ctx) do
+  defp handle_conditional(after_bracket, params, colons, ats, args, all_args, acc, col, at_nl, ctx) do
     {clauses, rest_after_close} = extract_matching_clauses(after_bracket, ?[, ?])
 
     cond do
@@ -369,8 +384,8 @@ defmodule ExLisp.CLFormat do
         clause_idx = if val == nil or val == false, do: 0, else: 1
         clause_str = Enum.at(clauses, clause_idx, "")
         {out_str, _} = format_internal(clause_str, rem_args, all_args, ctx)
-        new_acc = Enum.reverse(String.to_charlist(out_str)) ++ acc
-        do_format_chars(rest_after_close, rem_args, all_args, new_acc, ctx)
+        {new_acc, new_col, new_at_nl} = append_output(acc, col, at_nl, out_str)
+        do_format_chars(rest_after_close, rem_args, all_args, new_acc, new_col, new_at_nl, ctx)
 
       ats ->
         # ~@[true-clause~]
@@ -379,13 +394,13 @@ defmodule ExLisp.CLFormat do
             # Truthy: do not consume arg, format clause with current args
             clause_str = hd(clauses)
             {out_str, rem_args} = format_internal(clause_str, args, all_args, ctx)
-            new_acc = Enum.reverse(String.to_charlist(out_str)) ++ acc
-            do_format_chars(rest_after_close, rem_args, all_args, new_acc, ctx)
+            {new_acc, new_col, new_at_nl} = append_output(acc, col, at_nl, out_str)
+            do_format_chars(rest_after_close, rem_args, all_args, new_acc, new_col, new_at_nl, ctx)
 
           _ ->
             # Falsey / nil: consume arg and do not execute clause
             {_val, rem_args} = pop_arg(args)
-            do_format_chars(rest_after_close, rem_args, all_args, acc, ctx)
+            do_format_chars(rest_after_close, rem_args, all_args, acc, col, at_nl, ctx)
         end
 
       true ->
@@ -417,14 +432,14 @@ defmodule ExLisp.CLFormat do
           end
 
         {out_str, _} = format_internal(actual_str, rem_args, all_args, ctx)
-        new_acc = Enum.reverse(String.to_charlist(out_str)) ++ acc
-        do_format_chars(rest_after_close, rem_args, all_args, new_acc, ctx)
+        {new_acc, new_col, new_at_nl} = append_output(acc, col, at_nl, out_str)
+        do_format_chars(rest_after_close, rem_args, all_args, new_acc, new_col, new_at_nl, ctx)
     end
   end
 
   # --- Iteration (~{ ... ~}) ---
 
-  defp handle_iteration(after_brace, params, colons, ats, args, all_args, acc, ctx) do
+  defp handle_iteration(after_brace, params, colons, ats, args, all_args, acc, col, at_nl, ctx) do
     {body_chars, rest_after_close} = extract_matching_body(after_brace, ?{, ?})
     body_str = List.to_string(body_chars)
 
@@ -455,8 +470,8 @@ defmodule ExLisp.CLFormat do
           {sub_out, rem_args}
       end
 
-    new_acc = Enum.reverse(String.to_charlist(out_str)) ++ acc
-    do_format_chars(rest_after_close, new_args, all_args, new_acc, ctx)
+    {new_acc, new_col, new_at_nl} = append_output(acc, col, at_nl, out_str)
+    do_format_chars(rest_after_close, new_args, all_args, new_acc, new_col, new_at_nl, ctx)
   end
 
   defp run_flat_iteration(body_str, items, max_iter, all_args) do
@@ -464,12 +479,12 @@ defmodule ExLisp.CLFormat do
   end
 
   defp do_run_flat_iter(_body_str, [], _count, _max_iter, _all_args, acc) do
-    {acc |> Enum.reverse() |> Enum.join(""), []}
+    {IO.iodata_to_binary(Enum.reverse(acc)), []}
   end
 
   defp do_run_flat_iter(_body_str, items, count, max_iter, _all_args, acc)
        when max_iter != :infinity and count >= max_iter do
-    {acc |> Enum.reverse() |> Enum.join(""), items}
+    {IO.iodata_to_binary(Enum.reverse(acc)), items}
   end
 
   defp do_run_flat_iter(body_str, items, count, max_iter, all_args, acc) do
@@ -481,7 +496,7 @@ defmodule ExLisp.CLFormat do
 
     if rem_items == actual_items do
       # Avoid infinite loop if no items were consumed
-      {acc |> Enum.reverse() |> Enum.join(""), rem_items}
+      {IO.iodata_to_binary(Enum.reverse(acc)), rem_items}
     else
       do_run_flat_iter(body_str, rem_items, count + 1, max_iter, all_args, [sub_out | acc])
     end
@@ -492,12 +507,12 @@ defmodule ExLisp.CLFormat do
   end
 
   defp do_run_sublist_iter(_body_str, [], _count, _max_iter, _all_args, acc) do
-    {acc |> Enum.reverse() |> Enum.join(""), []}
+    {IO.iodata_to_binary(Enum.reverse(acc)), []}
   end
 
   defp do_run_sublist_iter(_body_str, items, count, max_iter, _all_args, acc)
        when max_iter != :infinity and count >= max_iter do
-    {acc |> Enum.reverse() |> Enum.join(""), items}
+    {IO.iodata_to_binary(Enum.reverse(acc)), items}
   end
 
   defp do_run_sublist_iter(body_str, [sub | rest], count, max_iter, all_args, acc) do
@@ -508,7 +523,7 @@ defmodule ExLisp.CLFormat do
 
   # --- Case conversion (~( ... ~)) ---
 
-  defp handle_case_conversion(after_paren, colons, ats, args, all_args, acc, ctx) do
+  defp handle_case_conversion(after_paren, colons, ats, args, all_args, acc, col, at_nl, ctx) do
     {body_chars, rest_after_close} = extract_matching_body(after_paren, ?(, ?))
     body_str = List.to_string(body_chars)
 
@@ -533,8 +548,8 @@ defmodule ExLisp.CLFormat do
           String.downcase(out_str)
       end
 
-    new_acc = Enum.reverse(String.to_charlist(converted)) ++ acc
-    do_format_chars(rest_after_close, rem_args, all_args, new_acc, ctx)
+    {new_acc, new_col, new_at_nl} = append_output(acc, col, at_nl, converted)
+    do_format_chars(rest_after_close, rem_args, all_args, new_acc, new_col, new_at_nl, ctx)
   end
 
   defp capitalize_first(""), do: ""
@@ -547,7 +562,7 @@ defmodule ExLisp.CLFormat do
 
   # --- Justification: ~< ... ~> ---
 
-  defp handle_justification(after_angle, params, colons, ats, args, all_args, acc, ctx) do
+  defp handle_justification(after_angle, params, colons, ats, args, all_args, acc, col, at_nl, ctx) do
     {clauses, rest_after_close} = extract_matching_clauses(after_angle, ?<, ?>)
 
     mincol = case params do [mc | _] when is_integer(mc) and mc >= 0 -> mc; _ -> 0 end
@@ -576,8 +591,8 @@ defmodule ExLisp.CLFormat do
     field_strings = Enum.reverse(formatted_clauses)
     justified_str = justify_fields(field_strings, mincol, colinc, minpad, padchar, colons, ats)
 
-    new_acc = Enum.reverse(String.to_charlist(justified_str)) ++ acc
-    do_format_chars(rest_after_close, new_args, all_args, new_acc, ctx)
+    {new_acc, new_col, new_at_nl} = append_output(acc, col, at_nl, justified_str)
+    do_format_chars(rest_after_close, new_args, all_args, new_acc, new_col, new_at_nl, ctx)
   end
 
   defp justify_fields([], mincol, colinc, _minpad, padchar, _colons, _ats) do

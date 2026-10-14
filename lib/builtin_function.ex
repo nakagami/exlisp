@@ -1504,11 +1504,21 @@ defmodule BuiltinFunction do
       {:add, [a, b]} ->
         compile_inline_math_2(:+, :add_two, a, b)
 
+      {:add, [a, b | rest]} ->
+        Enum.reduce([b | rest], a, fn next_arg, acc ->
+          compile_inline_math_2(:+, :add_two, acc, next_arg)
+        end)
+
       {:sub, [single]} ->
         {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :negate_num}}, [single]}
 
       {:sub, [a, b]} ->
         compile_inline_math_2(:-, :sub_two, a, b)
+
+      {:sub, [a, b | rest]} ->
+        Enum.reduce([b | rest], a, fn next_arg, acc ->
+          compile_inline_math_2(:-, :sub_two, acc, next_arg)
+        end)
 
       {:mul, []} ->
         {:integer, 1, 1}
@@ -1518,6 +1528,11 @@ defmodule BuiltinFunction do
 
       {:mul, [a, b]} ->
         compile_inline_math_2(:*, :mul_two, a, b)
+
+      {:mul, [a, b | rest]} ->
+        Enum.reduce([b | rest], a, fn next_arg, acc ->
+          compile_inline_math_2(:*, :mul_two, acc, next_arg)
+        end)
 
       {:divide, [single]} ->
         {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :divide_two}},
@@ -1531,6 +1546,100 @@ defmodule BuiltinFunction do
 
       {:one_minus, [single]} ->
         compile_inline_math_2(:-, :sub_two, single, {:integer, 1, 1})
+
+      {:car, [arg]} ->
+        h_var = :"V_h_#{rem(System.unique_integer([:positive]), 500)}"
+        other_var = :"V_other_#{rem(System.unique_integer([:positive]), 500)}"
+
+        {:case, 1, arg,
+         [
+           {:clause, 1, [{:cons, 1, {:var, 1, h_var}, {:var, 1, :_}}], [], [{:var, 1, h_var}]},
+           {:clause, 1, [{:atom, 1, nil}], [], [{:atom, 1, nil}]},
+           {:clause, 1, [{nil, 1}], [], [{:atom, 1, nil}]},
+           {:clause, 1, [{:var, 1, other_var}], [],
+            [
+              {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :car}},
+               [{:var, 1, other_var}]}
+            ]}
+         ]}
+
+      {:cdr, [arg]} ->
+        t_var = :"V_t_#{rem(System.unique_integer([:positive]), 500)}"
+        other_var = :"V_other_#{rem(System.unique_integer([:positive]), 500)}"
+
+        {:case, 1, arg,
+         [
+           {:clause, 1, [{:cons, 1, {:var, 1, :_}, {:var, 1, t_var}}], [], [{:var, 1, t_var}]},
+           {:clause, 1, [{:atom, 1, nil}], [], [{:atom, 1, nil}]},
+           {:clause, 1, [{nil, 1}], [], [{:atom, 1, nil}]},
+           {:clause, 1, [{:var, 1, other_var}], [],
+            [
+              {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :cdr}},
+               [{:var, 1, other_var}]}
+            ]}
+         ]}
+
+      {:listp, [arg]} ->
+        {:case, 1, arg,
+         [
+           {:clause, 1, [{:cons, 1, {:var, 1, :_}, {:var, 1, :_}}], [], [{:atom, 1, :t}]},
+           {:clause, 1, [{nil, 1}], [], [{:atom, 1, :t}]},
+           {:clause, 1, [{:atom, 1, nil}], [], [{:atom, 1, :t}]},
+           {:clause, 1, [{:var, 1, :_}], [], [{:atom, 1, nil}]}
+         ]}
+
+      {:numberp, [arg]} ->
+        v = :"V_np_#{rem(System.unique_integer([:positive]), 500)}"
+
+        {:case, 1, arg,
+         [
+           {:clause, 1, [{:var, 1, v}], [[{:call, 1, {:atom, 1, :is_number}, [{:var, 1, v}]}]],
+            [{:atom, 1, :t}]},
+           {:clause, 1, [{:var, 1, :_}], [], [{:atom, 1, nil}]}
+         ]}
+
+      {:integerp, [arg]} ->
+        v = :"V_ip_#{rem(System.unique_integer([:positive]), 500)}"
+
+        {:case, 1, arg,
+         [
+           {:clause, 1, [{:var, 1, v}], [[{:call, 1, {:atom, 1, :is_integer}, [{:var, 1, v}]}]],
+            [{:atom, 1, :t}]},
+           {:clause, 1, [{:var, 1, :_}], [], [{:atom, 1, nil}]}
+         ]}
+
+      {:floatp, [arg]} ->
+        v = :"V_fp_#{rem(System.unique_integer([:positive]), 500)}"
+
+        {:case, 1, arg,
+         [
+           {:clause, 1, [{:var, 1, v}], [[{:call, 1, {:atom, 1, :is_float}, [{:var, 1, v}]}]],
+            [{:atom, 1, :t}]},
+           {:clause, 1, [{:var, 1, :_}], [], [{:atom, 1, nil}]}
+         ]}
+
+      {:stringp, [arg]} ->
+        v = :"V_sp_#{rem(System.unique_integer([:positive]), 500)}"
+
+        {:case, 1, arg,
+         [
+           {:clause, 1, [{:var, 1, v}], [[{:call, 1, {:atom, 1, :is_binary}, [{:var, 1, v}]}]],
+            [{:atom, 1, :t}]},
+           {:clause, 1, [{:var, 1, :_}], [], [{:atom, 1, nil}]}
+         ]}
+
+      {:symbolp, [arg]} ->
+        v = :"V_symp_#{rem(System.unique_integer([:positive]), 500)}"
+
+        {:case, 1, arg,
+         [
+           {:clause, 1, [{:var, 1, v}], [[{:call, 1, {:atom, 1, :is_atom}, [{:var, 1, v}]}]],
+            [{:atom, 1, :t}]},
+           {:clause, 1, [{:var, 1, :_}], [], [{:atom, 1, nil}]}
+         ]}
+
+      {:identity, [arg]} ->
+        arg
 
       {:num_lte, [a, b]} ->
         compile_inline_cmp_2(:"=<", :num_lte_two, a, b)
