@@ -92,22 +92,9 @@ defmodule ExLisp.Evaluator do
   # --- Symbol evaluation ---
 
   defp eval_symbol(sym, env) when is_atom(sym) do
-    cond do
-      sym in [nil, nil] ->
-        nil
-
-      sym in [:t, :T] ->
-        :t
-
-      String.starts_with?(Atom.to_string(sym), ":") ->
-        sym
-
-      Map.has_key?(env, {:symbol_macro, sym}) ->
-        expansion = Map.get(env, {:symbol_macro, sym})
-        eval(expansion, env)
-
-      Map.has_key?(env, sym) ->
-        case Map.get(env, sym) do
+    case env do
+      %{^sym => binding} ->
+        case binding do
           {:box, ref} ->
             case :erlang.get(ref) do
               :undefined -> Env.get_var(sym)
@@ -130,20 +117,39 @@ defmodule ExLisp.Evaluator do
             val
         end
 
-      true ->
-        case :erlang.get(sym) do
-          :undefined ->
-            case Env.get_var(sym) do
-              :unbound ->
-                raise RuntimeError, "Unbound variable: #{inspect(sym)}"
+      %{{:symbol_macro, ^sym} => expansion} ->
+        eval(expansion, env)
+
+      _ ->
+        cond do
+          sym in [nil, :t, :T] ->
+            if sym == nil, do: nil, else: :t
+
+          keyword_symbol?(sym) ->
+            sym
+
+          true ->
+            case :erlang.get(sym) do
+              :undefined ->
+                case Env.get_var(sym) do
+                  :unbound ->
+                    raise RuntimeError, "Unbound variable: #{inspect(sym)}"
+
+                  val ->
+                    val
+                end
 
               val ->
                 val
             end
-
-          val ->
-            val
         end
+    end
+  end
+
+  defp keyword_symbol?(sym) when is_atom(sym) do
+    case :erlang.atom_to_binary(sym, :utf8) do
+      <<?:, _::binary>> -> true
+      _ -> false
     end
   end
 
@@ -152,21 +158,21 @@ defmodule ExLisp.Evaluator do
   defp eval_compound(op_node, args, full_form, env) do
     op = LispBeam.extract_op_name(op_node)
 
-    cond do
+    case op do
       # Special operators & special forms
-      op in [:quote, :_cl_quote_] ->
+      op when op in [:quote, :_cl_quote_] ->
         case args do
           [quoted_node | _] -> eval_quote_node(quoted_node)
           _ -> nil
         end
 
-      op in [:function, :_cl_function_] ->
+      op when op in [:function, :_cl_function_] ->
         eval_function(args, env)
 
-      op in [:progn, :_cl_progn_] ->
+      op when op in [:progn, :_cl_progn_] ->
         eval_progn(args, env)
 
-      op in [:prog1, :_cl_prog1_] ->
+      op when op in [:prog1, :_cl_prog1_] ->
         case args do
           [first | rest] ->
             res = eval(first, env) |> Builtins.unwrap_mv_primary()
@@ -177,7 +183,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:prog2, :_cl_prog2_] ->
+      op when op in [:prog2, :_cl_prog2_] ->
         case args do
           [first, second | rest] ->
             eval(first, env)
@@ -189,7 +195,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:if, :_cl_if_] ->
+      op when op in [:if, :_cl_if_] ->
         case args do
           [test_node, then_node | else_nodes] ->
             test_val = eval(test_node, env) |> Builtins.unwrap_mv_primary()
@@ -207,7 +213,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:when, :_cl_when_] ->
+      op when op in [:when, :_cl_when_] ->
         case args do
           [test_node | body] ->
             test_val = eval(test_node, env) |> Builtins.unwrap_mv_primary()
@@ -217,7 +223,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:unless, :_cl_unless_] ->
+      op when op in [:unless, :_cl_unless_] ->
         case args do
           [test_node | body] ->
             test_val = eval(test_node, env) |> Builtins.unwrap_mv_primary()
@@ -227,73 +233,73 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:cond, :_cl_cond_] ->
+      op when op in [:cond, :_cl_cond_] ->
         eval_cond(args, env)
 
-      op in [:case, :_cl_case_] ->
+      op when op in [:case, :_cl_case_] ->
         eval_case(args, false, env)
 
-      op in [:ecase, :_cl_ecase_, :ccase, :_cl_ccase_] ->
+      op when op in [:ecase, :_cl_ecase_, :ccase, :_cl_ccase_] ->
         eval_case(args, true, env)
 
-      op in [:typecase, :_cl_typecase_] ->
+      op when op in [:typecase, :_cl_typecase_] ->
         eval_typecase(args, false, env)
 
-      op in [:etypecase, :_cl_etypecase_, :ctypecase, :_cl_ctypecase_] ->
+      op when op in [:etypecase, :_cl_etypecase_, :ctypecase, :_cl_ctypecase_] ->
         eval_typecase(args, true, env)
 
-      op in [:and, :_cl_and_] ->
+      op when op in [:and, :_cl_and_] ->
         eval_and(args, env)
 
-      op in [:or, :_cl_or_] ->
+      op when op in [:or, :_cl_or_] ->
         eval_or(args, env)
 
-      op in [:let, :_cl_let_] ->
+      op when op in [:let, :_cl_let_] ->
         eval_let(args, env)
 
-      op in [:"let*", :_cl_let_star_, :let_star] ->
+      op when op in [:"let*", :_cl_let_star_, :let_star] ->
         eval_let_star(args, env)
 
-      op in [:setq, :_cl_setq_] ->
+      op when op in [:setq, :_cl_setq_] ->
         eval_setq(args, env)
 
-      op in [:setf, :_cl_setf_] ->
+      op when op in [:setf, :_cl_setf_] ->
         eval_setf(args, env)
 
-      op in [:psetq, :_cl_psetq_] ->
+      op when op in [:psetq, :_cl_psetq_] ->
         eval_psetq(args, env)
 
-      op in [:psetf, :_cl_psetf_] ->
+      op when op in [:psetf, :_cl_psetf_] ->
         eval_psetf(args, env)
 
-      op in [:incf, :_cl_incf_] ->
+      op when op in [:incf, :_cl_incf_] ->
         eval_incf(args, env)
 
-      op in [:decf, :_cl_decf_] ->
+      op when op in [:decf, :_cl_decf_] ->
         eval_decf(args, env)
 
-      op in [:push, :_cl_push_] ->
+      op when op in [:push, :_cl_push_] ->
         eval_push(args, env)
 
-      op in [:pushnew, :_cl_pushnew_] ->
+      op when op in [:pushnew, :_cl_pushnew_] ->
         eval_pushnew(args, env)
 
-      op in [:pop, :_cl_pop_] ->
+      op when op in [:pop, :_cl_pop_] ->
         eval_pop(args, env)
 
-      op in [:remf, :_cl_remf_] ->
+      op when op in [:remf, :_cl_remf_] ->
         eval_remf(args, env)
 
-      op in [:rotatef, :_cl_rotatef_] ->
+      op when op in [:rotatef, :_cl_rotatef_] ->
         eval_rotatef(args, env)
 
-      op in [:shiftf, :_cl_shiftf_] ->
+      op when op in [:shiftf, :_cl_shiftf_] ->
         eval_shiftf(args, env)
 
-      op in [:destructuring_bind, :"destructuring-bind", :_cl_destructuring_bind_] ->
+      op when op in [:destructuring_bind, :"destructuring-bind", :_cl_destructuring_bind_] ->
         eval_destructuring_bind(args, env)
 
-      op in [:defvar, :_cl_defvar_] ->
+      op when op in [:defvar, :_cl_defvar_] ->
         case args do
           [var_node | rest] ->
             var_sym = LispBeam.extract_symbol_name(var_node)
@@ -320,7 +326,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:defparameter, :_cl_defparameter_, :defconstant, :_cl_defconstant_] ->
+      op when op in [:defparameter, :_cl_defparameter_, :defconstant, :_cl_defconstant_] ->
         case args do
           [var_node, val_node | rest] ->
             var_sym = LispBeam.extract_symbol_name(var_node)
@@ -340,7 +346,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:defun, :_cl_defun_] ->
+      op when op in [:defun, :_cl_defun_] ->
         case args do
           [name_node, params_node | body_nodes] ->
             fun_sym = LispBeam.extract_symbol_name(name_node)
@@ -371,7 +377,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:defmacro, :_cl_defmacro_] ->
+      op when op in [:defmacro, :_cl_defmacro_] ->
         case args do
           [name_node, params_node | body_nodes] ->
             macro_sym = LispBeam.extract_symbol_name(name_node)
@@ -384,7 +390,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:lambda, :_cl_lambda_] ->
+      op when op in [:lambda, :_cl_lambda_] ->
         case args do
           [params_node | body_nodes] ->
             create_closure(params_node, body_nodes, env, nil)
@@ -393,7 +399,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:block, :_cl_block_] ->
+      op when op in [:block, :_cl_block_] ->
         case args do
           [name_node | body_nodes] ->
             block_name = LispBeam.extract_symbol_name(name_node)
@@ -410,7 +416,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:return_from, :_cl_return_from_] ->
+      op when op in [:return_from, :_cl_return_from_] ->
         case args do
           [name_node | val_nodes] ->
             block_name = LispBeam.extract_symbol_name(name_node)
@@ -434,7 +440,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:return, :_cl_return_] ->
+      op when op in [:return, :_cl_return_] ->
         case Map.get(env, {:block, nil}) do
           nil ->
             val =
@@ -457,24 +463,24 @@ defmodule ExLisp.Evaluator do
             throw({:block_return, tag, val})
         end
 
-      op in [:loop, :_cl_loop_] ->
+      op when op in [:loop, :_cl_loop_] ->
         eval_loop(args, env)
 
-      op in [:dotimes, :_cl_dotimes_] ->
+      op when op in [:dotimes, :_cl_dotimes_] ->
         eval_dotimes(args, env)
 
-      op in [:dolist, :_cl_dolist_] ->
+      op when op in [:dolist, :_cl_dolist_] ->
         eval_dolist(args, env)
 
-      op in [:do, :_cl_do_] ->
+      op when op in [:do, :_cl_do_] ->
         expanded = LispBeam.expand_do(args)
         eval(expanded, env)
 
-      op in [:"do*", :_cl_do_star_, :do_star] ->
+      op when op in [:"do*", :_cl_do_star_, :do_star] ->
         expanded = LispBeam.expand_do_star(args)
         eval(expanded, env)
 
-      op in [:prog, :_cl_prog_] ->
+      op when op in [:prog, :_cl_prog_] ->
         case args do
           [bindings | body] ->
             tag = {:block, nil, make_ref()}
@@ -492,7 +498,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:"prog*", :_cl_prog_star_, :prog_star] ->
+      op when op in [:"prog*", :_cl_prog_star_, :prog_star] ->
         case args do
           [bindings | body] ->
             tag = {:block, nil, make_ref()}
@@ -510,10 +516,10 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:tagbody, :_cl_tagbody_] ->
+      op when op in [:tagbody, :_cl_tagbody_] ->
         eval_tagbody(args, env)
 
-      op in [:go, :_cl_go_] ->
+      op when op in [:go, :_cl_go_] ->
         case args do
           [tag_node | _] ->
             tag = LispBeam.extract_symbol_name(tag_node)
@@ -524,7 +530,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:progv, :_cl_progv_] ->
+      op when op in [:progv, :_cl_progv_] ->
         case args do
           [syms_node, vals_node | body_nodes] ->
             syms = eval(syms_node, env) |> Builtins.unwrap_mv_primary()
@@ -546,7 +552,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:multiple_value_bind, :_cl_multiple_value_bind_, :"multiple-value-bind"] ->
+      op when op in [:multiple_value_bind, :_cl_multiple_value_bind_, :"multiple-value-bind"] ->
         case args do
           [vars_node, val_form | body_nodes] ->
             {decls, actual_body} = LispBeam.split_declarations(body_nodes)
@@ -583,7 +589,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:multiple_value_prog1, :_cl_multiple_value_prog1_] ->
+      op when op in [:multiple_value_prog1, :_cl_multiple_value_prog1_] ->
         case args do
           [first_node | rest_nodes] ->
             res = eval(first_node, env)
@@ -594,7 +600,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:multiple_value_list, :_cl_multiple_value_list_] ->
+      op when op in [:multiple_value_list, :_cl_multiple_value_list_] ->
         case args do
           [form | _] ->
             res = eval(rewrite_mv_form(form), env)
@@ -604,7 +610,7 @@ defmodule ExLisp.Evaluator do
             []
         end
 
-      op in [:nth_value, :_cl_nth_value_] ->
+      op when op in [:nth_value, :_cl_nth_value_] ->
         case args do
           [n_node, form | _] ->
             n = eval(n_node, env) |> Builtins.unwrap_mv_primary()
@@ -615,7 +621,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:multiple_value_call, :_cl_multiple_value_call_] ->
+      op when op in [:multiple_value_call, :_cl_multiple_value_call_] ->
         case args do
           [fn_node | form_nodes] ->
             fun = eval(fn_node, env)
@@ -629,7 +635,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:multiple_value_setq, :_cl_multiple_value_setq_, :"multiple-value-setq"] ->
+      op when op in [:multiple_value_setq, :_cl_multiple_value_setq_, :"multiple-value-setq"] ->
         case args do
           [vars_node, form | _] ->
             var_names = LispBeam.extract_param_names(vars_node)
@@ -661,19 +667,19 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:flet, :_cl_flet_] ->
+      op when op in [:flet, :_cl_flet_] ->
         eval_flet(args, env)
 
-      op in [:labels, :_cl_labels_] ->
+      op when op in [:labels, :_cl_labels_] ->
         eval_labels(args, env)
 
-      op in [:macrolet, :_cl_macrolet_] ->
+      op when op in [:macrolet, :_cl_macrolet_] ->
         eval_macrolet(args, env)
 
-      op in [:symbol_macrolet, :_cl_symbol_macrolet_] ->
+      op when op in [:symbol_macrolet, :_cl_symbol_macrolet_] ->
         eval_symbol_macrolet(args, env)
 
-      op in [:catch, :_cl_catch_] ->
+      op when op in [:catch, :_cl_catch_] ->
         case args do
           [tag_node | body] ->
             tag_val = eval(tag_node, env) |> Builtins.unwrap_mv_primary()
@@ -693,7 +699,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:throw, :_cl_throw_] ->
+      op when op in [:throw, :_cl_throw_] ->
         tag_val =
           case args do
             [tag_node | _] -> eval(tag_node, env) |> Builtins.unwrap_mv_primary()
@@ -718,7 +724,7 @@ defmodule ExLisp.Evaluator do
           |> ExLisp.Condition.error()
         end
 
-      op in [:unwind_protect, :_cl_unwind_protect_, :"unwind-protect"] ->
+      op when op in [:unwind_protect, :_cl_unwind_protect_, :"unwind-protect"] ->
         case args do
           [protected_node | cleanup_nodes] ->
             try do
@@ -731,19 +737,19 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:locally, :_cl_locally_] ->
+      op when op in [:locally, :_cl_locally_] ->
         {decls, body_nodes} = LispBeam.split_declarations(args)
         specials = LispBeam.extract_special_vars(decls)
         new_env = Enum.reduce(specials, env, fn var, acc -> Map.delete(acc, var) end)
         eval_progn(body_nodes, new_env)
 
-      op in [:eval_when, :_cl_eval_when_] ->
+      op when op in [:eval_when, :_cl_eval_when_] ->
         case args do
           [_situations | body] -> eval_progn(body, env)
           _ -> nil
         end
 
-      op in [:ignore_errors, :_cl_ignore_errors_, :"ignore-errors"] ->
+      op when op in [:ignore_errors, :_cl_ignore_errors_, :"ignore-errors"] ->
         try do
           eval_progn(args, env)
         rescue
@@ -752,38 +758,38 @@ defmodule ExLisp.Evaluator do
           _ -> [:_values_, [nil, :error]]
         end
 
-      op in [:handler_bind, :_cl_handler_bind_, :"handler-bind"] ->
+      op when op in [:handler_bind, :_cl_handler_bind_, :"handler-bind"] ->
         eval_handler_bind(args, env)
 
-      op in [:handler_case, :_cl_handler_case_, :"handler-case"] ->
+      op when op in [:handler_case, :_cl_handler_case_, :"handler-case"] ->
         eval_handler_case(args, env)
 
-      op in [:restart_bind, :_cl_restart_bind_, :"restart-bind"] ->
+      op when op in [:restart_bind, :_cl_restart_bind_, :"restart-bind"] ->
         eval_restart_bind(args, env)
 
-      op in [:restart_case, :_cl_restart_case_, :"restart-case"] ->
+      op when op in [:restart_case, :_cl_restart_case_, :"restart-case"] ->
         eval_restart_case(args, env)
 
-      op in [:with_simple_restart, :_cl_with_simple_restart_, :"with-simple-restart"] ->
+      op when op in [:with_simple_restart, :_cl_with_simple_restart_, :"with-simple-restart"] ->
         expanded = LispBeam.expand_with_simple_restart(args)
         eval(expanded, env)
 
-      op in [:define_condition, :_cl_define_condition_, :"define-condition"] ->
+      op when op in [:define_condition, :_cl_define_condition_, :"define-condition"] ->
         eval_define_condition(args, env)
 
-      op in [:with_open_file, :_cl_with_open_file_, :"with-open-file"] ->
+      op when op in [:with_open_file, :_cl_with_open_file_, :"with-open-file"] ->
         eval_with_open_file(args, env)
 
-      op in [:with_open_stream, :_cl_with_open_stream_, :"with-open-stream"] ->
+      op when op in [:with_open_stream, :_cl_with_open_stream_, :"with-open-stream"] ->
         eval_with_open_stream(args, env)
 
-      op in [:with_input_from_string, :_cl_with_input_from_string_, :"with-input-from-string"] ->
+      op when op in [:with_input_from_string, :_cl_with_input_from_string_, :"with-input-from-string"] ->
         eval_with_input_from_string(args, env)
 
-      op in [:with_output_to_string, :_cl_with_output_to_string_, :"with-output-to-string"] ->
+      op when op in [:with_output_to_string, :_cl_with_output_to_string_, :"with-output-to-string"] ->
         eval_with_output_to_string(args, env)
 
-      op in [
+      op when op in [
         :with_mutex,
         :_cl_with_mutex_,
         :"with-mutex",
@@ -792,19 +798,19 @@ defmodule ExLisp.Evaluator do
       ] ->
         eval_with_mutex(args, env)
 
-      op in [:defstruct, :_cl_defstruct_] ->
+      op when op in [:defstruct, :_cl_defstruct_] ->
         eval_defstruct(args, env)
 
-      op in [:defclass, :_cl_defclass_] ->
+      op when op in [:defclass, :_cl_defclass_] ->
         eval_defclass(args, env)
 
-      op in [:defgeneric, :_cl_defgeneric_] ->
+      op when op in [:defgeneric, :_cl_defgeneric_] ->
         eval_defgeneric(args, env)
 
-      op in [:defmethod, :_cl_defmethod_] ->
+      op when op in [:defmethod, :_cl_defmethod_] ->
         eval_defmethod(args, env)
 
-      op in [:call_next_method, :_cl_call_next_method_, :"call-next-method"] ->
+      op when op in [:call_next_method, :_cl_call_next_method_, :"call-next-method"] ->
         case args do
           [] ->
             ExLisp.CLOS.call_next_method()
@@ -814,10 +820,10 @@ defmodule ExLisp.Evaluator do
             ExLisp.CLOS.call_next_method(eval_args)
         end
 
-      op in [:next_method_p, :_cl_next_method_p_, :"next-method-p"] ->
+      op when op in [:next_method_p, :_cl_next_method_p_, :"next-method-p"] ->
         ExLisp.CLOS.next_method_p()
 
-      op in [:check_type, :_cl_check_type_, :"check-type"] ->
+      op when op in [:check_type, :_cl_check_type_, :"check-type"] ->
         case args do
           [place_node, typespec_node | _] ->
             val = eval(place_node, env) |> Builtins.unwrap_mv_primary()
@@ -833,7 +839,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:assert, :_cl_assert_] ->
+      op when op in [:assert, :_cl_assert_] ->
         case args do
           [test_node | _] ->
             val = eval(test_node, env) |> Builtins.unwrap_mv_primary()
@@ -848,7 +854,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:the, :_cl_the_] ->
+      op when op in [:the, :_cl_the_] ->
         case args do
           [typespec_node, val_node | _] ->
             val = eval(val_node, env)
@@ -866,7 +872,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:deftype, :_cl_deftype_] ->
+      op when op in [:deftype, :_cl_deftype_] ->
         case args do
           [name_node, params_node | body_nodes] ->
             name_sym = LispBeam.extract_symbol_name(name_node)
@@ -878,7 +884,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:time, :_cl_time_] ->
+      op when op in [:time, :_cl_time_] ->
         case args do
           [inner_expr | _] ->
             Builtins.time_eval(fn -> eval(inner_expr, env) end)
@@ -887,7 +893,7 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:in_package, :_cl_in_package_] ->
+      op when op in [:in_package, :_cl_in_package_] ->
         case args do
           [pkg_node | _] ->
             pkg_name = LispBeam.extract_symbol_name(pkg_node)
@@ -897,10 +903,10 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:declaim, :_cl_declaim_, :proclaim, :_cl_proclaim_, :declare, :_cl_declare_] ->
+      op when op in [:declaim, :_cl_declaim_, :proclaim, :_cl_proclaim_, :declare, :_cl_declare_] ->
         :t
 
-      op in [
+      op when op in [
         :define_setf_expander,
         :_cl_define_setf_expander_,
         :defsetf,
@@ -915,7 +921,7 @@ defmodule ExLisp.Evaluator do
           _ -> :t
         end
 
-      op in [
+      op when op in [
         :with_standard_io_syntax,
         :_cl_with_standard_io_syntax_,
         :with_compilation_unit,
@@ -923,7 +929,7 @@ defmodule ExLisp.Evaluator do
       ] ->
         eval_progn(args, env)
 
-      op in [:defpackage, :_cl_defpackage_] ->
+      op when op in [:defpackage, :_cl_defpackage_] ->
         case args do
           [pkg_node | opt_nodes] ->
             pkg_name =
@@ -1004,16 +1010,16 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      op in [:provide, :_cl_provide_, :require, :_cl_require_] ->
+      op when op in [:provide, :_cl_provide_, :require, :_cl_require_] ->
         case args do
           [pkg_node | _] -> LispBeam.extract_symbol_name(pkg_node)
           _ -> :t
         end
 
-      op in [:defsystem, :_cl_defsystem_] ->
+      op when op in [:defsystem, :_cl_defsystem_] ->
         :t
 
-      op in [:eval, :_cl_eval_] ->
+      op when op in [:eval, :_cl_eval_] ->
         case args do
           [arg_node | _] ->
             lisp_form = eval(arg_node, env) |> Builtins.unwrap_mv_primary()
@@ -1024,33 +1030,36 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
-      # Macro call
-      Map.has_key?(env, {:macro, op}) ->
-        macro_fun = Map.get(env, {:macro, op})
-        expanded = apply_macro(macro_fun, args, full_form)
-        eval(expanded, env)
+      _ ->
+        cond do
+          # Macro call
+          Map.has_key?(env, {:macro, op}) ->
+            macro_fun = Map.get(env, {:macro, op})
+            expanded = apply_macro(macro_fun, args, full_form)
+            eval(expanded, env)
 
-      Env.has_macro?(op) ->
-        macro_fun = Env.get_macro(op)
-        expanded = apply_macro(macro_fun, args, full_form)
-        eval(expanded, env)
+          Env.has_macro?(op) ->
+            macro_fun = Env.get_macro(op)
+            expanded = apply_macro(macro_fun, args, full_form)
+            eval(expanded, env)
 
-      # Function / Builtin / Remote / Lambda call
-      true ->
-        case LispBeam.normalize_remote_op(op_node) do
-          {:remote, mod, fun} ->
-            eval_args = Enum.map(args, &(eval(&1, env) |> Builtins.unwrap_mv_primary()))
-            apply(mod, fun, eval_args)
-
-          _ ->
-            cond do
-              match?({:list, _, _}, op_node) or match?({:quoted, _, _}, op_node) ->
-                fun = eval(op_node, env)
+          # Function / Builtin / Remote / Lambda call
+          true ->
+            case LispBeam.normalize_remote_op(op_node) do
+              {:remote, mod, fun} ->
                 eval_args = Enum.map(args, &(eval(&1, env) |> Builtins.unwrap_mv_primary()))
-                Builtins.invoke_fn(fun, eval_args)
+                apply(mod, fun, eval_args)
 
-              true ->
-                eval_call(op, args, env)
+              _ ->
+                cond do
+                  match?({:list, _, _}, op_node) or match?({:quoted, _, _}, op_node) ->
+                    fun = eval(op_node, env)
+                    eval_args = Enum.map(args, &(eval(&1, env) |> Builtins.unwrap_mv_primary()))
+                    Builtins.invoke_fn(fun, eval_args)
+
+                  true ->
+                    eval_call(op, args, env)
+                end
             end
         end
     end
@@ -1088,24 +1097,27 @@ defmodule ExLisp.Evaluator do
         eval(arg, env) |> Builtins.unwrap_mv_primary()
       end)
 
-    cond do
-      op == nil ->
-        raise RuntimeError, "Invalid function: nil"
-
-      Map.has_key?(env, {:fun, op}) ->
-        fun_val = Map.get(env, {:fun, op})
+    case env do
+      %{{:fun, ^op} => fun_val} ->
         Builtins.invoke_fn(fun_val, eval_args)
 
-      Env.has_fun?(op) ->
-        fun_val = Env.get_fun(op)
-        Builtins.invoke_fn(fun_val, eval_args)
+      _ ->
+        case BuiltinFunction.canonical_name(op) do
+          {:ok, canonical} ->
+            Builtins.dispatch_builtin(canonical, eval_args)
 
-      BuiltinFunction.builtin?(op) ->
-        {:ok, canonical} = BuiltinFunction.lookup(op)
-        Builtins.dispatch_builtin(canonical, eval_args)
-
-      true ->
-        Builtins.invoke_fn(op, eval_args)
+          :error ->
+            if Env.has_fun?(op) do
+              fun_val = Env.get_fun(op)
+              Builtins.invoke_fn(fun_val, eval_args)
+            else
+              if op == nil do
+                raise RuntimeError, "Invalid function: nil"
+              else
+                Builtins.invoke_fn(op, eval_args)
+              end
+            end
+        end
     end
   end
 

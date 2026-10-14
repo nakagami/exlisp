@@ -1335,32 +1335,38 @@ defmodule BuiltinFunction do
   end
 
   def canonical_name(atom) when is_atom(atom) do
-    str = atom |> Atom.to_string() |> String.downcase()
+    case Map.get(@builtin_mappings, atom) do
+      {canonical, _} ->
+        {:ok, canonical}
 
-    case String.split(str, ~r/::?|\./, parts: 2) do
-      [pkg, sym] when pkg in @known_package_prefixes ->
-        norm_atom = sym |> String.replace("-", "_") |> String.to_atom()
-        sym_atom = String.to_atom(sym)
+      nil ->
+        str = atom |> Atom.to_string() |> String.downcase()
 
-        case Map.get(@builtin_mappings, sym_atom) do
-          {canonical, _} -> {:ok, canonical}
-          nil ->
-            case Map.get(@builtin_mappings, norm_atom) do
+        case String.split(str, ~r/::?|\./, parts: 2) do
+          [pkg, sym] when pkg in @known_package_prefixes ->
+            norm_atom = sym |> String.replace("-", "_") |> String.to_atom()
+            sym_atom = String.to_atom(sym)
+
+            case Map.get(@builtin_mappings, sym_atom) do
               {canonical, _} -> {:ok, canonical}
-              nil -> {:ok, norm_atom}
+              nil ->
+                case Map.get(@builtin_mappings, norm_atom) do
+                  {canonical, _} -> {:ok, canonical}
+                  nil -> {:ok, norm_atom}
+                end
             end
-        end
 
-      _ ->
-        down_atom = String.to_atom(str)
-        norm_atom = str |> String.replace("-", "_") |> String.to_atom()
+          _ ->
+            down_atom = String.to_atom(str)
+            norm_atom = str |> String.replace("-", "_") |> String.to_atom()
 
-        case Map.get(@builtin_mappings, down_atom) do
-          {canonical, _} -> {:ok, canonical}
-          nil ->
-            case Map.get(@builtin_mappings, norm_atom) do
+            case Map.get(@builtin_mappings, down_atom) do
               {canonical, _} -> {:ok, canonical}
-              nil -> :error
+              nil ->
+                case Map.get(@builtin_mappings, norm_atom) do
+                  {canonical, _} -> {:ok, canonical}
+                  nil -> :error
+                end
             end
         end
     end
