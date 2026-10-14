@@ -159,6 +159,294 @@ defmodule ExLisp.Evaluator do
     op = LispBeam.extract_op_name(op_node)
 
     case op do
+      # Direct fast paths for builtins (when not shadowed by flet/labels)
+      op when op in [:+, :"_cl_+_"] and not is_map_key(env, {:fun, op}) ->
+        case args do
+          [a_node, b_node] ->
+            a = eval(a_node, env) |> Builtins.unwrap_mv_primary()
+            b = eval(b_node, env) |> Builtins.unwrap_mv_primary()
+            Builtins.add_two(a, b)
+
+          [a_node] ->
+            eval(a_node, env) |> Builtins.unwrap_mv_primary()
+
+          [] ->
+            0
+
+          [a_node, b_node, c_node] ->
+            a = eval(a_node, env) |> Builtins.unwrap_mv_primary()
+            b = eval(b_node, env) |> Builtins.unwrap_mv_primary()
+            c = eval(c_node, env) |> Builtins.unwrap_mv_primary()
+            Builtins.add_two(Builtins.add_two(a, b), c)
+
+          _ ->
+            Enum.reduce(args, 0, fn node, acc ->
+              Builtins.add_two(acc, eval(node, env) |> Builtins.unwrap_mv_primary())
+            end)
+        end
+
+      op when op in [:-, :"_cl_-_"] and not is_map_key(env, {:fun, op}) ->
+        case args do
+          [a_node, b_node] ->
+            a = eval(a_node, env) |> Builtins.unwrap_mv_primary()
+            b = eval(b_node, env) |> Builtins.unwrap_mv_primary()
+            Builtins.sub_two(a, b)
+
+          [a_node] ->
+            Builtins.negate_num(eval(a_node, env) |> Builtins.unwrap_mv_primary())
+
+          [a_node, b_node, c_node] ->
+            a = eval(a_node, env) |> Builtins.unwrap_mv_primary()
+            b = eval(b_node, env) |> Builtins.unwrap_mv_primary()
+            c = eval(c_node, env) |> Builtins.unwrap_mv_primary()
+            Builtins.sub_two(Builtins.sub_two(a, b), c)
+
+          [a_node | rest] ->
+            init = eval(a_node, env) |> Builtins.unwrap_mv_primary()
+            Enum.reduce(rest, init, fn node, acc ->
+              Builtins.sub_two(acc, eval(node, env) |> Builtins.unwrap_mv_primary())
+            end)
+
+          [] ->
+            0
+        end
+
+      op when op in [:*, :"_cl_*_"] and not is_map_key(env, {:fun, op}) ->
+        case args do
+          [a_node, b_node] ->
+            a = eval(a_node, env) |> Builtins.unwrap_mv_primary()
+            b = eval(b_node, env) |> Builtins.unwrap_mv_primary()
+            Builtins.mul_two(a, b)
+
+          [a_node] ->
+            eval(a_node, env) |> Builtins.unwrap_mv_primary()
+
+          [] ->
+            1
+
+          [a_node, b_node, c_node] ->
+            a = eval(a_node, env) |> Builtins.unwrap_mv_primary()
+            b = eval(b_node, env) |> Builtins.unwrap_mv_primary()
+            c = eval(c_node, env) |> Builtins.unwrap_mv_primary()
+            Builtins.mul_two(Builtins.mul_two(a, b), c)
+
+          _ ->
+            Enum.reduce(args, 1, fn node, acc ->
+              Builtins.mul_two(acc, eval(node, env) |> Builtins.unwrap_mv_primary())
+            end)
+        end
+
+      op when op in [:/, :"_cl_/_"] and not is_map_key(env, {:fun, op}) ->
+        case args do
+          [a_node, b_node] ->
+            a = eval(a_node, env) |> Builtins.unwrap_mv_primary()
+            b = eval(b_node, env) |> Builtins.unwrap_mv_primary()
+            Builtins.divide_two(a, b)
+
+          [a_node] ->
+            Builtins.divide_two(1, eval(a_node, env) |> Builtins.unwrap_mv_primary())
+
+          [a_node, b_node, c_node] ->
+            a = eval(a_node, env) |> Builtins.unwrap_mv_primary()
+            b = eval(b_node, env) |> Builtins.unwrap_mv_primary()
+            c = eval(c_node, env) |> Builtins.unwrap_mv_primary()
+            Builtins.divide_two(Builtins.divide_two(a, b), c)
+
+          [a_node | rest] ->
+            init = eval(a_node, env) |> Builtins.unwrap_mv_primary()
+            Enum.reduce(rest, init, fn node, acc ->
+              Builtins.divide_two(acc, eval(node, env) |> Builtins.unwrap_mv_primary())
+            end)
+
+          [] ->
+            0
+        end
+
+      op when op in [:"1+", :"_cl_1+_", :"1+"] and not is_map_key(env, {:fun, op}) ->
+        case args do
+          [a_node] ->
+            a = eval(a_node, env) |> Builtins.unwrap_mv_primary()
+            if is_integer(a), do: a + 1, else: Builtins.add_two(a, 1)
+
+          _ ->
+            eval_call(op, args, env)
+        end
+
+      op when op in [:"1-", :"_cl_1-_", :"1-"] and not is_map_key(env, {:fun, op}) ->
+        case args do
+          [a_node] ->
+            a = eval(a_node, env) |> Builtins.unwrap_mv_primary()
+            if is_integer(a), do: a - 1, else: Builtins.sub_two(a, 1)
+
+          _ ->
+            eval_call(op, args, env)
+        end
+
+      op when op in [:<, :"_cl_<_"] and not is_map_key(env, {:fun, op}) ->
+        case args do
+          [a_node, b_node] ->
+            a = eval(a_node, env) |> Builtins.unwrap_mv_primary()
+            b = eval(b_node, env) |> Builtins.unwrap_mv_primary()
+            if is_number(a) and is_number(b), do: (if a < b, do: :t, else: nil), else: Builtins.dispatch_builtin(:<, [a, b])
+
+          _ ->
+            eval_call(op, args, env)
+        end
+
+      op when op in [:<=, :"_cl_<=_"] and not is_map_key(env, {:fun, op}) ->
+        case args do
+          [a_node, b_node] ->
+            a = eval(a_node, env) |> Builtins.unwrap_mv_primary()
+            b = eval(b_node, env) |> Builtins.unwrap_mv_primary()
+            if is_number(a) and is_number(b), do: (if a <= b, do: :t, else: nil), else: Builtins.dispatch_builtin(:<=, [a, b])
+
+          _ ->
+            eval_call(op, args, env)
+        end
+
+      op when op in [:>, :"_cl_>_"] and not is_map_key(env, {:fun, op}) ->
+        case args do
+          [a_node, b_node] ->
+            a = eval(a_node, env) |> Builtins.unwrap_mv_primary()
+            b = eval(b_node, env) |> Builtins.unwrap_mv_primary()
+            if is_number(a) and is_number(b), do: (if a > b, do: :t, else: nil), else: Builtins.dispatch_builtin(:>, [a, b])
+
+          _ ->
+            eval_call(op, args, env)
+        end
+
+      op when op in [:>=, :"_cl_>=_"] and not is_map_key(env, {:fun, op}) ->
+        case args do
+          [a_node, b_node] ->
+            a = eval(a_node, env) |> Builtins.unwrap_mv_primary()
+            b = eval(b_node, env) |> Builtins.unwrap_mv_primary()
+            if is_number(a) and is_number(b), do: (if a >= b, do: :t, else: nil), else: Builtins.dispatch_builtin(:>=, [a, b])
+
+          _ ->
+            eval_call(op, args, env)
+        end
+
+      op when op in [:=, :"_cl_=_"] and not is_map_key(env, {:fun, op}) ->
+        case args do
+          [a_node, b_node] ->
+            a = eval(a_node, env) |> Builtins.unwrap_mv_primary()
+            b = eval(b_node, env) |> Builtins.unwrap_mv_primary()
+            if is_number(a) and is_number(b), do: (if a == b, do: :t, else: nil), else: Builtins.dispatch_builtin(:=, [a, b])
+
+          _ ->
+            eval_call(op, args, env)
+        end
+
+      op when op in [:"/=", :"_cl_/=_"] and not is_map_key(env, {:fun, op}) ->
+        case args do
+          [a_node, b_node] ->
+            a = eval(a_node, env) |> Builtins.unwrap_mv_primary()
+            b = eval(b_node, env) |> Builtins.unwrap_mv_primary()
+            if is_number(a) and is_number(b), do: (if a != b, do: :t, else: nil), else: Builtins.dispatch_builtin(:"/=", [a, b])
+
+          _ ->
+            eval_call(op, args, env)
+        end
+
+      op when op in [:car, :_cl_car_] and not is_map_key(env, {:fun, op}) ->
+        case args do
+          [a_node] -> Builtins.car(eval(a_node, env) |> Builtins.unwrap_mv_primary())
+          _ -> eval_call(op, args, env)
+        end
+
+      op when op in [:cdr, :_cl_cdr_] and not is_map_key(env, {:fun, op}) ->
+        case args do
+          [a_node] -> Builtins.cdr(eval(a_node, env) |> Builtins.unwrap_mv_primary())
+          _ -> eval_call(op, args, env)
+        end
+
+      op when op in [:cons, :_cl_cons_] and not is_map_key(env, {:fun, op}) ->
+        case args do
+          [a_node, b_node] ->
+            Builtins.cons(
+              eval(a_node, env) |> Builtins.unwrap_mv_primary(),
+              eval(b_node, env) |> Builtins.unwrap_mv_primary()
+            )
+
+          _ ->
+            eval_call(op, args, env)
+        end
+
+      op when op in [:not, :_cl_not_, :null, :_cl_null_] and not is_map_key(env, {:fun, op}) ->
+        case args do
+          [a_node] -> Builtins.not_fn(eval(a_node, env) |> Builtins.unwrap_mv_primary())
+          _ -> eval_call(op, args, env)
+        end
+
+      op when op in [:eq, :_cl_eq_] and not is_map_key(env, {:fun, op}) ->
+        case args do
+          [a_node, b_node] ->
+            Builtins.eq(
+              eval(a_node, env) |> Builtins.unwrap_mv_primary(),
+              eval(b_node, env) |> Builtins.unwrap_mv_primary()
+            )
+
+          _ ->
+            eval_call(op, args, env)
+        end
+
+      op when op in [:eql, :_cl_eql_] and not is_map_key(env, {:fun, op}) ->
+        case args do
+          [a_node, b_node] ->
+            Builtins.eql(
+              eval(a_node, env) |> Builtins.unwrap_mv_primary(),
+              eval(b_node, env) |> Builtins.unwrap_mv_primary()
+            )
+
+          _ ->
+            eval_call(op, args, env)
+        end
+
+      op when op in [:equal, :_cl_equal_] and not is_map_key(env, {:fun, op}) ->
+        case args do
+          [a_node, b_node] ->
+            Builtins.equal(
+              eval(a_node, env) |> Builtins.unwrap_mv_primary(),
+              eval(b_node, env) |> Builtins.unwrap_mv_primary()
+            )
+
+          _ ->
+            eval_call(op, args, env)
+        end
+
+      op when op in [:aref, :_cl_aref_] and not is_map_key(env, {:fun, op}) ->
+        case args do
+          [arr_node, idx_node] ->
+            arr = eval(arr_node, env) |> Builtins.unwrap_mv_primary()
+            idx = eval(idx_node, env) |> Builtins.unwrap_mv_primary()
+            Builtins.aref([arr, idx])
+
+          _ ->
+            eval_call(op, args, env)
+        end
+
+      op when op in [:svref, :_cl_svref_] and not is_map_key(env, {:fun, op}) ->
+        case args do
+          [vec_node, idx_node] ->
+            vec = eval(vec_node, env) |> Builtins.unwrap_mv_primary()
+            idx = eval(idx_node, env) |> Builtins.unwrap_mv_primary()
+            Builtins.svref(vec, idx)
+
+          _ ->
+            eval_call(op, args, env)
+        end
+
+      op when op in [:funcall, :_cl_funcall_] and not is_map_key(env, {:fun, op}) ->
+        case args do
+          [fn_node | arg_nodes] ->
+            fun = eval(fn_node, env) |> Builtins.unwrap_mv_primary()
+            eval_args = Enum.map(arg_nodes, &(eval(&1, env) |> Builtins.unwrap_mv_primary()))
+            Builtins.invoke_fn(fun, eval_args)
+
+          _ ->
+            eval_call(op, args, env)
+        end
+
       # Special operators & special forms
       op when op in [:quote, :_cl_quote_] ->
         case args do
@@ -1101,6 +1389,151 @@ defmodule ExLisp.Evaluator do
 
   # --- Function / Call evaluation ---
 
+  defp eval_call(op, [], env) do
+    case env do
+      %{{:fun, ^op} => fun_val} ->
+        Builtins.invoke_fn(fun_val, [])
+
+      _ ->
+        case :persistent_term.get({:exlisp_fun, op}, :__not_found__) do
+          :__not_found__ ->
+            case BuiltinFunction.canonical_name(op) do
+              {:ok, canonical} ->
+                Builtins.dispatch_builtin(canonical, [])
+
+              :error ->
+                if Env.has_fun?(op) do
+                  fun_val = Env.get_fun(op)
+                  Builtins.invoke_fn(fun_val, [])
+                else
+                  if op == nil do
+                    raise RuntimeError, "Invalid function: nil"
+                  else
+                    Builtins.invoke_fn(op, [])
+                  end
+                end
+            end
+
+          fun_val when is_function(fun_val, 0) ->
+            fun_val.()
+
+          fun_val ->
+            Builtins.invoke_fn(fun_val, [])
+        end
+    end
+  end
+
+  defp eval_call(op, [a_node], env) do
+    a = eval(a_node, env) |> Builtins.unwrap_mv_primary()
+
+    case env do
+      %{{:fun, ^op} => fun_val} ->
+        Builtins.invoke_fn(fun_val, [a])
+
+      _ ->
+        case :persistent_term.get({:exlisp_fun, op}, :__not_found__) do
+          :__not_found__ ->
+            case BuiltinFunction.canonical_name(op) do
+              {:ok, canonical} ->
+                Builtins.dispatch_builtin(canonical, [a])
+
+              :error ->
+                if Env.has_fun?(op) do
+                  fun_val = Env.get_fun(op)
+                  Builtins.invoke_fn(fun_val, [a])
+                else
+                  if op == nil do
+                    raise RuntimeError, "Invalid function: nil"
+                  else
+                    Builtins.invoke_fn(op, [a])
+                  end
+                end
+            end
+
+          fun_val when is_function(fun_val, 1) ->
+            fun_val.(a)
+
+          fun_val ->
+            Builtins.invoke_fn(fun_val, [a])
+        end
+    end
+  end
+
+  defp eval_call(op, [a_node, b_node], env) do
+    a = eval(a_node, env) |> Builtins.unwrap_mv_primary()
+    b = eval(b_node, env) |> Builtins.unwrap_mv_primary()
+
+    case env do
+      %{{:fun, ^op} => fun_val} ->
+        Builtins.invoke_fn(fun_val, [a, b])
+
+      _ ->
+        case :persistent_term.get({:exlisp_fun, op}, :__not_found__) do
+          :__not_found__ ->
+            case BuiltinFunction.canonical_name(op) do
+              {:ok, canonical} ->
+                Builtins.dispatch_builtin(canonical, [a, b])
+
+              :error ->
+                if Env.has_fun?(op) do
+                  fun_val = Env.get_fun(op)
+                  Builtins.invoke_fn(fun_val, [a, b])
+                else
+                  if op == nil do
+                    raise RuntimeError, "Invalid function: nil"
+                  else
+                    Builtins.invoke_fn(op, [a, b])
+                  end
+                end
+            end
+
+          fun_val when is_function(fun_val, 2) ->
+            fun_val.(a, b)
+
+          fun_val ->
+            Builtins.invoke_fn(fun_val, [a, b])
+        end
+    end
+  end
+
+  defp eval_call(op, [a_node, b_node, c_node], env) do
+    a = eval(a_node, env) |> Builtins.unwrap_mv_primary()
+    b = eval(b_node, env) |> Builtins.unwrap_mv_primary()
+    c = eval(c_node, env) |> Builtins.unwrap_mv_primary()
+
+    case env do
+      %{{:fun, ^op} => fun_val} ->
+        Builtins.invoke_fn(fun_val, [a, b, c])
+
+      _ ->
+        case :persistent_term.get({:exlisp_fun, op}, :__not_found__) do
+          :__not_found__ ->
+            case BuiltinFunction.canonical_name(op) do
+              {:ok, canonical} ->
+                Builtins.dispatch_builtin(canonical, [a, b, c])
+
+              :error ->
+                if Env.has_fun?(op) do
+                  fun_val = Env.get_fun(op)
+                  Builtins.invoke_fn(fun_val, [a, b, c])
+                else
+                  if op == nil do
+                    raise RuntimeError, "Invalid function: nil"
+                  else
+                    Builtins.invoke_fn(op, [a, b, c])
+                  end
+                end
+            end
+
+          fun_val when is_function(fun_val, 3) ->
+            fun_val.(a, b, c)
+
+          fun_val ->
+            Builtins.invoke_fn(fun_val, [a, b, c])
+        end
+    end
+  end
+
   defp eval_call(op, args, env) do
     eval_args =
       Enum.map(args, fn arg ->
@@ -1112,21 +1545,27 @@ defmodule ExLisp.Evaluator do
         Builtins.invoke_fn(fun_val, eval_args)
 
       _ ->
-        case BuiltinFunction.canonical_name(op) do
-          {:ok, canonical} ->
-            Builtins.dispatch_builtin(canonical, eval_args)
+        case :persistent_term.get({:exlisp_fun, op}, :__not_found__) do
+          :__not_found__ ->
+            case BuiltinFunction.canonical_name(op) do
+              {:ok, canonical} ->
+                Builtins.dispatch_builtin(canonical, eval_args)
 
-          :error ->
-            if Env.has_fun?(op) do
-              fun_val = Env.get_fun(op)
-              Builtins.invoke_fn(fun_val, eval_args)
-            else
-              if op == nil do
-                raise RuntimeError, "Invalid function: nil"
-              else
-                Builtins.invoke_fn(op, eval_args)
-              end
+              :error ->
+                if Env.has_fun?(op) do
+                  fun_val = Env.get_fun(op)
+                  Builtins.invoke_fn(fun_val, eval_args)
+                else
+                  if op == nil do
+                    raise RuntimeError, "Invalid function: nil"
+                  else
+                    Builtins.invoke_fn(op, eval_args)
+                  end
+                end
             end
+
+          fun_val ->
+            Builtins.invoke_fn(fun_val, eval_args)
         end
     end
   end
@@ -1380,6 +1819,18 @@ defmodule ExLisp.Evaluator do
   end
 
   # --- Setq / Setf / Mutators ---
+
+  defp eval_setq([var_node, val_node], env) do
+    var_sym = LispBeam.extract_symbol_name(var_node)
+    val = eval(val_node, env) |> Builtins.unwrap_mv_primary()
+
+    case Map.get(env, var_sym) do
+      box when is_tuple(box) and elem(box, 0) == :box -> :erlang.put(elem(box, 1), val)
+      _ -> Env.set_var(var_sym, val)
+    end
+
+    val
+  end
 
   defp eval_setq(args, env) do
     pairs = Enum.chunk_every(args, 2)
@@ -1849,6 +2300,10 @@ defmodule ExLisp.Evaluator do
     end
   end
 
+  defp eval_setf([place, val_node], env) do
+    eval_setf_pair(place, val_node, env)
+  end
+
   defp eval_setf(args, env) do
     pairs = Enum.chunk_every(args, 2)
 
@@ -1859,6 +2314,68 @@ defmodule ExLisp.Evaluator do
       [place], _acc ->
         do_eval_setf_place(place, nil, env)
     end)
+  end
+
+  defp eval_setf_pair({:id, _pos, _} = place, val_node, env) do
+    var_sym = LispBeam.extract_symbol_name(place)
+
+    if Map.has_key?(env, {:symbol_macro, var_sym}) do
+      expansion = Map.get(env, {:symbol_macro, var_sym})
+      eval_setf_pair(expansion, val_node, env)
+    else
+      val = eval(val_node, env)
+      unwrapped = Builtins.unwrap_mv_primary(val)
+
+      case Map.get(env, var_sym) do
+        box when is_tuple(box) and elem(box, 0) == :box ->
+          :erlang.put(elem(box, 1), unwrapped)
+
+        _ ->
+          Env.set_var(var_sym, unwrapped)
+      end
+
+      val
+    end
+  end
+
+  defp eval_setf_pair(var_sym, val_node, env) when is_atom(var_sym) do
+    if Map.has_key?(env, {:symbol_macro, var_sym}) do
+      expansion = Map.get(env, {:symbol_macro, var_sym})
+      eval_setf_pair(expansion, val_node, env)
+    else
+      val = eval(val_node, env)
+      unwrapped = Builtins.unwrap_mv_primary(val)
+
+      case Map.get(env, var_sym) do
+        box when is_tuple(box) and elem(box, 0) == :box ->
+          :erlang.put(elem(box, 1), unwrapped)
+
+        _ ->
+          Env.set_var(var_sym, unwrapped)
+      end
+
+      val
+    end
+  end
+
+  defp eval_setf_pair({:list, _pos, [op_node, arr_node, idx_node]}, val_node, env)
+       when elem(op_node, 0) == :id and hd(elem(op_node, 2)) in ["aref", "AREF", "_cl_aref_"] do
+    arr = eval(arr_node, env) |> Builtins.unwrap_mv_primary()
+    idx = eval(idx_node, env) |> Builtins.unwrap_mv_primary()
+    val = eval(val_node, env)
+    unwrapped = Builtins.unwrap_mv_primary(val)
+    Builtins.set_aref(arr, [idx], unwrapped)
+    val
+  end
+
+  defp eval_setf_pair({:list, _pos, [op_node, vec_node, idx_node]}, val_node, env)
+       when elem(op_node, 0) == :id and hd(elem(op_node, 2)) in ["svref", "SVREF", "_cl_svref_"] do
+    vec = eval(vec_node, env) |> Builtins.unwrap_mv_primary()
+    idx = eval(idx_node, env) |> Builtins.unwrap_mv_primary()
+    val = eval(val_node, env)
+    unwrapped = Builtins.unwrap_mv_primary(val)
+    Builtins.set_svref(vec, idx, unwrapped)
+    val
   end
 
   defp eval_setf_pair(place, val_node, env) do
@@ -2176,7 +2693,12 @@ defmodule ExLisp.Evaluator do
         loop_env = Map.put(block_env, var_sym, {:box, var_ref})
 
         try do
-          do_eval_dotimes(0, count, var_ref, body_nodes, loop_env)
+          if Enum.any?(body_nodes, &is_tag_elem?/1) do
+            do_eval_dotimes_tagbody(0, count, var_ref, body_nodes, loop_env)
+          else
+            do_eval_dotimes(0, count, var_ref, body_nodes, loop_env)
+          end
+
           :erlang.put(var_ref, count)
           eval(res_node, loop_env)
         catch
@@ -2188,18 +2710,20 @@ defmodule ExLisp.Evaluator do
     end
   end
 
+  defp do_eval_dotimes(i, count, _var_ref, _body_nodes, _env) when i >= count, do: nil
+
   defp do_eval_dotimes(i, count, var_ref, body_nodes, env) do
-    if i < count do
-      :erlang.put(var_ref, i)
+    :erlang.put(var_ref, i)
+    eval_progn(body_nodes, env)
+    do_eval_dotimes(i + 1, count, var_ref, body_nodes, env)
+  end
 
-      if Enum.any?(body_nodes, &is_tag_elem?/1) do
-        eval_tagbody(body_nodes, env)
-      else
-        eval_progn(body_nodes, env)
-      end
+  defp do_eval_dotimes_tagbody(i, count, _var_ref, _body_nodes, _env) when i >= count, do: nil
 
-      do_eval_dotimes(i + 1, count, var_ref, body_nodes, env)
-    end
+  defp do_eval_dotimes_tagbody(i, count, var_ref, body_nodes, env) do
+    :erlang.put(var_ref, i)
+    eval_tagbody(body_nodes, env)
+    do_eval_dotimes_tagbody(i + 1, count, var_ref, body_nodes, env)
   end
 
   defp eval_dolist(args, env) do
@@ -2227,15 +2751,17 @@ defmodule ExLisp.Evaluator do
           end
 
         try do
-          Enum.each(items, fn item ->
-            :erlang.put(var_ref, item)
-
-            if Enum.any?(body_nodes, &is_tag_elem?/1) do
+          if Enum.any?(body_nodes, &is_tag_elem?/1) do
+            Enum.each(items, fn item ->
+              :erlang.put(var_ref, item)
               eval_tagbody(body_nodes, loop_env)
-            else
+            end)
+          else
+            Enum.each(items, fn item ->
+              :erlang.put(var_ref, item)
               eval_progn(body_nodes, loop_env)
-            end
-          end)
+            end)
+          end
 
           :erlang.put(var_ref, nil)
           eval(res_node, loop_env)
@@ -2256,9 +2782,10 @@ defmodule ExLisp.Evaluator do
           [{tag, []} | acc]
         else
           [{current_tag, exprs} | rest] = acc
-          [{current_tag, exprs ++ [elem]} | rest]
+          [{current_tag, [elem | exprs]} | rest]
         end
       end)
+      |> Enum.map(fn {tag, exprs} -> {tag, Enum.reverse(exprs)} end)
       |> Enum.reverse()
 
     tag_order = Enum.map(raw_segments, &elem(&1, 0))
@@ -2270,7 +2797,13 @@ defmodule ExLisp.Evaluator do
         Map.put(acc, {:tag, tag}, tagbody_id)
       end)
 
-    run_tagbody_loop(:__start__, tag_order, tag_map, tagbody_env, tagbody_id)
+    next_tag_map =
+      tag_order
+      |> Enum.chunk_every(2, 1, [nil])
+      |> Enum.map(fn [curr, next] -> {curr, next} end)
+      |> Map.new()
+
+    run_tagbody_loop(:__start__, next_tag_map, tag_map, tagbody_env, tagbody_id)
     nil
   end
 
@@ -2278,32 +2811,25 @@ defmodule ExLisp.Evaluator do
   defp is_tag_elem?({:quoted, _, _}), do: false
   defp is_tag_elem?(_), do: true
 
-  defp run_tagbody_loop(nil, _tag_order, _tag_map, _env, _tagbody_id), do: nil
+  defp run_tagbody_loop(nil, _next_tag_map, _tag_map, _env, _tagbody_id), do: nil
 
-  defp run_tagbody_loop(current_tag, tag_order, tag_map, env, tagbody_id) do
+  defp run_tagbody_loop(current_tag, next_tag_map, tag_map, env, tagbody_id) do
     exprs = Map.get(tag_map, current_tag, [])
-    next_tag = get_next_tagbody_tag(current_tag, tag_order)
+    next_tag = Map.get(next_tag_map, current_tag)
 
     try do
       eval_progn(exprs, env)
-      run_tagbody_loop(next_tag, tag_order, tag_map, env, tagbody_id)
+      run_tagbody_loop(next_tag, next_tag_map, tag_map, env, tagbody_id)
     catch
       {:lisp_go, ^tagbody_id, target_tag} ->
-        run_tagbody_loop(target_tag, tag_order, tag_map, env, tagbody_id)
+        run_tagbody_loop(target_tag, next_tag_map, tag_map, env, tagbody_id)
 
       {:lisp_go, nil, target_tag} ->
         if Map.has_key?(tag_map, target_tag) do
-          run_tagbody_loop(target_tag, tag_order, tag_map, env, tagbody_id)
+          run_tagbody_loop(target_tag, next_tag_map, tag_map, env, tagbody_id)
         else
           throw({:lisp_go, nil, target_tag})
         end
-    end
-  end
-
-  defp get_next_tagbody_tag(current_tag, tag_order) do
-    case Enum.drop_while(tag_order, &(&1 != current_tag)) do
-      [^current_tag, next | _] -> next
-      _ -> nil
     end
   end
 
@@ -3000,7 +3526,8 @@ defmodule ExLisp.Evaluator do
   Creates a closure function wrapping parameter binding and body evaluation.
   """
   def create_closure(params_node, body_nodes, captured_env, name \\ nil) do
-    tag = {:block, name, make_ref()}
+    has_return = name != nil and body_has_block_return?(body_nodes, name)
+    tag = if has_return, do: {:block, name, make_ref()}, else: nil
     snapshotted_env = snapshot_env(captured_env)
     lambda_ast = {:list, 1, [{:id, 1, ["lambda"]}, params_node | body_nodes]}
 
@@ -3017,58 +3544,273 @@ defmodule ExLisp.Evaluator do
            | body_nodes
          ]}
 
-      fun = fn passed_args ->
-        ref = make_ref()
-        :erlang.put(ref, passed_args)
-        call_env = Map.put(snapshotted_env, args_sym, {:box, ref})
-        block_env = if name, do: Map.put(call_env, {:block, name}, tag), else: call_env
+      fun =
+        if has_return do
+          fn passed_args ->
+            ref = make_ref()
+            :erlang.put(ref, passed_args)
+            call_env = Map.put(snapshotted_env, args_sym, {:box, ref}) |> Map.put({:block, name}, tag)
 
-        try do
-          eval(let_star_body, block_env)
-        catch
-          {:block_return, ^tag, val} -> val
+            try do
+              eval(let_star_body, call_env)
+            catch
+              {:block_return, ^tag, val} -> val
+            end
+          end
+        else
+          fn passed_args ->
+            ref = make_ref()
+            :erlang.put(ref, passed_args)
+            call_env = Map.put(snapshotted_env, args_sym, {:box, ref})
+            eval(let_star_body, call_env)
+          end
         end
-      end
 
       ExLisp.Closure.new(fun, name, ast: lambda_ast, env: snapshotted_env, params: params_node, body: body_nodes, compiled: false)
     else
       param_names = LispBeam.extract_param_names(params_node)
 
-      base_fun = fn passed_args ->
-        norm_args = normalize_raw_args(passed_args)
-        padded = norm_args ++ List.duplicate(nil, max(0, length(param_names) - length(norm_args)))
-        bindings = Enum.zip(param_names, padded)
+      case {param_names, has_return} do
+        {[], false} ->
+          fn -> eval_progn(body_nodes, snapshotted_env) end
 
-        call_env =
-          Enum.reduce(bindings, snapshotted_env, fn {p_name, val}, acc ->
-            ref = make_ref()
-            :erlang.put(ref, val)
-            Map.put(acc, p_name, {:box, ref})
-          end)
+        {[], true} ->
+          block_env = Map.put(snapshotted_env, {:block, name}, tag)
 
-        block_env = if name, do: Map.put(call_env, {:block, name}, tag), else: call_env
+          fn ->
+            try do
+              eval_progn(body_nodes, block_env)
+            catch
+              {:block_return, ^tag, val} -> val
+            end
+          end
 
-        try do
-          eval_progn(body_nodes, block_env)
-        catch
-          {:block_return, ^tag, val} -> val
-        end
-      end
+        {[p1], false} ->
+          fn a ->
+            ref1 = make_ref()
+            :erlang.put(ref1, a)
+            call_env = Map.put(snapshotted_env, p1, {:box, ref1})
+            eval_progn(body_nodes, call_env)
+          end
 
-      case length(param_names) do
-        0 -> fn -> base_fun.([]) end
-        1 -> fn a -> base_fun.([a]) end
-        2 -> fn a, b -> base_fun.([a, b]) end
-        3 -> fn a, b, c -> base_fun.([a, b, c]) end
-        4 -> fn a, b, c, d -> base_fun.([a, b, c, d]) end
-        5 -> fn a, b, c, d, e -> base_fun.([a, b, c, d, e]) end
-        6 -> fn a, b, c, d, e, f -> base_fun.([a, b, c, d, e, f]) end
-        7 -> fn a, b, c, d, e, f, g -> base_fun.([a, b, c, d, e, f, g]) end
-        8 -> fn a, b, c, d, e, f, g, h -> base_fun.([a, b, c, d, e, f, g, h]) end
-        _ -> ExLisp.Closure.new(base_fun, name, ast: lambda_ast, env: snapshotted_env, params: params_node, body: body_nodes, compiled: false)
+        {[p1], true} ->
+          fn a ->
+            ref1 = make_ref()
+            :erlang.put(ref1, a)
+            call_env = snapshotted_env |> Map.put(p1, {:box, ref1}) |> Map.put({:block, name}, tag)
+
+            try do
+              eval_progn(body_nodes, call_env)
+            catch
+              {:block_return, ^tag, val} -> val
+            end
+          end
+
+        {[p1, p2], false} ->
+          fn a, b ->
+            ref1 = make_ref()
+            ref2 = make_ref()
+            :erlang.put(ref1, a)
+            :erlang.put(ref2, b)
+            call_env = snapshotted_env |> Map.put(p1, {:box, ref1}) |> Map.put(p2, {:box, ref2})
+            eval_progn(body_nodes, call_env)
+          end
+
+        {[p1, p2], true} ->
+          fn a, b ->
+            ref1 = make_ref()
+            ref2 = make_ref()
+            :erlang.put(ref1, a)
+            :erlang.put(ref2, b)
+            call_env =
+              snapshotted_env
+              |> Map.put(p1, {:box, ref1})
+              |> Map.put(p2, {:box, ref2})
+              |> Map.put({:block, name}, tag)
+
+            try do
+              eval_progn(body_nodes, call_env)
+            catch
+              {:block_return, ^tag, val} -> val
+            end
+          end
+
+        {[p1, p2, p3], false} ->
+          fn a, b, c ->
+            ref1 = make_ref()
+            ref2 = make_ref()
+            ref3 = make_ref()
+            :erlang.put(ref1, a)
+            :erlang.put(ref2, b)
+            :erlang.put(ref3, c)
+
+            call_env =
+              snapshotted_env
+              |> Map.put(p1, {:box, ref1})
+              |> Map.put(p2, {:box, ref2})
+              |> Map.put(p3, {:box, ref3})
+
+            eval_progn(body_nodes, call_env)
+          end
+
+        {[p1, p2, p3], true} ->
+          fn a, b, c ->
+            ref1 = make_ref()
+            ref2 = make_ref()
+            ref3 = make_ref()
+            :erlang.put(ref1, a)
+            :erlang.put(ref2, b)
+            :erlang.put(ref3, c)
+
+            call_env =
+              snapshotted_env
+              |> Map.put(p1, {:box, ref1})
+              |> Map.put(p2, {:box, ref2})
+              |> Map.put(p3, {:box, ref3})
+              |> Map.put({:block, name}, tag)
+
+            try do
+              eval_progn(body_nodes, call_env)
+            catch
+              {:block_return, ^tag, val} -> val
+            end
+          end
+
+        {[p1, p2, p3, p4], false} ->
+          fn a, b, c, d ->
+            ref1 = make_ref()
+            ref2 = make_ref()
+            ref3 = make_ref()
+            ref4 = make_ref()
+            :erlang.put(ref1, a)
+            :erlang.put(ref2, b)
+            :erlang.put(ref3, c)
+            :erlang.put(ref4, d)
+
+            call_env =
+              snapshotted_env
+              |> Map.put(p1, {:box, ref1})
+              |> Map.put(p2, {:box, ref2})
+              |> Map.put(p3, {:box, ref3})
+              |> Map.put(p4, {:box, ref4})
+
+            eval_progn(body_nodes, call_env)
+          end
+
+        {[p1, p2, p3, p4], true} ->
+          fn a, b, c, d ->
+            ref1 = make_ref()
+            ref2 = make_ref()
+            ref3 = make_ref()
+            ref4 = make_ref()
+            :erlang.put(ref1, a)
+            :erlang.put(ref2, b)
+            :erlang.put(ref3, c)
+            :erlang.put(ref4, d)
+
+            call_env =
+              snapshotted_env
+              |> Map.put(p1, {:box, ref1})
+              |> Map.put(p2, {:box, ref2})
+              |> Map.put(p3, {:box, ref3})
+              |> Map.put(p4, {:box, ref4})
+              |> Map.put({:block, name}, tag)
+
+            try do
+              eval_progn(body_nodes, call_env)
+            catch
+              {:block_return, ^tag, val} -> val
+            end
+          end
+
+        _ ->
+          base_fun = fn passed_args ->
+            norm_args = normalize_raw_args(passed_args)
+            padded = norm_args ++ List.duplicate(nil, max(0, length(param_names) - length(norm_args)))
+            bindings = Enum.zip(param_names, padded)
+
+            call_env =
+              Enum.reduce(bindings, snapshotted_env, fn {p_name, val}, acc ->
+                ref = make_ref()
+                :erlang.put(ref, val)
+                Map.put(acc, p_name, {:box, ref})
+              end)
+
+            if has_return do
+              block_env = Map.put(call_env, {:block, name}, tag)
+
+              try do
+                eval_progn(body_nodes, block_env)
+              catch
+                {:block_return, ^tag, val} -> val
+              end
+            else
+              eval_progn(body_nodes, call_env)
+            end
+          end
+
+          case length(param_names) do
+            5 -> fn a, b, c, d, e -> base_fun.([a, b, c, d, e]) end
+            6 -> fn a, b, c, d, e, f -> base_fun.([a, b, c, d, e, f]) end
+            7 -> fn a, b, c, d, e, f, g -> base_fun.([a, b, c, d, e, f, g]) end
+            8 -> fn a, b, c, d, e, f, g, h -> base_fun.([a, b, c, d, e, f, g, h]) end
+            _ -> ExLisp.Closure.new(base_fun, name, ast: lambda_ast, env: snapshotted_env, params: params_node, body: body_nodes, compiled: false)
+          end
       end
     end
   end
+
+  defp body_has_block_return?([], _block_name), do: false
+
+  defp body_has_block_return?([node | rest], block_name) do
+    node_has_block_return?(node, block_name) or body_has_block_return?(rest, block_name)
+  end
+
+  defp node_has_block_return?({:list, _pos, [op_node | args]}, block_name) do
+    op = LispBeam.extract_op_name(op_node)
+
+    cond do
+      op in [:return_from, :_cl_return_from_] ->
+        case args do
+          [target_node | _] ->
+            target = LispBeam.extract_symbol_name(target_node)
+            target == block_name or node_has_block_return?(args, block_name)
+
+          _ ->
+            false
+        end
+
+      op in [:return, :_cl_return_] ->
+        block_name == nil or node_has_block_return?(args, block_name)
+
+      op in [:defun, :_cl_defun_] ->
+        false
+
+      op in [:block, :_cl_block_] ->
+        case args do
+          [inner_name_node | inner_body] ->
+            inner_name = LispBeam.extract_symbol_name(inner_name_node)
+
+            if inner_name == block_name do
+              false
+            else
+              body_has_block_return?(inner_body, block_name)
+            end
+
+          _ ->
+            body_has_block_return?(args, block_name)
+        end
+
+      true ->
+        body_has_block_return?(args, block_name)
+    end
+  end
+
+  defp node_has_block_return?(list, block_name) when is_list(list) do
+    body_has_block_return?(list, block_name)
+  end
+
+  defp node_has_block_return?(_other, _block_name), do: false
 
   defp snapshot_env(env) do
     Enum.into(env, %{}, fn

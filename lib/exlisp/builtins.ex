@@ -367,6 +367,91 @@ defmodule ExLisp.Builtins do
   @doc """
   Dispatches and executes a built-in function.
   """
+  def dispatch_builtin(name, [a, b]) do
+    case name do
+      :+ -> add_two(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :- -> sub_two(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :* -> mul_two(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :/ -> divide_two(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      := -> num_eq_two(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :"/=" -> num_neq_two(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :< -> num_lt_two(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :<= -> num_lte_two(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :> -> num_gt_two(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :>= -> num_gte_two(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :cons -> cons(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :eq -> eq(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :eql -> eql(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :equal -> equal(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :equalp -> equalp(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :aref -> aref(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :svref -> svref(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :elt -> elt(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :nth -> nth(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :gethash -> gethash(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :char -> char(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :schar -> schar(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :mod -> mod(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :rem -> rem(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :expt -> expt(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :min -> min([unwrap_mv_primary(a), unwrap_mv_primary(b)])
+      :max -> max([unwrap_mv_primary(a), unwrap_mv_primary(b)])
+      :gcd -> gcd([unwrap_mv_primary(a), unwrap_mv_primary(b)])
+      :lcm -> lcm([unwrap_mv_primary(a), unwrap_mv_primary(b)])
+      :ash -> ash(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :logand -> logand(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :logior -> logior(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :logxor -> logxor(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :typep -> typep(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      _ -> do_dispatch_builtin(name, [unwrap_mv_primary(a), unwrap_mv_primary(b)], [a, b])
+    end
+  end
+
+  def dispatch_builtin(name, [a]) do
+    case name do
+      :"1+" -> add_two(unwrap_mv_primary(a), 1)
+      :"1-" -> sub_two(unwrap_mv_primary(a), 1)
+      :+ -> unwrap_mv_primary(a)
+      :- -> negate_num(unwrap_mv_primary(a))
+      :* -> unwrap_mv_primary(a)
+      :/ -> divide_two(1, unwrap_mv_primary(a))
+      :car -> car(unwrap_mv_primary(a))
+      :cdr -> cdr(unwrap_mv_primary(a))
+      :not -> (if truthy?(unwrap_mv_primary(a)), do: nil, else: :t)
+      :null -> (if truthy?(unwrap_mv_primary(a)), do: nil, else: :t)
+      :atom -> atom(unwrap_mv_primary(a))
+      :consp -> consp(unwrap_mv_primary(a))
+      :listp -> listp(unwrap_mv_primary(a))
+      :numberp -> numberp(unwrap_mv_primary(a))
+      :integerp -> integerp(unwrap_mv_primary(a))
+      :floatp -> floatp(unwrap_mv_primary(a))
+      :symbolp -> symbolp(unwrap_mv_primary(a))
+      :keywordp -> keywordp(unwrap_mv_primary(a))
+      :stringp -> stringp(unwrap_mv_primary(a))
+      :characterp -> characterp(unwrap_mv_primary(a))
+      :functionp -> functionp(unwrap_mv_primary(a))
+      :length -> length(unwrap_mv_primary(a))
+      :reverse -> reverse(unwrap_mv_primary(a))
+      :nreverse -> nreverse(unwrap_mv_primary(a))
+      :abs -> abs(unwrap_mv_primary(a))
+      :sqrt -> sqrt(unwrap_mv_primary(a))
+      :identity -> unwrap_mv_primary(a)
+      :values -> values([unwrap_mv_primary(a)])
+      :values_list -> values_list(a)
+      _ -> do_dispatch_builtin(name, [unwrap_mv_primary(a)], [a])
+    end
+  end
+
+  def dispatch_builtin(name, []) do
+    case name do
+      :+ -> 0
+      :* -> 1
+      :values -> values([])
+      :gensym -> gensym([])
+      _ -> do_dispatch_builtin(name, [], [])
+    end
+  end
+
   def dispatch_builtin(name, raw_args) do
     norm_raw = normalize_raw_args(raw_args)
 
@@ -377,6 +462,10 @@ defmodule ExLisp.Builtins do
         Enum.map(norm_raw, &unwrap_mv_primary/1)
       end
 
+    do_dispatch_builtin(name, args, norm_raw)
+  end
+
+  defp do_dispatch_builtin(name, args, raw_args) do
     case name do
       :+ ->
         add(args)
@@ -744,6 +833,8 @@ defmodule ExLisp.Builtins do
   def negate_num(%ExLisp.Ratio{} = r), do: ExLisp.Ratio.negate(r)
   def negate_num(x) when is_number(x), do: -x
 
+  def add_two(a, b) when is_integer(a) and is_integer(b), do: a + b
+  def add_two(a, b) when is_float(a) and is_float(b), do: a + b
   def add_two([:_values_ | _] = a, b), do: add_two(unwrap_mv_primary(a), b)
   def add_two(a, [:_values_ | _] = b), do: add_two(a, unwrap_mv_primary(b))
 
@@ -752,8 +843,6 @@ defmodule ExLisp.Builtins do
 
   def add_two({:complex, r1, i1}, b), do: {:complex, add_two(r1, b), i1}
   def add_two(a, {:complex, r2, i2}), do: {:complex, add_two(a, r2), i2}
-  def add_two(a, b) when is_integer(a) and is_integer(b), do: a + b
-  def add_two(a, b) when is_float(a) and is_float(b), do: a + b
   def add_two(%ExLisp.Ratio{} = a, b) when is_float(b), do: ExLisp.Ratio.to_float(a) + b
   def add_two(a, %ExLisp.Ratio{} = b) when is_float(a), do: a + ExLisp.Ratio.to_float(b)
 
@@ -762,6 +851,8 @@ defmodule ExLisp.Builtins do
 
   def add_two(a, b) when is_number(a) and is_number(b), do: a + b
 
+  def sub_two(a, b) when is_integer(a) and is_integer(b), do: a - b
+  def sub_two(a, b) when is_float(a) and is_float(b), do: a - b
   def sub_two([:_values_ | _] = a, b), do: sub_two(unwrap_mv_primary(a), b)
   def sub_two(a, [:_values_ | _] = b), do: sub_two(a, unwrap_mv_primary(b))
 
@@ -770,8 +861,6 @@ defmodule ExLisp.Builtins do
 
   def sub_two({:complex, r1, i1}, b), do: {:complex, sub_two(r1, b), i1}
   def sub_two(a, {:complex, r2, i2}), do: {:complex, sub_two(a, r2), negate_num(i2)}
-  def sub_two(a, b) when is_integer(a) and is_integer(b), do: a - b
-  def sub_two(a, b) when is_float(a) and is_float(b), do: a - b
   def sub_two(%ExLisp.Ratio{} = a, b) when is_float(b), do: ExLisp.Ratio.to_float(a) - b
   def sub_two(a, %ExLisp.Ratio{} = b) when is_float(a), do: a - ExLisp.Ratio.to_float(b)
 
@@ -780,6 +869,8 @@ defmodule ExLisp.Builtins do
 
   def sub_two(a, b) when is_number(a) and is_number(b), do: a - b
 
+  def mul_two(a, b) when is_integer(a) and is_integer(b), do: a * b
+  def mul_two(a, b) when is_float(a) and is_float(b), do: a * b
   def mul_two([:_values_ | _] = a, b), do: mul_two(unwrap_mv_primary(a), b)
   def mul_two(a, [:_values_ | _] = b), do: mul_two(a, unwrap_mv_primary(b))
 
@@ -790,8 +881,6 @@ defmodule ExLisp.Builtins do
 
   def mul_two({:complex, r1, i1}, b), do: {:complex, mul_two(r1, b), mul_two(i1, b)}
   def mul_two(a, {:complex, r2, i2}), do: {:complex, mul_two(a, r2), mul_two(a, i2)}
-  def mul_two(a, b) when is_integer(a) and is_integer(b), do: a * b
-  def mul_two(a, b) when is_float(a) and is_float(b), do: a * b
   def mul_two(%ExLisp.Ratio{} = a, b) when is_float(b), do: ExLisp.Ratio.to_float(a) * b
   def mul_two(a, %ExLisp.Ratio{} = b) when is_float(a), do: a * ExLisp.Ratio.to_float(b)
 
@@ -800,6 +889,7 @@ defmodule ExLisp.Builtins do
 
   def mul_two(a, b) when is_number(a) and is_number(b), do: a * b
 
+  def divide_two(a, b) when is_integer(a) and is_integer(b) and b != 0, do: ExLisp.Ratio.new(a, b)
   def divide_two([:_values_ | _] = a, b), do: divide_two(unwrap_mv_primary(a), b)
   def divide_two(a, [:_values_ | _] = b), do: divide_two(a, unwrap_mv_primary(b))
 
@@ -6911,6 +7001,21 @@ defmodule ExLisp.Builtins do
       _ ->
         nil
     end
+  end
+
+  def set_aref({:array, [_single_dim], tid}, index, val) when is_integer(index) do
+    case :ets.lookup(tid, :__displaced__) do
+      [{:__displaced__, {:array, _, _} = target, offset}] ->
+        set_aref(target, offset + index, val)
+
+      _ ->
+        :ets.insert(tid, {index, val})
+        val
+    end
+  end
+
+  def set_aref({:array, [single_dim], tid}, [index], val) when is_integer(index) do
+    set_aref({:array, [single_dim], tid}, index, val)
   end
 
   def set_aref(arr, indices, val) do
