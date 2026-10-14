@@ -521,6 +521,8 @@ defmodule ExLisp.LispParser do
     end
   end
 
+  @exponent_regex ~r/^([+-]?(?:[0-9]+\.[0-9]*|\.[0-9]+|[0-9]+))[dDsSfFlL]([+-]?[0-9]+)$/
+
   # Parse number
   defp parse_number(str, line) do
     # Standalone punctuation is not a number
@@ -532,51 +534,64 @@ defmodule ExLisp.LispParser do
           {:ok, ratio_tok}
 
         :not_ratio ->
-          norm_str =
-            Regex.replace(
-              ~r/^([+-]?(?:[0-9]+\.[0-9]*|\.[0-9]+|[0-9]+))[dDsSfFlL]([+-]?[0-9]+)$/,
-              str,
-              "\\1e\\2"
-            )
-
           case Integer.parse(str) do
             {int_val, ""} ->
               {:ok, {:int, line, int_val}}
 
             _ ->
-              case Float.parse(norm_str) do
+              case Float.parse(str) do
                 {float_val, ""} ->
                   {:ok, {:float, line, float_val}}
 
                 _ ->
-                  :not_number
+                  if has_exponent_suffix?(str) do
+                    norm_str = Regex.replace(@exponent_regex, str, "\\1e\\2")
+
+                    case Float.parse(norm_str) do
+                      {float_val, ""} ->
+                        {:ok, {:float, line, float_val}}
+
+                      _ ->
+                        :not_number
+                    end
+                  else
+                    :not_number
+                  end
               end
           end
       end
     end
   end
 
+  defp has_exponent_suffix?(str) do
+    :binary.match(str, ["d", "D", "s", "S", "f", "F", "l", "L"]) != :nomatch
+  end
+
   defp parse_ratio(str, line) do
-    case String.split(str, "/") do
-      [num_str, den_str] when num_str != "" and den_str != "" ->
-        with {num, ""} <- parse_signed_int(num_str),
-             {den, ""} <- Integer.parse(den_str),
-             true <-
-               den > 0 and not String.starts_with?(den_str, "+") and
-                 not String.starts_with?(den_str, "-") do
-          case ExLisp.Ratio.new(num, den) do
-            %ExLisp.Ratio{} = ratio ->
-              {:ok, {:ratio, line, ratio}}
+    if :binary.match(str, "/") != :nomatch do
+      case String.split(str, "/") do
+        [num_str, den_str] when num_str != "" and den_str != "" ->
+          with {num, ""} <- parse_signed_int(num_str),
+               {den, ""} <- Integer.parse(den_str),
+               true <-
+                 den > 0 and not String.starts_with?(den_str, "+") and
+                   not String.starts_with?(den_str, "-") do
+            case ExLisp.Ratio.new(num, den) do
+              %ExLisp.Ratio{} = ratio ->
+                {:ok, {:ratio, line, ratio}}
 
-            int_val when is_integer(int_val) ->
-              {:ok, {:int, line, int_val}}
+              int_val when is_integer(int_val) ->
+                {:ok, {:int, line, int_val}}
+            end
+          else
+            _ -> :not_ratio
           end
-        else
-          _ -> :not_ratio
-        end
 
-      _ ->
-        :not_ratio
+        _ ->
+          :not_ratio
+      end
+    else
+      :not_ratio
     end
   end
 
@@ -585,66 +600,82 @@ defmodule ExLisp.LispParser do
 
   # Parse keyword / identifier / symbol
   defp parse_symbol_or_keyword(str, line) do
-    cond do
-      # 1. nil / NIL
-      String.downcase(str) in ["nil", "n.i.l"] ->
+    case str do
+      "nil" ->
         {nil, line}
 
-      # 2. t / T
-      String.downcase(str) == "t" ->
+      "NIL" ->
+        {nil, line}
+
+      "t" ->
         {:t, line}
 
-      # 3. Module function remote call (e.g., :math:sqrt, :io:read, math:sqrt, IO.puts, String.upcase)
-      is_remote_call?(str) ->
-        parts = split_remote_parts(str)
-        {:id, line, parts}
+      "T" ->
+        {:t, line}
 
-      # 4. Single keyword (e.g., :foo, :bar, :my-key, :nil, :t)
-      String.starts_with?(str, ":") ->
-        keyword_name = String.slice(str, 1..-1//1) |> normalize_symbol_name()
+      _ ->
+        cond do
+          # 1. nil / NIL / n.i.l
+          String.downcase(str) in ["nil", "n.i.l"] ->
+            {nil, line}
 
-        atom =
-          case keyword_name do
-            "nil" -> :":nil"
-            "t" -> :":t"
-            _ -> String.to_atom(keyword_name)
-          end
+          # 2. t / T
+          String.downcase(str) == "t" ->
+            {:t, line}
 
-        ExLisp.Env.register_keyword(atom)
-        {:keyword, line, atom}
+          # 3. Module function remote call (e.g., :math:sqrt, :io:read, math:sqrt, IO.puts, String.upcase)
+          is_remote_call?(str) ->
+            parts = split_remote_parts(str)
+            {:id, line, parts}
 
-      # 5. Regular symbol
-      true ->
-        normalized = normalize_symbol_name(str)
-        {:symbol, line, normalized}
+          # 4. Single keyword (e.g., :foo, :bar, :my-key, :nil, :t)
+          String.starts_with?(str, ":") ->
+            keyword_name = String.slice(str, 1..-1//1) |> normalize_symbol_name()
+
+            atom =
+              case keyword_name do
+                "nil" -> :":nil"
+                "t" -> :":t"
+                _ -> String.to_atom(keyword_name)
+              end
+
+            ExLisp.Env.register_keyword(atom)
+            {:keyword, line, atom}
+
+          # 5. Regular symbol
+          true ->
+            normalized = normalize_symbol_name(str)
+            {:symbol, line, normalized}
+        end
     end
   end
 
   defp is_remote_call?(str) do
-    cond do
-      str in [":", "."] ->
-        false
+    if :binary.match(str, [":", "."]) == :nomatch or str in [":", "."] do
+      false
+    else
+      cond do
+        String.starts_with?(str, ":") ->
+          cleaned = String.slice(str, 1..-1//1)
 
-      String.starts_with?(str, ":") ->
-        cleaned = String.slice(str, 1..-1//1)
+          cond do
+            String.contains?(cleaned, ":") ->
+              true
 
-        cond do
-          String.contains?(cleaned, ":") ->
-            true
+            String.contains?(cleaned, ".") ->
+              [mod_str | _] = String.split(cleaned, ".")
+              is_beam_module?(mod_str)
 
-          String.contains?(cleaned, ".") ->
-            [mod_str | _] = String.split(cleaned, ".")
-            is_beam_module?(mod_str)
+            true ->
+              false
+          end
 
-          true ->
-            false
-        end
+        String.contains?(str, ":") or String.contains?(str, ".") ->
+          true
 
-      String.contains?(str, ":") or String.contains?(str, ".") ->
-        true
-
-      true ->
-        false
+        true ->
+          false
+      end
     end
   end
 
@@ -673,7 +704,7 @@ defmodule ExLisp.LispParser do
   end
 
   # Symbol operators and special symbols (not undergoing hyphen conversion)
-  @preserved_symbols [
+  @preserved_symbols MapSet.new([
     "+",
     "-",
     "*",
@@ -704,7 +735,7 @@ defmodule ExLisp.LispParser do
     "char>=",
     "list*",
     "let*"
-  ]
+  ])
 
   @doc """
   Normalizes a symbol string to ExLisp's standard symbol representation.
@@ -714,16 +745,19 @@ defmodule ExLisp.LispParser do
     down = String.downcase(str)
 
     cond do
-      down in @preserved_symbols ->
+      MapSet.member?(@preserved_symbols, down) ->
         down
 
-      String.starts_with?(down, "+") and String.ends_with?(down, "+") and String.length(down) > 2 ->
-        inner = String.slice(down, 1..-2//1) |> String.replace("-", "_")
-        "+#{inner}+"
+      match?(<<"+", _::binary-size(byte_size(down) - 2), "+">>, down) and byte_size(down) > 2 ->
+        <<"+", inner::binary-size(byte_size(down) - 2), "+">> = down
+        "+#{String.replace(inner, "-", "_")}+"
 
-      String.starts_with?(down, "*") and String.ends_with?(down, "*") and String.length(down) > 2 ->
-        inner = String.slice(down, 1..-2//1) |> String.replace("-", "_")
-        "*#{inner}*"
+      match?(<<"*", _::binary-size(byte_size(down) - 2), "*">>, down) and byte_size(down) > 2 ->
+        <<"*", inner::binary-size(byte_size(down) - 2), "*">> = down
+        "*#{String.replace(inner, "-", "_")}*"
+
+      not String.contains?(down, "-") ->
+        down
 
       true ->
         String.replace(down, "-", "_")

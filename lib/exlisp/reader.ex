@@ -3,6 +3,8 @@ defmodule ExLisp.Reader do
   Module to split Lisp source code into top-level S-expressions (per expression).
   """
 
+  @incomplete_prefixes MapSet.new(["'", "#'", "`", ",", ",@", "#.", "#+", "#-"])
+
   @doc """
   Splits a Lisp string containing multiple expressions into a list of expression strings.
   """
@@ -132,11 +134,11 @@ defmodule ExLisp.Reader do
 
   defp incomplete_prefix?(str) do
     cond do
-      str in ["'", "#'", "`", ",", ",@", "#.", "#+", "#-"] ->
+      MapSet.member?(@incomplete_prefixes, str) ->
         true
 
       String.starts_with?(str, "#+") or String.starts_with?(str, "#-") ->
-        parts = String.split(str, ~r/\s+/, trim: true)
+        parts = String.split(str, [" ", "\t", "\n", "\r"], trim: true)
         length(parts) < 2
 
       true ->
