@@ -1216,7 +1216,13 @@ defmodule LispBeam do
 
       name when name in [:eval_when, :_cl_eval_when_] ->
         case args do
-          [_situations | body_nodes] -> compile_progn(body_nodes, local_env)
+          [situations | body_nodes] ->
+            if eval_when_executes?(situations) do
+              compile_progn(body_nodes, local_env)
+            else
+              {:atom, 1, nil}
+            end
+
           _ -> {:atom, 1, nil}
         end
 
@@ -4564,7 +4570,7 @@ defmodule LispBeam do
         [
           {:tuple, 1,
            [
-             {:var, 1, :_},
+            {:atom, 1, :error},
              {:var, 1, :_},
              {:var, 1, :_}
            ]}
@@ -6709,6 +6715,12 @@ defmodule LispBeam do
   end
 
   def extract_symbol_name(other), do: other
+
+  defp eval_when_executes?({:list, _pos, situations}) do
+    Enum.any?(situations, &(extract_symbol_name(&1) == :execute))
+  end
+
+  defp eval_when_executes?(_), do: false
 
   def extract_op_name({:id, _pos, parts}) when is_list(parts) do
     case parts do

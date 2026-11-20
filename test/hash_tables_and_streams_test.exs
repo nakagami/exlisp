@@ -68,4 +68,26 @@ defmodule HashTablesAndStreamsTest do
 
     assert ExLisp.eval(code) == "Item A = 10; Item B = 20"
   end
+
+  test "file-position tracks and updates file streams" do
+    path = Path.join(System.tmp_dir!(), "exlisp-position-#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm(path) end)
+
+    stream = ExLisp.Stream.open(path, [:direction, :output])
+
+    assert ExLisp.Stream.file_position(stream) == 0
+    assert ExLisp.Stream.write_string("abc", stream) == "abc"
+    assert ExLisp.Stream.file_position(stream) == 3
+    assert ExLisp.Stream.file_position(stream, 1) == :t
+    assert ExLisp.Stream.file_position(stream) == 1
+    assert ExLisp.Stream.close(stream) == :t
+  end
+
+  test "open-stream-p reflects the device state after close" do
+    stream = ExLisp.Stream.make_string_output_stream()
+
+    assert ExLisp.Stream.open_stream_p(stream) == :t
+    assert ExLisp.Stream.close(stream) == :t
+    assert ExLisp.Stream.open_stream_p(stream) == nil
+  end
 end

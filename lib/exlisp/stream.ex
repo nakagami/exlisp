@@ -42,6 +42,10 @@ defmodule ExLisp.Stream do
   def streamp([pid]) when is_pid(pid), do: :t
   def streamp(_), do: nil
 
+  def open_stream_p(%__MODULE__{open: open, device: device}) when is_pid(device) do
+    lisp_bool(open and Process.alive?(device))
+  end
+
   def open_stream_p(%__MODULE__{open: open}), do: lisp_bool(open)
   def open_stream_p(pid) when is_pid(pid), do: lisp_bool(Process.alive?(pid))
   def open_stream_p(:standard_io), do: :t
@@ -431,49 +435,36 @@ defmodule ExLisp.Stream do
 
   def file_position(stream, pos_spec \\ nil)
 
-  def file_position(%__MODULE__{device: dev}, pos_spec) do
+  def file_position(%__MODULE__{type: :file, device: dev}, pos_spec) do
     case pos_spec do
       nil ->
-        if is_pid(dev) do
-          0
-        else
-          case :file.position(dev, :cur) do
-            {:ok, pos} -> pos
-            _ -> 0
-          end
+        case :file.position(dev, :cur) do
+          {:ok, pos} -> pos
+          _ -> 0
         end
 
       :start ->
-        if is_pid(dev) do
-          :ok
-        else
-          case :file.position(dev, :bof) do
-            {:ok, pos} -> pos
-            _ -> :t
-          end
+        case :file.position(dev, :bof) do
+          {:ok, _pos} -> :t
+          _ -> nil
         end
 
       :end ->
-        if is_pid(dev) do
-          :ok
-        else
-          case :file.position(dev, :eof) do
-            {:ok, pos} -> pos
-            _ -> :t
-          end
+        case :file.position(dev, :eof) do
+          {:ok, _pos} -> :t
+          _ -> nil
         end
 
       offset when is_integer(offset) ->
-        if is_pid(dev) do
-          :t
-        else
-          case :file.position(dev, {:bof, offset}) do
-            {:ok, pos} -> pos
-            _ -> :t
-          end
+        case :file.position(dev, {:bof, offset}) do
+          {:ok, _pos} -> :t
+          _ -> nil
         end
     end
   end
+
+  def file_position(%__MODULE__{}, nil), do: 0
+  def file_position(%__MODULE__{}, _pos_spec), do: nil
 
   def file_position(pid, pos_spec) when is_pid(pid) do
     file_position(%__MODULE__{device: pid}, pos_spec)

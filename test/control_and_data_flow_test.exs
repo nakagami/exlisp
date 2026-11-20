@@ -60,6 +60,24 @@ defmodule ExLisp.ControlAndDataFlowTest do
     assert ExLisp.eval(code_nested_catch) == :escaped
   end
 
+  test "ignore-errors does not intercept non-local control transfers" do
+    code = """
+    (catch 'target
+      (ignore-errors
+        (throw 'target 42))
+      99)
+    """
+
+    assert ExLisp.eval(code) == 42
+    assert ExLisp.eval("(ignore-errors (error \"expected\"))") == nil
+  end
+
+  test "eval-when executes only in the requested situation" do
+    assert ExLisp.eval("(eval-when (:execute) (+ 40 2))") == 42
+    assert ExLisp.eval("(eval-when () (error \"must not run\"))") == nil
+    assert ExLisp.eval("(eval-when (:compile-toplevel) (error \"must not run\"))") == nil
+  end
+
   test "progv dynamic binding" do
     ExLisp.eval("(defparameter *test-dyn-var* 10)")
 

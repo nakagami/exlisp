@@ -1033,17 +1033,21 @@ defmodule ExLisp.Evaluator do
 
       op when op in [:eval_when, :_cl_eval_when_] ->
         case args do
-          [_situations | body] -> eval_progn(body, env)
+          [situations | body] ->
+            if eval_when_executes?(situations) do
+              eval_progn(body, env)
+            else
+              nil
+            end
+
           _ -> nil
         end
 
       op when op in [:ignore_errors, :_cl_ignore_errors_, :"ignore-errors"] ->
         try do
           eval_progn(args, env)
-        rescue
-          _ -> [:_values_, [nil, :error]]
         catch
-          _ -> [:_values_, [nil, :error]]
+          :error, _ -> [:_values_, [nil, :error]]
         end
 
       op when op in [:handler_bind, :_cl_handler_bind_, :"handler-bind"] ->
@@ -1579,6 +1583,12 @@ defmodule ExLisp.Evaluator do
     eval(first, env)
     eval_progn(rest, env)
   end
+
+  defp eval_when_executes?({:list, _, situations}) do
+    Enum.any?(situations, &(LispBeam.extract_symbol_name(&1) == :execute))
+  end
+
+  defp eval_when_executes?(_), do: false
 
   # --- Cond ---
 
