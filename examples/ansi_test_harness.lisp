@@ -73,6 +73,8 @@
      (mapcar #'%normalize-expected-val val))
     (t val)))
 
+(defun typef (type) #'(lambda (x) (typep x type)))
+
 (defun %values-equal (actual-list expected-list)
   (if (and (null actual-list) (null expected-list))
       t

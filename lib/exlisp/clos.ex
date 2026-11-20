@@ -45,14 +45,15 @@ defmodule ExLisp.CLOS do
     {:ratio, [:number], [:ratio, :number, :t]},
     {:symbol, [:t], [:symbol, :t]},
     {:keyword, [:symbol], [:keyword, :symbol, :t]},
-    {:string, [:t], [:string, :t]},
+    {:string, [:vector], [:string, :vector, :array, :t]},
     {:character, [:t], [:character, :t]},
     {:list, [:t], [:list, :t]},
     {:cons, [:list], [:cons, :list, :t]},
     {:null, [:symbol, :list], [:null, :symbol, :list, :t]},
     {:hash_table, [:t], [:hash_table, :t]},
     {:function, [:t], [:function, :t]},
-    {:vector, [:t], [:vector, :t]},
+    {:bit_vector, [:vector], [:bit_vector, :vector, :array, :t]},
+    {:vector, [:array], [:vector, :array, :t]},
     {:array, [:t], [:array, :t]}
   ]
 

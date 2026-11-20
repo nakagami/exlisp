@@ -327,7 +327,7 @@ defmodule ExLisp.Type do
   end
 
   defp do_typep(val, type) when type in [:vector, :simple_vector] do
-    is_binary(val) or is_tuple(val) or
+    is_binary(val) or
       (is_map(val) and Map.get(val, :__struct__) == ExLisp.Vector) or
       (is_list(val) and val != [] and hd(val) == :vector) or
       match?({:bit_vector, _}, val) or
@@ -353,7 +353,7 @@ defmodule ExLisp.Type do
   end
 
   defp do_typep(val, type) when type in [:array, :simple_array] do
-    is_binary(val) or is_tuple(val) or match?({:bit_vector, _}, val) or
+    is_binary(val) or match?({:bit_vector, _}, val) or
       (is_map(val) and Map.get(val, :__struct__) in [ExLisp.Array, ExLisp.Vector]) or
       (is_list(val) and val != [] and hd(val) in [:vector, :array]) or
       (match?({:array, _, _}, val) and
@@ -651,22 +651,16 @@ defmodule ExLisp.Type do
         _ -> true
       end
 
+    actual_elem = ExLisp.Builtins.array_element_type(val)
+
     elem_ok =
       case elem_t do
         :* -> true
         :_ -> true
-        :t -> true
+        :t -> actual_elem == :t
         _ ->
           expanded_elem = expand_type(elem_t)
-          # Check elements if list or binary
-          cond do
-            is_binary(val) ->
-              expanded_elem in [:character, :base_char, :standard_char]
-            is_list(val) ->
-              Enum.all?(val, &do_typep(&1, expanded_elem))
-            true ->
-              true
-          end
+          array_element_type_matches?(actual_elem, expanded_elem)
       end
 
     size_ok and elem_ok
@@ -677,6 +671,7 @@ defmodule ExLisp.Type do
       case dims do
         :* -> true
         :_ -> true
+        nil -> ExLisp.Builtins.array_rank(val) == 0
         rank when is_integer(rank) ->
           ExLisp.Builtins.array_rank(val) == rank
         dim_list when is_list(dim_list) ->
@@ -693,13 +688,15 @@ defmodule ExLisp.Type do
           true
       end
 
+    actual_elem = ExLisp.Builtins.array_element_type(val)
+
     elem_ok =
       case elem_t do
         :* -> true
         :_ -> true
-        :t -> true
+        :t -> actual_elem == :t
         _ ->
-          true
+          array_element_type_matches?(actual_elem, expand_type(elem_t))
       end
 
     dims_ok and elem_ok
@@ -738,6 +735,10 @@ defmodule ExLisp.Type do
 
     cond do
       t1_norm == t2_norm ->
+        true
+
+      t1_norm in [:character, :base_char, :standard_char] and
+          t2_norm in [:character, :base_char, :standard_char] ->
         true
 
       t2_norm in [:t, :common, :*] ->
@@ -1009,6 +1010,7 @@ defmodule ExLisp.Type do
 
   defp normalize_type_for_sub(t) do
     case t do
+      %{name: name} -> normalize_type_name(name)
       atom when is_atom(atom) -> normalize_type_name(atom)
       str when is_binary(str) -> normalize_type_name(str)
       %ExLisp.Symbol{name: n} -> normalize_type_name(n)
@@ -1098,8 +1100,8 @@ defmodule ExLisp.Type do
     norm = normalize_type_for_sub(expanded)
 
     cond do
-      norm in [:character, :base_char, :standard_char, :extended_char] ->
-        :character
+      norm in [:nil, :null] -> [:not, :t]
+      norm in [:base_char, :standard_char, :character, :extended_char] -> :character
 
       norm in [:bit, :unsigned_byte_1, [0, 1], [:integer, 0, 1]] ->
         :bit
@@ -1110,6 +1112,16 @@ defmodule ExLisp.Type do
       true ->
         :t
     end
+  end
+
+  defp array_element_type_matches?(actual, requested) do
+    actual = normalize_type_for_sub(actual)
+    requested = normalize_type_for_sub(requested)
+
+    actual == requested or
+      (actual == :character and requested == :base_char) or
+      (actual == :base_char and requested == :character) or
+      (actual == :standard_char and requested in [:base_char, :character])
   end
 
   @doc """

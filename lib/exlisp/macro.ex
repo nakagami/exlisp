@@ -123,8 +123,12 @@ defmodule ExLisp.Macro do
         do_build_bindings(rest, curr_args_var, whole_var, step, :aux, all_elems, acc)
 
       :"&environment" ->
-        [_env_param | remaining] = rest
-        do_build_bindings(remaining, curr_args_var, whole_var, step, state, all_elems, acc)
+        [env_param | remaining] = rest
+        binding = {:list, 1, [to_var_ast(env_param), {:lit, nil}]}
+
+        do_build_bindings(remaining, curr_args_var, whole_var, step, state, all_elems, [
+          binding | acc
+        ])
 
       _ ->
         case state do

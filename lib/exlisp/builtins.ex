@@ -2128,8 +2128,10 @@ defmodule ExLisp.Builtins do
   def simple_bit_vector_p(_), do: nil
 
   def bit(arr, idx), do: aref(arr, idx)
+  def bit({:array, [], _} = arr), do: row_major_aref(arr, 0)
   def bit(args) when is_list(args), do: aref(args)
   def sbit(arr, idx), do: aref(arr, idx)
+  def sbit({:array, [], _} = arr), do: row_major_aref(arr, 0)
   def sbit(args) when is_list(args), do: aref(args)
 
   def primary_val([:_values_, [first | _]]), do: first
@@ -7163,6 +7165,9 @@ defmodule ExLisp.Builtins do
 
         flat_idx =
           case {dims, indices} do
+            {[], []} ->
+              0
+
             {[_single_dim], single_idx} when is_integer(single_idx) ->
               single_idx
 
@@ -7866,7 +7871,9 @@ defmodule ExLisp.Builtins do
         true -> make_array([dims1, :element_type, :bit])
       end
 
-    for idx <- 0..(total1 - 1) do
+    indices = if total1 == 0, do: [], else: 0..(total1 - 1)
+
+    for idx <- indices do
       b1 = row_major_aref(bit_arr1, idx) || 0
       b2 = row_major_aref(bit_arr2, idx) || 0
       res_bit = op_fn.(b1, b2)
@@ -8017,7 +8024,9 @@ defmodule ExLisp.Builtins do
         true -> make_array([dims, :element_type, :bit])
       end
 
-    for idx <- 0..(total - 1) do
+    indices = if total == 0, do: [], else: 0..(total - 1)
+
+    for idx <- indices do
       b = row_major_aref(bit_arr, idx) || 0
       set_row_major_aref(dest, idx, 1 - b)
     end

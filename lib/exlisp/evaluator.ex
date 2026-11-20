@@ -2171,7 +2171,7 @@ defmodule ExLisp.Evaluator do
             setter = fn unwrapped -> Builtins.set_gethash(key, tbl, unwrapped) end
             {getter, setter}
 
-          op in [:aref, :_cl_aref_] ->
+          op in [:aref, :_cl_aref_, :bit, :_cl_bit_, :sbit, :_cl_sbit_] ->
             [arr_node | idx_nodes] = place_args
             {arr_getter, arr_setter} = get_setf_expansion(arr_node, env)
             idxs = Enum.map(idx_nodes, &(eval(&1, env) |> Builtins.unwrap_mv_primary()))
