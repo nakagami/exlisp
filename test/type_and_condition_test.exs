@@ -8,6 +8,14 @@ defmodule ExLisp.TypeAndConditionTest do
     :ok
   end
 
+  test "subsystems share Lisp identifier normalization" do
+    assert ExLisp.Symbol.normalize_name("SINGLE-FLOAT") == :single_float
+    assert ExLisp.Symbol.normalize_name(:"SIMPLE-ERROR") == :simple_error
+    assert ExLisp.Symbol.normalize_name(ExLisp.Symbol.new("SLOT-NAME")) == :slot_name
+    assert ExLisp.Type.normalize_type_name("SINGLE-FLOAT") == :single_float
+    assert ExLisp.Condition.normalize_name("SIMPLE-ERROR") == :simple_error
+  end
+
   describe "Type system and COERCE" do
     test "coerce sequence between list, vector, string, bit-vector" do
       assert ExLisp.eval("(coerce '(1 2 3) 'vector)") |> ExLisp.Builtins.seq_to_list() == [1, 2, 3]

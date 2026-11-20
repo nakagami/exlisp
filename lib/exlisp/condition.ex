@@ -673,16 +673,7 @@ defmodule ExLisp.Condition do
     end
   end
 
-  def normalize_name(name) when is_atom(name) do
-    name |> Atom.to_string() |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
-  end
-
-  def normalize_name(name) when is_binary(name) do
-    name |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
-  end
-
-  def normalize_name(%ExLisp.Symbol{name: name}), do: normalize_name(name)
-  def normalize_name(other), do: other
+  def normalize_name(name), do: ExLisp.Symbol.normalize_name(name)
 
   # --- Standard Condition Accessors ---
 

@@ -221,17 +221,8 @@ defmodule ExLisp.Type do
   def normalize_type_name(:t), do: :t
   def normalize_type_name(:common), do: :common
   def normalize_type_name(%ExLisp.Symbol{name: n}), do: normalize_type_name(n)
-
-  def normalize_type_name(str) when is_binary(str) do
-    down = String.downcase(str) |> String.replace("-", "_")
-    String.to_atom(down)
-  end
-
-  def normalize_type_name(atom) when is_atom(atom) do
-    str = Atom.to_string(atom) |> String.downcase() |> String.replace("-", "_")
-    String.to_atom(str)
-  end
-
+  def normalize_type_name(name) when is_binary(name) or is_atom(name),
+    do: ExLisp.Symbol.normalize_name(name)
   def normalize_type_name(other), do: other
 
   # --- Type Predicate (typep) ---

@@ -1394,148 +1394,25 @@ defmodule ExLisp.Evaluator do
   # --- Function / Call evaluation ---
 
   defp eval_call(op, [], env) do
-    case env do
-      %{{:fun, ^op} => fun_val} ->
-        Builtins.invoke_fn(fun_val, [])
-
-      _ ->
-        case :persistent_term.get({:exlisp_fun, op}, :__not_found__) do
-          :__not_found__ ->
-            case BuiltinFunction.canonical_name(op) do
-              {:ok, canonical} ->
-                Builtins.dispatch_builtin(canonical, [])
-
-              :error ->
-                if Env.has_fun?(op) do
-                  fun_val = Env.get_fun(op)
-                  Builtins.invoke_fn(fun_val, [])
-                else
-                  if op == nil do
-                    raise RuntimeError, "Invalid function: nil"
-                  else
-                    Builtins.invoke_fn(op, [])
-                  end
-                end
-            end
-
-          fun_val when is_function(fun_val, 0) ->
-            fun_val.()
-
-          fun_val ->
-            Builtins.invoke_fn(fun_val, [])
-        end
-    end
+    invoke_call(op, [], env)
   end
 
   defp eval_call(op, [a_node], env) do
     a = eval(a_node, env) |> Builtins.unwrap_mv_primary()
-
-    case env do
-      %{{:fun, ^op} => fun_val} ->
-        Builtins.invoke_fn(fun_val, [a])
-
-      _ ->
-        case :persistent_term.get({:exlisp_fun, op}, :__not_found__) do
-          :__not_found__ ->
-            case BuiltinFunction.canonical_name(op) do
-              {:ok, canonical} ->
-                Builtins.dispatch_builtin(canonical, [a])
-
-              :error ->
-                if Env.has_fun?(op) do
-                  fun_val = Env.get_fun(op)
-                  Builtins.invoke_fn(fun_val, [a])
-                else
-                  if op == nil do
-                    raise RuntimeError, "Invalid function: nil"
-                  else
-                    Builtins.invoke_fn(op, [a])
-                  end
-                end
-            end
-
-          fun_val when is_function(fun_val, 1) ->
-            fun_val.(a)
-
-          fun_val ->
-            Builtins.invoke_fn(fun_val, [a])
-        end
-    end
+    invoke_call(op, [a], env)
   end
 
   defp eval_call(op, [a_node, b_node], env) do
     a = eval(a_node, env) |> Builtins.unwrap_mv_primary()
     b = eval(b_node, env) |> Builtins.unwrap_mv_primary()
-
-    case env do
-      %{{:fun, ^op} => fun_val} ->
-        Builtins.invoke_fn(fun_val, [a, b])
-
-      _ ->
-        case :persistent_term.get({:exlisp_fun, op}, :__not_found__) do
-          :__not_found__ ->
-            case BuiltinFunction.canonical_name(op) do
-              {:ok, canonical} ->
-                Builtins.dispatch_builtin(canonical, [a, b])
-
-              :error ->
-                if Env.has_fun?(op) do
-                  fun_val = Env.get_fun(op)
-                  Builtins.invoke_fn(fun_val, [a, b])
-                else
-                  if op == nil do
-                    raise RuntimeError, "Invalid function: nil"
-                  else
-                    Builtins.invoke_fn(op, [a, b])
-                  end
-                end
-            end
-
-          fun_val when is_function(fun_val, 2) ->
-            fun_val.(a, b)
-
-          fun_val ->
-            Builtins.invoke_fn(fun_val, [a, b])
-        end
-    end
+    invoke_call(op, [a, b], env)
   end
 
   defp eval_call(op, [a_node, b_node, c_node], env) do
     a = eval(a_node, env) |> Builtins.unwrap_mv_primary()
     b = eval(b_node, env) |> Builtins.unwrap_mv_primary()
     c = eval(c_node, env) |> Builtins.unwrap_mv_primary()
-
-    case env do
-      %{{:fun, ^op} => fun_val} ->
-        Builtins.invoke_fn(fun_val, [a, b, c])
-
-      _ ->
-        case :persistent_term.get({:exlisp_fun, op}, :__not_found__) do
-          :__not_found__ ->
-            case BuiltinFunction.canonical_name(op) do
-              {:ok, canonical} ->
-                Builtins.dispatch_builtin(canonical, [a, b, c])
-
-              :error ->
-                if Env.has_fun?(op) do
-                  fun_val = Env.get_fun(op)
-                  Builtins.invoke_fn(fun_val, [a, b, c])
-                else
-                  if op == nil do
-                    raise RuntimeError, "Invalid function: nil"
-                  else
-                    Builtins.invoke_fn(op, [a, b, c])
-                  end
-                end
-            end
-
-          fun_val when is_function(fun_val, 3) ->
-            fun_val.(a, b, c)
-
-          fun_val ->
-            Builtins.invoke_fn(fun_val, [a, b, c])
-        end
-    end
+    invoke_call(op, [a, b, c], env)
   end
 
   defp eval_call(op, args, env) do
@@ -1544,32 +1421,36 @@ defmodule ExLisp.Evaluator do
         eval(arg, env) |> Builtins.unwrap_mv_primary()
       end)
 
+    invoke_call(op, eval_args, env)
+  end
+
+  defp invoke_call(op, args, env) do
     case env do
       %{{:fun, ^op} => fun_val} ->
-        Builtins.invoke_fn(fun_val, eval_args)
+        Builtins.invoke_fn(fun_val, args)
 
       _ ->
         case :persistent_term.get({:exlisp_fun, op}, :__not_found__) do
           :__not_found__ ->
             case BuiltinFunction.canonical_name(op) do
               {:ok, canonical} ->
-                Builtins.dispatch_builtin(canonical, eval_args)
+                Builtins.dispatch_builtin(canonical, args)
 
               :error ->
                 if Env.has_fun?(op) do
                   fun_val = Env.get_fun(op)
-                  Builtins.invoke_fn(fun_val, eval_args)
+                  Builtins.invoke_fn(fun_val, args)
                 else
                   if op == nil do
                     raise RuntimeError, "Invalid function: nil"
                   else
-                    Builtins.invoke_fn(op, eval_args)
+                    Builtins.invoke_fn(op, args)
                   end
                 end
             end
 
           fun_val ->
-            Builtins.invoke_fn(fun_val, eval_args)
+            Builtins.invoke_fn(fun_val, args)
         end
     end
   end

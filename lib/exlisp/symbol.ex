@@ -21,6 +21,23 @@ defmodule ExLisp.Symbol do
     %__MODULE__{name: Atom.to_string(name), id: System.unique_integer([:positive, :monotonic])}
   end
 
+  @doc """
+  Normalizes Lisp identifiers for internal atom-based lookup.
+  """
+  def normalize_name(name) when is_atom(name) do
+    name |> Atom.to_string() |> normalize_name()
+  end
+
+  def normalize_name(name) when is_binary(name) do
+    name
+    |> String.downcase()
+    |> String.replace("-", "_")
+    |> String.to_atom()
+  end
+
+  def normalize_name(%__MODULE__{name: name}), do: normalize_name(name)
+  def normalize_name(other), do: other
+
   defimpl Inspect do
     def inspect(%ExLisp.Symbol{name: name}, _opts) do
       name

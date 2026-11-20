@@ -928,16 +928,7 @@ defmodule ExLisp.CLOS do
   defp normalize_name({:keyword, _pos, val}), do: normalize_name(val)
   defp normalize_name({:atom, _pos, val}), do: normalize_name(val)
 
-  defp normalize_name(name) when is_atom(name) do
-    name |> Atom.to_string() |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
-  end
-
-  defp normalize_name(name) when is_binary(name) do
-    name |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
-  end
-
-  defp normalize_name(%ExLisp.Symbol{name: name}), do: normalize_name(name)
-  defp normalize_name(other), do: other
+  defp normalize_name(name), do: ExLisp.Symbol.normalize_name(name)
 
   defp normalize_slot_name({:id, _pos, parts}) when is_list(parts) do
     Enum.join(parts, ".") |> normalize_slot_name()
@@ -947,14 +938,5 @@ defmodule ExLisp.CLOS do
   defp normalize_slot_name({:keyword, _pos, val}), do: normalize_slot_name(val)
   defp normalize_slot_name({:atom, _pos, val}), do: normalize_slot_name(val)
 
-  defp normalize_slot_name(name) when is_atom(name) do
-    name |> Atom.to_string() |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
-  end
-
-  defp normalize_slot_name(name) when is_binary(name) do
-    name |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
-  end
-
-  defp normalize_slot_name(%ExLisp.Symbol{name: name}), do: normalize_slot_name(name)
-  defp normalize_slot_name(other), do: other
+  defp normalize_slot_name(name), do: normalize_name(name)
 end

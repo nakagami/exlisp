@@ -43,11 +43,11 @@ defmodule ExLisp.Stream do
   def streamp(_), do: nil
 
   def open_stream_p(%__MODULE__{open: open, device: device}) when is_pid(device) do
-    lisp_bool(open and Process.alive?(device))
+    ExLisp.Builtins.lisp_bool(open and Process.alive?(device))
   end
 
-  def open_stream_p(%__MODULE__{open: open}), do: lisp_bool(open)
-  def open_stream_p(pid) when is_pid(pid), do: lisp_bool(Process.alive?(pid))
+  def open_stream_p(%__MODULE__{open: open}), do: ExLisp.Builtins.lisp_bool(open)
+  def open_stream_p(pid) when is_pid(pid), do: ExLisp.Builtins.lisp_bool(Process.alive?(pid))
   def open_stream_p(:standard_io), do: :t
   def open_stream_p([s]), do: open_stream_p(s)
   def open_stream_p(_), do: nil
@@ -921,8 +921,4 @@ defmodule ExLisp.Stream do
 
   defp set_sequence_elt(_seq, _index, _val), do: :ok
 
-  defp lisp_bool(true), do: :t
-  defp lisp_bool(false), do: nil
-  defp lisp_bool(val) when val in [nil, false, []], do: nil
-  defp lisp_bool(_), do: :t
 end

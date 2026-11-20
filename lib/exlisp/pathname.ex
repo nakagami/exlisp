@@ -573,15 +573,19 @@ defmodule ExLisp.Pathname do
       nil ->
         (path.name == :wild or path.type == :wild or
            (is_list(path.directory) and (:wild in path.directory or :wild_inferiors in path.directory)))
-        |> lisp_bool()
+        |> ExLisp.Builtins.lisp_bool()
 
-      k when k in [:name, :":name"] -> (path.name == :wild) |> lisp_bool()
-      k when k in [:type, :":type"] -> (path.type == :wild) |> lisp_bool()
+      k when k in [:name, :":name"] ->
+        (path.name == :wild) |> ExLisp.Builtins.lisp_bool()
+
+      k when k in [:type, :":type"] -> (path.type == :wild) |> ExLisp.Builtins.lisp_bool()
+
       k when k in [:directory, :":directory"] ->
         (is_list(path.directory) and (:wild in path.directory or :wild_inferiors in path.directory))
-        |> lisp_bool()
-      k when k in [:host, :":host"] -> (path.host == :wild) |> lisp_bool()
-      k when k in [:device, :":device"] -> (path.device == :wild) |> lisp_bool()
+        |> ExLisp.Builtins.lisp_bool()
+
+      k when k in [:host, :":host"] -> (path.host == :wild) |> ExLisp.Builtins.lisp_bool()
+      k when k in [:device, :":device"] -> (path.device == :wild) |> ExLisp.Builtins.lisp_bool()
       _ -> nil
     end
   end
@@ -600,11 +604,8 @@ defmodule ExLisp.Pathname do
       |> String.replace("\\*", "[^/]*")
 
     case Regex.compile("^" <> regex_pattern <> "$") do
-      {:ok, regex} -> Regex.match?(regex, path_str) |> lisp_bool()
+      {:ok, regex} -> Regex.match?(regex, path_str) |> ExLisp.Builtins.lisp_bool()
       _ -> nil
     end
   end
-
-  defp lisp_bool(true), do: :t
-  defp lisp_bool(false), do: nil
 end
