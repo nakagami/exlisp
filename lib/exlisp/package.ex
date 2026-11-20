@@ -1048,7 +1048,10 @@ defmodule ExLisp.Package do
 
     case pkg_designator do
       %ExLisp.Package{} = p ->
-        p
+        case :ets.lookup(@table, p.name) do
+          [{_key, %ExLisp.Package{} = stored}] -> stored
+          _ -> p
+        end
 
       name when is_atom(name) or is_binary(name) ->
         str =
@@ -1145,18 +1148,21 @@ defmodule ExLisp.Package do
 
   def present_symbols_list(pkg_desig) do
     pkg = find_package!(pkg_desig)
+
     MapSet.union(pkg.internal_symbols, pkg.external_symbols)
     |> Enum.map(&str_to_symbol/1)
   end
 
   def external_symbols_list(pkg_desig) do
     pkg = find_package!(pkg_desig)
+
     pkg.external_symbols
     |> Enum.map(&str_to_symbol/1)
   end
 
   def all_symbols_list(pkg_desig) do
     pkg = find_package!(pkg_desig)
+
     used_externals =
       Enum.flat_map(pkg.use_list, fn u_name ->
         if u_pkg = find_package(u_name) do
@@ -1165,9 +1171,178 @@ defmodule ExLisp.Package do
           []
         end
       end)
+
     MapSet.union(pkg.internal_symbols, pkg.external_symbols)
     |> MapSet.union(MapSet.new(used_externals))
     |> Enum.map(&str_to_symbol/1)
+  end
+
+  @doc """
+  Iterates over the symbols accessible in a package, calling `fun` for each
+  symbol.  The optional result is returned after iteration.
+  """
+  def do_symbols(pkg_desig \\ nil, fun \\ nil, result \\ nil)
+
+  def do_symbols(pkg_desig, fun, result) when is_function(fun, 1) do
+    package_iterator_entries(pkg_desig, [:internal, :external, :inherited])
+    |> Enum.each(fn {symbol, _status, _package} -> fun.(symbol) end)
+
+    result
+  end
+
+  def do_symbols(pkg_desig, fun, result) when is_function(fun, 2) do
+    package_iterator_entries(pkg_desig, [:internal, :external, :inherited])
+    |> Enum.each(fn {symbol, status, _package} -> fun.(symbol, status) end)
+
+    result
+  end
+
+  def do_symbols(nil, nil, result), do: result
+
+  @doc """
+  Iterates only over the external symbols of a package.
+  """
+  def do_external_symbols(pkg_desig \\ nil, fun \\ nil, result \\ nil)
+
+  def do_external_symbols(pkg_desig, fun, result) when is_function(fun, 1) do
+    package_iterator_entries(pkg_desig, [:external])
+    |> Enum.each(fn {symbol, _status, _package} -> fun.(symbol) end)
+
+    result
+  end
+
+  def do_external_symbols(pkg_desig, fun, result) when is_function(fun, 2) do
+    package_iterator_entries(pkg_desig, [:external])
+    |> Enum.each(fn {symbol, status, _package} -> fun.(symbol, status) end)
+
+    result
+  end
+
+  def do_external_symbols(nil, nil, result), do: result
+
+  @doc """
+  Iterates once over every symbol present in any registered package.
+  """
+  def do_all_symbols(fun, result \\ nil)
+
+  def do_all_symbols(fun, result) when is_function(fun, 1) do
+    package_iterator_entries(list_all_packages(), [:internal, :external])
+    |> Enum.each(fn {symbol, _status, _package} -> fun.(symbol) end)
+
+    result
+  end
+
+  def do_all_symbols(fun, result) when is_function(fun, 2) do
+    package_iterator_entries(list_all_packages(), [:internal, :external])
+    |> Enum.each(fn {symbol, status, _package} -> fun.(symbol, status) end)
+
+    result
+  end
+
+  @doc """
+  Returns symbols with the given name from every registered package.
+  """
+  def find_all_symbols(name_designator) do
+    name = symbol_to_str(name_designator)
+
+    list_all_packages()
+    |> Enum.flat_map(fn pkg ->
+      package_iterator_entries(pkg, [:internal, :external])
+      |> Enum.filter(fn {symbol, _status, _package} -> symbol_to_str(symbol) == name end)
+      |> Enum.map(&elem(&1, 0))
+    end)
+    |> Enum.uniq()
+  end
+
+  @doc """
+  Calls `fun` with a zero-arity Common Lisp package iterator.
+
+  Each iterator invocation returns
+  `[:_values_, [more_p, symbol, accessibility, package]]`.
+  """
+  def with_package_iterator(pkg_designators, symbol_types, fun)
+      when is_function(fun, 1) do
+    iterator = package_iterator(pkg_designators, symbol_types)
+    fun.(iterator)
+  end
+
+  @doc """
+  Creates the stateful generator used by `with-package-iterator/3`.
+  """
+  def package_iterator(pkg_designators \\ nil, symbol_types \\ [:internal, :external, :inherited]) do
+    entries = package_iterator_entries(pkg_designators, symbol_types)
+    agent = :atomics.new(1, [])
+
+    fn ->
+      index = :atomics.add_get(agent, 1, 1) - 1
+
+      case Enum.fetch(entries, index) do
+        {:ok, {symbol, status, package}} ->
+          [:_values_, [:t, symbol, status, package]]
+
+        :error ->
+          [:_values_, [nil, nil, nil, nil]]
+      end
+    end
+  end
+
+  defp package_iterator_entries(pkg_designators, symbol_types) do
+    packages =
+      cond do
+        is_nil(pkg_designators) -> [find_package!(current_package())]
+        is_list(pkg_designators) -> Enum.map(pkg_designators, &refresh_package/1)
+        true -> [refresh_package(pkg_designators)]
+      end
+
+    types =
+      symbol_types
+      |> List.wrap()
+      |> Enum.flat_map(&iterator_types/1)
+      |> Enum.uniq()
+
+    Enum.flat_map(packages, fn package ->
+      Enum.flat_map([:internal, :external, :inherited], fn type ->
+        if type in types, do: symbols_for_type(package, type), else: []
+      end)
+    end)
+    |> Enum.uniq_by(fn {symbol, _status, package} -> {package.name, symbol} end)
+  end
+
+  defp refresh_package(%__MODULE__{name: name}), do: find_package!(name)
+  defp refresh_package(designator), do: find_package!(designator)
+
+  defp iterator_types(type) do
+    case type |> to_string() |> String.trim_leading(":") |> String.downcase() do
+      "internal" -> [:internal]
+      "external" -> [:external]
+      "inherited" -> [:inherited]
+      "present" -> [:internal, :external]
+      _ -> [:internal, :external, :inherited]
+    end
+  end
+
+  defp symbols_for_type(package, :internal) do
+    Enum.map(package.internal_symbols, &{str_to_symbol(&1), :internal, package})
+  end
+
+  defp symbols_for_type(package, :external) do
+    Enum.map(package.external_symbols, &{str_to_symbol(&1), :external, package})
+  end
+
+  defp symbols_for_type(package, :inherited) do
+    present =
+      MapSet.union(package.internal_symbols, package.external_symbols)
+
+    package.use_list
+    |> Enum.flat_map(fn used_name ->
+      case find_package(used_name) do
+        nil -> []
+        used -> Enum.map(used.external_symbols, &{&1, :inherited, package})
+      end
+    end)
+    |> Enum.reject(fn {name, _status, _package} -> MapSet.member?(present, name) end)
+    |> Enum.uniq_by(&elem(&1, 0))
+    |> Enum.map(fn {name, status, pkg} -> {str_to_symbol(name), status, pkg} end)
   end
 
   def list_all_packages do

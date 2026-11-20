@@ -143,8 +143,8 @@ defmodule ExLisp.Condition do
     end
   end
 
-  def is_condition?({:instance, class_name, _tid}) do
-    ExLisp.CLOS.subclassp(class_name, :condition) == :t
+  def is_condition?({:instance, _class_name, _tid} = instance) do
+    ExLisp.CLOS.subclassp(ExLisp.CLOS.class_of(instance), :condition) == :t
   end
 
   def is_condition?(_), do: false
@@ -253,6 +253,42 @@ defmodule ExLisp.Condition do
     # If unhandled by user handlers, raise runtime error
     msg = format_condition(cond_obj)
     raise RuntimeError, message: msg
+  end
+
+  @doc """
+  Invokes the dynamic `*debugger-hook*` when one is installed.  Since ExLisp
+  has no interactive debugger, an unhandled invocation prints the condition
+  and raises the corresponding serious condition.
+  """
+  def invoke_debugger(condition) do
+    object = coerce_to_condition(condition, [], :simple_error)
+    old_hook = debugger_hook()
+
+    case old_hook do
+      nil ->
+        :ok
+
+      hook ->
+        previous = Process.get(:exlisp_previous_debugger_hook)
+
+        try do
+          ExLisp.Builtins.invoke_fn(hook, [object, previous || nil])
+        after
+          Process.put(:exlisp_previous_debugger_hook, old_hook)
+        end
+    end
+
+    raise RuntimeError, message: format_condition(object)
+  end
+
+  defp debugger_hook do
+    if ExLisp.Env.has_var?(:"*debugger-hook*") do
+      ExLisp.Env.get_var(:"*debugger-hook*")
+    else
+      nil
+    end
+  rescue
+    _ -> nil
   end
 
   @doc """
@@ -691,6 +727,8 @@ defmodule ExLisp.Condition do
 
   def simple_condition_format_arguments(cond_obj),
     do: get_condition_slot(cond_obj, :format_arguments)
+
+  def get_slot(cond_obj, slot_name), do: get_condition_slot(cond_obj, slot_name)
 
   defp get_condition_slot(cond_obj, slot_name) do
     case cond_obj do

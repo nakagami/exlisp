@@ -17,7 +17,8 @@ defmodule ExLisp.Builtins do
       rem: 2,
       send: 2,
       spawn: 1,
-      spawn: 3
+      spawn: 3,
+      byte_size: 1
     ]
 
   import Bitwise
@@ -1222,7 +1223,7 @@ defmodule ExLisp.Builtins do
     {digits, fraction_digits} =
       case String.split(unsigned, ".", parts: 2) do
         [whole] -> {whole, 0}
-        [whole, fraction] -> {whole <> fraction, byte_size(fraction)}
+        [whole, fraction] -> {whole <> fraction, Kernel.byte_size(fraction)}
       end
 
     numerator = String.to_integer(digits)
@@ -3987,7 +3988,7 @@ defmodule ExLisp.Builtins do
                 has_init and is_integer(init_elem) ->
                   init_elem
 
-                has_init and is_binary(init_elem) and byte_size(init_elem) > 0 ->
+                has_init and is_binary(init_elem) and Kernel.byte_size(init_elem) > 0 ->
                   :binary.first(init_elem)
 
                 has_init and characterp(init_elem) == :t ->
@@ -6249,7 +6250,7 @@ defmodule ExLisp.Builtins do
           cond do
             match?(%ExLisp.Character{}, val) -> val.code
             is_integer(val) and val >= 0 and val <= 0x10FFFF -> val
-            is_binary(val) and byte_size(val) > 0 -> hd(String.to_charlist(val))
+            is_binary(val) and Kernel.byte_size(val) > 0 -> hd(String.to_charlist(val))
             true -> throw({:not_char, val})
           end
         end)
@@ -7535,7 +7536,7 @@ defmodule ExLisp.Builtins do
           is_integer(object) ->
             ExLisp.Character.new(object)
 
-          is_binary(object) and byte_size(object) == 1 ->
+          is_binary(object) and Kernel.byte_size(object) == 1 ->
             ExLisp.Character.new(:binary.first(object))
 
           match?(%ExLisp.Character{}, object) ->
@@ -7544,7 +7545,7 @@ defmodule ExLisp.Builtins do
           is_atom(object) ->
             str = Atom.to_string(object)
 
-            if byte_size(str) == 1,
+            if Kernel.byte_size(str) == 1,
               do: ExLisp.Character.new(:binary.first(str)),
               else: raise(ArgumentError, "Cannot coerce #{inspect(object)} to character")
 
@@ -9007,7 +9008,7 @@ defmodule ExLisp.Builtins do
   def integer_length(n) when is_integer(n) and n > 0 do
     bin = :binary.encode_unsigned(n)
     <<first, _rest::binary>> = bin
-    (byte_size(bin) - 1) * 8 + byte_len_bits(first)
+    (Kernel.byte_size(bin) - 1) * 8 + byte_len_bits(first)
   end
 
   def integer_length(n) when is_integer(n) and n < 0 do
@@ -9044,11 +9045,25 @@ defmodule ExLisp.Builtins do
 
   def byte(size, pos) when is_integer(size) and is_integer(pos), do: {:byte, size, pos}
 
+  def byte_size({:byte, size, _pos}) when is_integer(size), do: size
+  def byte_position({:byte, _size, pos}) when is_integer(pos), do: pos
+
   def ldb({:byte, size, pos}, integer)
       when is_integer(size) and is_integer(pos) and is_integer(integer) do
     mask = bsl(1, size) - 1
     shifted = if pos >= 0, do: bsr(integer, pos), else: bsl(integer, -pos)
     band(shifted, mask)
+  end
+
+  def ldb_test({:byte, size, pos} = bytespec, integer)
+      when is_integer(size) and is_integer(pos) and is_integer(integer) do
+    lisp_bool(ldb(bytespec, integer) != 0)
+  end
+
+  def mask_field({:byte, size, pos}, integer)
+      when is_integer(size) and size >= 0 and is_integer(pos) and pos >= 0 and
+             is_integer(integer) do
+    band(integer, bsl(bsl(1, size) - 1, pos))
   end
 
   def random(arg1, arg2 \\ nil)
@@ -9089,7 +9104,7 @@ defmodule ExLisp.Builtins do
               cond do
                 match?(%ExLisp.Character{}, elem) -> elem.code
                 is_integer(elem) -> elem
-                is_binary(elem) and byte_size(elem) > 0 -> hd(String.to_charlist(elem))
+                is_binary(elem) and Kernel.byte_size(elem) > 0 -> hd(String.to_charlist(elem))
                 true -> ?\s
               end
 
@@ -9348,6 +9363,11 @@ defmodule ExLisp.Builtins do
     shifted_val = bsl(masked_val, pos)
     clear_mask = bnot(bsl(mask, pos))
     bor(band(integer, clear_mask), shifted_val)
+  end
+
+  def deposit_field(newbyte, {:byte, size, pos} = bytespec, integer)
+      when is_integer(newbyte) and is_integer(size) and is_integer(pos) and is_integer(integer) do
+    dpb(ldb(bytespec, newbyte), bytespec, integer)
   end
 
   # --- REPL history & re-execution ---
@@ -9671,15 +9691,43 @@ defmodule ExLisp.Builtins do
     :defvar,
     :defparameter,
     :defconstant,
+    :and,
+    :or,
     :define_symbol_macro,
     :define_compiler_macro,
+    :defclass,
+    :defgeneric,
+    :defmethod,
+    :define_condition,
+    :define_method_combination,
+    :defpackage,
+    :declaim,
+    :proclaim,
+    :in_package,
+    :prog_star,
+    :do_star,
+    :psetq,
     :defstruct,
     :deftype,
     :define_modify_macro,
     :define_setf_expander,
     :defsetf,
     :check_type,
-    :assert
+    :assert,
+    :with_accessors,
+    :with_slots,
+    :with_hash_table_iterator,
+    :with_package_iterator,
+    :with_compilation_unit,
+    :with_condition_restarts,
+    :with_open_stream,
+    :with_simple_restart,
+    :with_standard_io_syntax,
+    :lambda,
+    :time,
+    :loop_finish,
+    :"do*",
+    :"prog*"
   ]
 
   def macro_function(sym, _env \\ nil) do
@@ -10347,6 +10395,109 @@ defmodule ExLisp.Builtins do
   end
 
   def get_universal_time([]), do: get_universal_time()
+
+  def internal_time_units_per_second, do: 1_000_000
+  def internal_time_units_per_second([]), do: internal_time_units_per_second()
+
+  def encode_universal_time(args) when is_list(args) do
+    case args do
+      [second, minute, hour, date, month, year] ->
+        encode_universal_time(second, minute, hour, date, month, year)
+
+      [second, minute, hour, date, month, year, timezone] ->
+        encode_universal_time(second, minute, hour, date, month, year, timezone)
+
+      _ ->
+        raise ArgumentError,
+              "encode-universal-time expects second, minute, hour, date, month, year, and optional timezone"
+    end
+  end
+
+  def encode_universal_time(second, minute, hour, date, month, year, timezone \\ nil)
+      when is_integer(second) and is_integer(minute) and is_integer(hour) and is_integer(date) and
+             is_integer(month) and is_integer(year) do
+    datetime = {{year, month, date}, {hour, minute, second}}
+
+    unless :calendar.valid_date({year, month, date}) and second in 0..59 and minute in 0..59 and
+             hour in 0..23 do
+      raise ArgumentError, "invalid date or time for encode-universal-time"
+    end
+
+    gregorian_seconds =
+      if is_nil(timezone) do
+        datetime
+        |> :calendar.local_time_to_universal_time_dst()
+        |> List.first()
+        |> :calendar.datetime_to_gregorian_seconds()
+      else
+        :calendar.datetime_to_gregorian_seconds(datetime) +
+          timezone_seconds(timezone)
+      end
+
+    gregorian_seconds - 59_958_230_400
+  end
+
+  def decode_universal_time(args) when is_list(args) do
+    case args do
+      [universal_time] ->
+        decode_universal_time(universal_time)
+
+      [universal_time, timezone] ->
+        decode_universal_time(universal_time, timezone)
+
+      _ ->
+        raise ArgumentError, "decode-universal-time expects universal-time and optional timezone"
+    end
+  end
+
+  def decode_universal_time(universal_time, timezone \\ nil) when is_integer(universal_time) do
+    gregorian_seconds = universal_time + 59_958_230_400
+    utc_datetime = :calendar.gregorian_seconds_to_datetime(gregorian_seconds)
+
+    {datetime, daylight_p, decoded_timezone} =
+      if is_nil(timezone) do
+        local_datetime = :calendar.universal_time_to_local_time(utc_datetime)
+        utc_seconds = :calendar.datetime_to_gregorian_seconds(utc_datetime)
+        local_seconds = :calendar.datetime_to_gregorian_seconds(local_datetime)
+        offset_seconds = utc_seconds - local_seconds
+        candidates = :calendar.local_time_to_universal_time_dst(local_datetime)
+        daylight_p = local_dst_p?(candidates, utc_datetime)
+        {local_datetime, daylight_p, offset_seconds / 3600}
+      else
+        local_datetime =
+          :calendar.gregorian_seconds_to_datetime(gregorian_seconds - timezone_seconds(timezone))
+
+        {local_datetime, nil, timezone}
+      end
+
+    {{year, month, date}, {hour, minute, second}} = datetime
+    weekday = :calendar.day_of_the_week(year, month, date) - 1
+
+    [:_values_, [second, minute, hour, date, month, year, weekday, daylight_p, decoded_timezone]]
+  end
+
+  def get_decoded_time do
+    get_universal_time()
+    |> decode_universal_time()
+  end
+
+  def get_decoded_time([]), do: get_decoded_time()
+
+  defp timezone_seconds(timezone) when is_number(timezone), do: Kernel.trunc(timezone * 3600)
+
+  defp timezone_seconds(%ExLisp.Ratio{} = timezone) do
+    Kernel.trunc(ExLisp.Ratio.to_float(timezone) * 3600)
+  end
+
+  defp timezone_seconds(timezone),
+    do: raise(ArgumentError, "timezone must be a number, got: #{inspect(timezone)}")
+
+  defp local_dst_p?([_standard], _utc_datetime), do: nil
+  defp local_dst_p?([], _utc_datetime), do: nil
+
+  defp local_dst_p?([_standard, second | _rest], utc_datetime) do
+    lisp_bool(second == utc_datetime)
+  end
 
   # --- Readtables ---
   def readtablep(args) when is_list(args) do
@@ -11343,4 +11494,340 @@ defmodule ExLisp.Builtins do
 
     nil
   end
+
+  # --- Remaining Common Lisp compatibility entry points ---
+
+  def pprint(object, stream \\ nil), do: ExLisp.PPrint.pprint(object, stream)
+  def pprint_dispatch(object, table \\ nil), do: ExLisp.PPrint.pprint_dispatch(object, table)
+
+  def copy_pprint_dispatch(table \\ nil),
+    do: ExLisp.PPrint.copy_pprint_dispatch(table)
+
+  def set_pprint_dispatch(type, fun, priority \\ 0, table \\ nil),
+    do: ExLisp.PPrint.set_pprint_dispatch(type, fun, priority, table)
+
+  def pprint_exit_if_list_exhausted(list),
+    do: ExLisp.PPrint.pprint_exit_if_list_exhausted(list)
+
+  def pprint_fill(stream, list, colon_p \\ nil, at_sign_p \\ nil),
+    do: ExLisp.PPrint.pprint_fill(stream, list, colon_p, at_sign_p)
+
+  def pprint_indent(relative_to, amount, stream \\ nil),
+    do: ExLisp.PPrint.pprint_indent(relative_to, amount, stream)
+
+  def pprint_linear(stream, list, colon_p \\ nil, at_sign_p \\ nil),
+    do: ExLisp.PPrint.pprint_linear(stream, list, colon_p, at_sign_p)
+
+  def pprint_logical_block(
+        stream,
+        list,
+        prefix \\ "",
+        per_line_prefix \\ "",
+        suffix \\ "",
+        fun \\ nil
+      ),
+      do: ExLisp.PPrint.pprint_logical_block(
+        stream,
+        list,
+        prefix,
+        per_line_prefix,
+        suffix,
+        fun
+      )
+
+  def pprint_newline(kind \\ :linear, stream \\ nil),
+    do: ExLisp.PPrint.pprint_newline(kind, stream)
+
+  def pprint_pop(list \\ nil), do: ExLisp.PPrint.pprint_pop(list)
+
+  def pprint_tab(kind, column, increment, stream \\ nil),
+    do: ExLisp.PPrint.pprint_tab(kind, column, increment, stream)
+
+  def pprint_tabular(stream, list, colon_p \\ nil, at_sign_p \\ nil, tabsize \\ 8),
+    do: ExLisp.PPrint.pprint_tabular(stream, list, colon_p, at_sign_p, tabsize)
+
+  def formatter(control), do: ExLisp.PPrint.formatter(control)
+  def print_object(object, stream \\ nil), do: ExLisp.PPrint.print_object(object, stream)
+
+  def print_unreadable_object(object, stream \\ nil, opts \\ [], body \\ nil),
+    do: ExLisp.PPrint.print_unreadable_object(object, stream, opts, body)
+
+  def print_not_readable_object(condition),
+    do: ExLisp.Condition.get_slot(condition, :object)
+
+  def describe_object(object, stream \\ nil) do
+    output = do_describe(object)
+    if stream, do: ExLisp.Stream.write_string(output, stream), else: IO.puts(output)
+    nil
+  end
+
+  def call_method(method, args \\ []), do: ExLisp.CLOS.call_method(method, args)
+
+  def read_byte(stream \\ nil, eof_error_p \\ :t, eof_value \\ nil),
+    do: ExLisp.Stream.read_byte(stream, eof_error_p, eof_value)
+
+  def write_byte(byte, stream \\ nil), do: ExLisp.Stream.write_byte(byte, stream)
+
+  def read_char_no_hang(
+        stream \\ nil,
+        eof_error_p \\ :t,
+        eof_value \\ nil,
+        recursive_p \\ nil
+      ),
+      do: ExLisp.Stream.read_char_no_hang(stream, eof_error_p, eof_value, recursive_p)
+
+  def file_string_length(stream, string, opts \\ []),
+    do: ExLisp.Stream.file_string_length(stream, string, opts)
+
+  def stream_external_format(stream \\ nil),
+    do: ExLisp.Stream.stream_external_format(stream)
+
+  def do_symbols(pkg \\ nil, fun \\ nil, result \\ nil),
+    do: ExLisp.Package.do_symbols(pkg, fun, result)
+
+  def do_external_symbols(pkg \\ nil, fun \\ nil, result \\ nil),
+    do: ExLisp.Package.do_external_symbols(pkg, fun, result)
+
+  def do_all_symbols(fun, result \\ nil), do: ExLisp.Package.do_all_symbols(fun, result)
+
+  def with_package_iterator(packages, types, fun),
+    do: ExLisp.Package.with_package_iterator(packages, types, fun)
+
+  def find_all_symbols(name), do: ExLisp.Package.find_all_symbols(name)
+  def package_iterator(packages \\ nil, types \\ [:internal, :external, :inherited]),
+    do: ExLisp.Package.package_iterator(packages, types)
+  def logical_pathname(path), do: ExLisp.Pathname.logical_pathname(path)
+  def logical_pathname_p(path), do: ExLisp.Pathname.logical_pathname_p(path)
+
+  def logical_pathname_translations(host),
+    do: ExLisp.Pathname.logical_pathname_translations(host)
+
+  def logical_pathname_translations(host, translations),
+    do: ExLisp.Pathname.logical_pathname_translations(host, translations)
+
+  def load_logical_pathname_translations(host),
+    do: ExLisp.Pathname.load_logical_pathname_translations(host)
+
+  def translate_logical_pathname(path),
+    do: ExLisp.Pathname.translate_logical_pathname(path)
+
+  def translate_pathname(source, from, to),
+    do: ExLisp.Pathname.translate_pathname(source, from, to)
+
+  def change_class(instance, class, initargs \\ []),
+    do: ExLisp.CLOS.change_class(instance, class, initargs)
+
+  def initialize_instance(instance, initargs \\ []),
+    do: ExLisp.CLOS.initialize_instance(instance, initargs)
+
+  def reinitialize_instance(instance, initargs \\ []),
+    do: ExLisp.CLOS.reinitialize_instance(instance, initargs)
+
+  def shared_initialize(instance, slots \\ :t, initargs \\ []),
+    do: ExLisp.CLOS.shared_initialize(instance, slots, initargs)
+
+  def make_instances_obsolete(class), do: ExLisp.CLOS.make_instances_obsolete(class)
+
+  def update_instance_for_different_class(previous, instance),
+    do: ExLisp.CLOS.update_instance_for_different_class(previous, instance)
+
+  def update_instance_for_redefined_class(instance, added, discarded, plist),
+    do: ExLisp.CLOS.update_instance_for_redefined_class(instance, added, discarded, plist)
+
+  def make_load_form(object, environment \\ nil),
+    do: ExLisp.CLOS.make_load_form(object, environment)
+
+  def make_load_form_saving_slots(object, environment \\ nil, args \\ []),
+    do: ExLisp.CLOS.make_load_form_saving_slots(object, environment, args)
+
+  def find_method(generic, qualifiers \\ [], specializers \\ [], errorp \\ :t),
+    do: ExLisp.CLOS.find_method(generic, qualifiers, specializers, errorp)
+
+  def remove_method(generic, method), do: ExLisp.CLOS.remove_method(generic, method)
+  def add_method(generic, method), do: ExLisp.CLOS.add_method(generic, method)
+  def generic_function_methods(generic), do: ExLisp.CLOS.generic_function_methods(generic)
+  def method_qualifiers(method), do: ExLisp.CLOS.method_qualifiers(method)
+  def method_specializers(method), do: ExLisp.CLOS.method_specializers(method)
+  def method_generic_function(method), do: ExLisp.CLOS.method_generic_function(method)
+  def method_function(method), do: ExLisp.CLOS.method_function(method)
+  def generic_function_name(generic), do: ExLisp.CLOS.generic_function_name(generic)
+
+  def generic_function_lambda_list(generic),
+    do: ExLisp.CLOS.generic_function_lambda_list(generic)
+
+  def function_keywords(method), do: ExLisp.CLOS.function_keywords(method)
+  def function_lambda_expression(fun), do: ExLisp.CLOS.function_lambda_expression(fun)
+  def type_of(value), do: ExLisp.Env.type_of(value)
+  def constantp(value, environment \\ nil), do: ExLisp.Env.constantp(value, environment)
+
+  def compile_file_pathname(input_file, output_file \\ nil),
+    do: ExLisp.Env.compile_file_pathname(input_file, output_file)
+
+  def lisp_implementation_type, do: ExLisp.Env.lisp_implementation_type()
+  def lisp_implementation_version, do: ExLisp.Env.lisp_implementation_version()
+  def short_site_name, do: ExLisp.Env.short_site_name()
+  def long_site_name, do: ExLisp.Env.long_site_name()
+  def machine_type, do: ExLisp.Env.machine_type()
+  def machine_version, do: ExLisp.Env.machine_version()
+  def machine_instance, do: ExLisp.Env.machine_instance()
+  def software_type, do: ExLisp.Env.software_type()
+  def software_version, do: ExLisp.Env.software_version()
+  def invoke_debugger(condition), do: ExLisp.Condition.invoke_debugger(condition)
+  def trace(names \\ []), do: ExLisp.Development.trace(names)
+  def untrace(names \\ []), do: ExLisp.Development.untrace(names)
+  def step(form, args \\ []), do: ExLisp.Development.step(form, args)
+  def disassemble(function), do: ExLisp.Development.disassemble(function)
+
+  def read_delimited_list(char, stream \\ nil, recursive_p \\ nil) do
+    ExLisp.Reader.read_delimited_list(char, stream, recursive_p)
+  end
+
+  def read_preserving_whitespace(
+        stream \\ nil,
+        eof_error_p \\ :t,
+        eof_value \\ nil,
+        recursive_p \\ nil
+      ),
+      do: ExLisp.Reader.read_preserving_whitespace(stream, eof_error_p, eof_value, recursive_p)
+
+  def allocate_instance(class), do: ExLisp.CLOS.allocate_instance(class)
+
+  def copy_structure({:struct, _name, tid} = structure) do
+    clone = :ets.new(:lisp_struct, [:set, :public])
+    :ets.tab2list(tid) |> Enum.each(&:ets.insert(clone, &1))
+    put_elem(structure, 2, clone)
+  end
+
+  def copy_structure({:instance, class, tid}) do
+    clone = :ets.new(:lisp_instance, [:set, :public])
+    :ets.tab2list(tid) |> Enum.each(&:ets.insert(clone, &1))
+    {:instance, class, clone}
+  end
+
+  def copy_structure(other), do: other
+
+  def compute_applicable_methods(generic, args),
+    do: ExLisp.CLOS.compute_applicable_methods(generic, args)
+
+  def float(number), do: float(number, 0.0)
+  def float(%ExLisp.Ratio{numerator: n, denominator: d}, _prototype), do: n / d
+  def float(number, _prototype), do: number * 1.0
+
+  def hash_table_rehash_size({:hash_table, _, _}), do: 1.5
+  def hash_table_rehash_threshold({:hash_table, _, _}), do: 1.0
+
+  def hash_table_size({:hash_table, _, tid}) do
+    case :ets.info(tid, :memory) do
+      nil -> 0
+      words -> max(:ets.info(tid, :size) || 0, words)
+    end
+  end
+
+  def hash_table_test({:hash_table, test, _}), do: test
+  def hash_table_iterator({:hash_table, _, tid}) do
+    entries = :ets.tab2list(tid)
+    index = :atomics.new(1, [])
+
+    fn ->
+      position = :atomics.add_get(index, 1, 1) - 1
+
+      case Enum.fetch(entries, position) do
+        {:ok, {key, value}} -> [:_values_, [:t, key, value]]
+        :error -> [:_values_, [nil, nil, nil]]
+      end
+    end
+  end
+
+  def random_state_p({:random_state, _}), do: :t
+  def random_state_p(_), do: nil
+
+  def get_setf_expansion(place, _environment \\ nil) do
+    store = gensym("G")
+
+    {getter, setter} =
+      if is_atom(place) do
+        {place, [:setq, place, store]}
+      else
+        {place, [:setf, place, store]}
+      end
+
+    [:_values_, [[], [], [store], setter, getter]]
+  end
+
+  def break(message \\ "", args \\ []) do
+    ExLisp.Condition.error(:simple_error, args: [format_control: message, format_arguments: args])
+  end
+
+  def dribble(path \\ nil) do
+    case Process.get(:exlisp_dribble_file) do
+      nil when is_binary(path) ->
+        File.write!(path, "")
+        Process.put(:exlisp_dribble_file, path)
+        path
+
+      nil ->
+        nil
+
+      previous ->
+        Process.delete(:exlisp_dribble_file)
+        previous
+    end
+  end
+
+  def ed(_file \\ nil), do: nil
+
+  def y_or_n_p(control \\ "Yes or no? ", args \\ []) do
+    IO.write(apply_format(control, args) <> " [y/n] ")
+    read_yes_no()
+  end
+
+  def yes_or_no_p(control \\ "Yes or no? ", args \\ []) do
+    IO.write(apply_format(control, args) <> " [yes/no] ")
+    read_yes_no()
+  end
+
+  defp read_yes_no do
+    case IO.gets("") |> String.trim() |> String.downcase() do
+      response when response in ["y", "yes"] -> :t
+      _ -> nil
+    end
+  end
+
+  defp apply_format(control, args) do
+    case ExLisp.CLFormat.format(control, args) do
+      output when is_binary(output) -> output
+      _ -> to_string_val(control)
+    end
+  end
+
+  def ensure_generic_function(name, lambda_list \\ [], options \\ []),
+    do: ExLisp.CLOS.ensure_generic_function(name, lambda_list, options)
+
+  def invalid_method_error(method, control \\ "", args \\ []),
+    do: ExLisp.Condition.error(:invalid_method_error, [method: method, format_control: control, format_arguments: args])
+
+  def method_combination_error(control \\ "", args \\ []),
+    do: ExLisp.Condition.error(:method_combination_error, [format_control: control, format_arguments: args])
+
+  def no_applicable_method(generic, args \\ []),
+    do: ExLisp.Condition.error(:no_applicable_method, [generic_function: generic, arguments: args])
+
+  def no_next_method(method, args \\ []),
+    do: ExLisp.Condition.error(:no_next_method, [method: method, arguments: args])
+
+  def slot_missing(class, object, slot, operation, new_value \\ nil),
+    do:
+      ExLisp.Condition.error(:slot_missing, [
+        class: class,
+        object: object,
+        slot: slot,
+        operation: operation,
+        new_value: new_value
+      ])
+
+  def slot_unbound(class, instance, slot),
+    do: ExLisp.Condition.error(:unbound_slot, [class: class, instance: instance, name: slot])
+
+  def unbound_slot_instance(condition),
+    do: ExLisp.Condition.get_slot(condition, :instance)
 end

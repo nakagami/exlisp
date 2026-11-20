@@ -158,9 +158,7 @@ defmodule ExLisp.CommonLispCompatibilityTest do
     File.write!(path, "content")
 
     [new_path, old_path, new_true] =
-      ExLisp.eval(
-        "(multiple-value-list (rename-file #{inspect(path)} #{inspect(renamed)}))"
-      )
+      ExLisp.eval("(multiple-value-list (rename-file #{inspect(path)} #{inspect(renamed)}))")
 
     assert ExLisp.Pathname.namestring(new_path) == renamed
     assert ExLisp.Pathname.namestring(old_path) == path
@@ -168,5 +166,101 @@ defmodule ExLisp.CommonLispCompatibilityTest do
     assert File.read!(renamed) == "content"
     assert ExLisp.eval("(delete-file #{inspect(renamed)})") == :t
     refute File.exists?(renamed)
+  end
+
+  test "CLOS and environment compatibility entry points are callable" do
+    assert ExLisp.eval("(allocate-instance 'standard-object)") != nil
+    assert ExLisp.eval("(type-of 1)") == :integer
+    assert ExLisp.eval("(constantp 1)") == :t
+    assert ExLisp.eval("(lisp-implementation-type)") == "ExLisp"
+    assert is_binary(ExLisp.eval("(lisp-implementation-version)"))
+    assert is_binary(ExLisp.eval("(machine-type)"))
+
+    assert ExLisp.eval("(compile-file-pathname \"sample.lisp\")") |> ExLisp.Pathname.pathnamep() ==
+             :t
+  end
+
+  test "stream byte and output control functions use Lisp streams" do
+    code = """
+    (with-output-to-string (s)
+      (write-byte 65 s)
+      (finish-output s)
+      (force-output s))
+    """
+
+    assert ExLisp.eval(code) == "A"
+
+    assert ExLisp.eval("""
+           (with-input-from-string (s "A")
+             (list (read-byte s) (read-byte s nil :eof)))
+           """) == [65, :eof]
+  end
+
+  test "hash table and package iteration forms work from Lisp" do
+    hash_result =
+      ExLisp.eval("""
+      (let ((table (make-hash-table)))
+        (setf (gethash :answer table) 42)
+        (with-hash-table-iterator (next table)
+          (multiple-value-list (next))))
+      """)
+
+    assert hash_result == [:t, :answer, 42]
+
+    package_result =
+      ExLisp.eval("""
+      (with-package-iterator (next (list "COMMON-LISP") :external)
+        (let ((entry (multiple-value-list (next))))
+          (list (first entry) (symbolp (second entry)))))
+      """)
+
+    assert package_result == [:t, :t]
+  end
+
+  test "with-accessors and with-slots expand object places" do
+    code = """
+    (progn
+      (defclass compatibility-person ()
+        ((name :accessor compatibility-person-name :initarg :name)))
+      (let ((person (make-instance 'compatibility-person :name "before")))
+        (with-accessors ((display-name compatibility-person-name)) person
+          (setf display-name "after"))
+        (with-slots ((stored-name name)) person
+          stored-name)))
+    """
+
+    assert ExLisp.eval(code) == "after"
+  end
+
+  test "symbol iteration macros bind symbols and return result forms" do
+    external_count =
+      ExLisp.eval("""
+      (let ((count 0))
+        (do-external-symbols (symbol "COMMON-LISP" count)
+          (when (symbolp symbol)
+            (incf count))))
+      """)
+
+    assert external_count > 0
+  end
+
+  test "reader preserving whitespace and delimited reads are available" do
+    assert ExLisp.eval("""
+           (with-input-from-string (s "abc ")
+             (list (read-preserving-whitespace s nil :eof)
+                   (read-char s nil :eof)))
+           """) == [:abc, ExLisp.Character.new(?\s)]
+
+    assert ExLisp.eval("""
+           (with-input-from-string (s ") 12")
+             (list (read-delimited-list #\\) s)
+                   (read s)))
+           """) == [[], 12]
+  end
+
+  test "pretty printer functions are exposed as Common Lisp calls" do
+    assert ExLisp.eval("(functionp (formatter \"~A\"))") == :t
+    assert ExLisp.eval("(functionp (pprint-dispatch '(1 2)))") == :t
+    assert match?(%ExLisp.PPrint{}, ExLisp.eval("(copy-pprint-dispatch nil)"))
   end
 end

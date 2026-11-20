@@ -115,14 +115,27 @@ defmodule ExLisp.Pathname do
 
   defp normalize_directory_arg(list) when is_list(list) do
     Enum.map(list, fn
-      :absolute -> :absolute
-      :relative -> :relative
-      :wild -> :wild
-      :wild_inferiors -> :wild_inferiors
-      :up -> :up
-      :back -> :back
+      :absolute ->
+        :absolute
+
+      :relative ->
+        :relative
+
+      :wild ->
+        :wild
+
+      :wild_inferiors ->
+        :wild_inferiors
+
+      :up ->
+        :up
+
+      :back ->
+        :back
+
       atom when is_atom(atom) ->
         str = Atom.to_string(atom) |> String.downcase()
+
         case str do
           "absolute" -> :absolute
           "relative" -> :relative
@@ -132,8 +145,12 @@ defmodule ExLisp.Pathname do
           "back" -> :back
           _ -> str
         end
-      str when is_binary(str) -> str
-      other -> to_string(other)
+
+      str when is_binary(str) ->
+        str
+
+      other ->
+        to_string(other)
     end)
   end
 
@@ -142,27 +159,27 @@ defmodule ExLisp.Pathname do
   # --- Component Accessors ---
 
   def pathname_host(p) do
-    (pathname(p)).host
+    pathname(p).host
   end
 
   def pathname_device(p) do
-    (pathname(p)).device
+    pathname(p).device
   end
 
   def pathname_directory(p) do
-    (pathname(p)).directory
+    pathname(p).directory
   end
 
   def pathname_name(p) do
-    (pathname(p)).name
+    pathname(p).name
   end
 
   def pathname_type(p) do
-    (pathname(p)).type
+    pathname(p).type
   end
 
   def pathname_version(p) do
-    (pathname(p)).version
+    pathname(p).version
   end
 
   # --- Namestrings ---
@@ -174,7 +191,20 @@ defmodule ExLisp.Pathname do
     path = pathname(p)
     dir_str = directory_namestring(path)
     file_str = file_namestring(path)
-    dir_str <> file_str
+
+    case path.host do
+      nil ->
+        dir_str <> file_str
+
+      :unspecific ->
+        dir_str <> file_str
+
+      host when is_binary(host) or is_atom(host) ->
+        "#{host}:#{logical_directory_namestring(path)}#{file_str}"
+
+      _ ->
+        dir_str <> file_str
+    end
   end
 
   @doc """
@@ -183,6 +213,14 @@ defmodule ExLisp.Pathname do
   def directory_namestring(p) do
     path = pathname(p)
 
+    if logical_host?(path.host) do
+      logical_directory_namestring(path)
+    else
+      physical_directory_namestring(path)
+    end
+  end
+
+  defp physical_directory_namestring(path) do
     case path.directory do
       nil ->
         ""
@@ -191,7 +229,7 @@ defmodule ExLisp.Pathname do
         ""
 
       [:absolute | dirs] ->
-        "/" <> Enum.map_join(dirs, "/", &dir_part_to_string/1) <> (if dirs != [], do: "/", else: "")
+        "/" <> Enum.map_join(dirs, "/", &dir_part_to_string/1) <> if dirs != [], do: "/", else: ""
 
       [:relative | dirs] ->
         if dirs == [] do
@@ -199,6 +237,25 @@ defmodule ExLisp.Pathname do
         else
           Enum.map_join(dirs, "/", &dir_part_to_string/1) <> "/"
         end
+
+      _ ->
+        ""
+    end
+  end
+
+  defp logical_directory_namestring(path) do
+    case path.directory do
+      nil ->
+        ""
+
+      :unspecific ->
+        ""
+
+      [:absolute | dirs] ->
+        Enum.map_join(dirs, ";", &dir_part_to_string/1) <> if(dirs != [], do: ";", else: "")
+
+      [:relative | dirs] ->
+        Enum.map_join(dirs, ";", &dir_part_to_string/1) <> if(dirs != [], do: ";", else: "")
 
       _ ->
         ""
@@ -244,7 +301,7 @@ defmodule ExLisp.Pathname do
   Returns the host namestring.
   """
   def host_namestring(p) do
-    case (pathname(p)).host do
+    case pathname(p).host do
       nil -> ""
       :unspecific -> ""
       h -> to_string(h)
@@ -325,23 +382,42 @@ defmodule ExLisp.Pathname do
         String.starts_with?(str, "#p\"") and String.ends_with?(str, "\"") ->
           String.slice(str, 3..-2//1)
 
-        String.starts_with?(str, "\"") and String.ends_with?(str, "\"") and String.length(str) >= 2 ->
+        String.starts_with?(str, "\"") and String.ends_with?(str, "\"") and
+            String.length(str) >= 2 ->
           String.slice(str, 1..-2//1)
 
         true ->
           str
       end
 
-    is_abs = String.starts_with?(clean_str, "/")
-    ends_with_slash = String.ends_with?(clean_str, "/") and clean_str != "/"
+    {logical_host, logical_rest} =
+      case String.split(clean_str, ":", parts: 2) do
+        [host, rest] when host != "" ->
+          if String.starts_with?(rest, "/"),
+            do: {nil, clean_str},
+            else: {String.upcase(host), rest}
+
+        _ ->
+          {nil, clean_str}
+      end
+
+    separator = if logical_host, do: ";", else: "/"
+    is_abs = logical_host != nil or String.starts_with?(logical_rest, "/")
+
+    ends_with_slash =
+      if logical_host do
+        String.ends_with?(logical_rest, ";")
+      else
+        String.ends_with?(logical_rest, "/") and logical_rest != "/"
+      end
 
     parts =
-      clean_str
-      |> String.split("/", trim: true)
+      logical_rest
+      |> String.split(separator, trim: true)
 
     {dir_parts, file_part} =
       cond do
-        clean_str == "/" ->
+        logical_rest == "/" ->
           {[], nil}
 
         ends_with_slash ->
@@ -384,7 +460,8 @@ defmodule ExLisp.Pathname do
 
         filename ->
           cond do
-            String.starts_with?(filename, ".") and not String.contains?(String.slice(filename, 1..-1//1), ".") ->
+            String.starts_with?(filename, ".") and
+                not String.contains?(String.slice(filename, 1..-1//1), ".") ->
               # e.g. ".gitignore" -> name = ".gitignore", type = nil
               {filename, nil}
 
@@ -402,7 +479,7 @@ defmodule ExLisp.Pathname do
       end
 
     %__MODULE__{
-      host: nil,
+      host: logical_host,
       device: nil,
       directory: directory,
       name: name,
@@ -410,6 +487,28 @@ defmodule ExLisp.Pathname do
       version: :newest
     }
   end
+
+  def logical_pathname(pathspec), do: ExLisp.LogicalPathname.logical_pathname(pathspec)
+  def logical_pathname_p(pathspec), do: ExLisp.LogicalPathname.logical_pathname_p(pathspec)
+
+  def logical_pathname_translations(host),
+    do: ExLisp.LogicalPathname.logical_pathname_translations(host)
+
+  def logical_pathname_translations(host, translations),
+    do: ExLisp.LogicalPathname.logical_pathname_translations(host, translations)
+
+  def load_logical_pathname_translations(host),
+    do: ExLisp.LogicalPathname.load_logical_pathname_translations(host)
+
+  def translate_logical_pathname(pathname),
+    do: ExLisp.LogicalPathname.translate_logical_pathname(pathname)
+
+  def translate_pathname(source, from, to),
+    do: ExLisp.LogicalPathname.translate_pathname(source, from, to)
+
+  defp logical_host?(nil), do: false
+  defp logical_host?(:unspecific), do: false
+  defp logical_host?(_), do: true
 
   @doc """
   Merges pathname with default_pathname according to ANSI CL merge-pathnames rules.
@@ -488,7 +587,7 @@ defmodule ExLisp.Pathname do
     expanded = Path.expand(str)
 
     if File.exists?(expanded) or File.dir?(expanded) do
-      pathname(expanded <> (if File.dir?(expanded), do: "/", else: ""))
+      pathname(expanded <> if(File.dir?(expanded), do: "/", else: ""))
     else
       raise "File error: #{str} does not exist"
     end
@@ -503,7 +602,7 @@ defmodule ExLisp.Pathname do
     expanded = Path.expand(str)
 
     if File.exists?(expanded) or File.dir?(expanded) do
-      pathname(expanded <> (if File.dir?(expanded), do: "/", else: ""))
+      pathname(expanded <> if(File.dir?(expanded), do: "/", else: ""))
     else
       nil
     end
@@ -626,21 +725,29 @@ defmodule ExLisp.Pathname do
     case field_key do
       nil ->
         (path.name == :wild or path.type == :wild or
-           (is_list(path.directory) and (:wild in path.directory or :wild_inferiors in path.directory)))
+           (is_list(path.directory) and
+              (:wild in path.directory or :wild_inferiors in path.directory)))
         |> ExLisp.Builtins.lisp_bool()
 
       k when k in [:name, :":name"] ->
         (path.name == :wild) |> ExLisp.Builtins.lisp_bool()
 
-      k when k in [:type, :":type"] -> (path.type == :wild) |> ExLisp.Builtins.lisp_bool()
+      k when k in [:type, :":type"] ->
+        (path.type == :wild) |> ExLisp.Builtins.lisp_bool()
 
       k when k in [:directory, :":directory"] ->
-        (is_list(path.directory) and (:wild in path.directory or :wild_inferiors in path.directory))
+        (is_list(path.directory) and
+           (:wild in path.directory or :wild_inferiors in path.directory))
         |> ExLisp.Builtins.lisp_bool()
 
-      k when k in [:host, :":host"] -> (path.host == :wild) |> ExLisp.Builtins.lisp_bool()
-      k when k in [:device, :":device"] -> (path.device == :wild) |> ExLisp.Builtins.lisp_bool()
-      _ -> nil
+      k when k in [:host, :":host"] ->
+        (path.host == :wild) |> ExLisp.Builtins.lisp_bool()
+
+      k when k in [:device, :":device"] ->
+        (path.device == :wild) |> ExLisp.Builtins.lisp_bool()
+
+      _ ->
+        nil
     end
   end
 

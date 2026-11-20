@@ -1340,6 +1340,42 @@ defmodule LispBeam do
       when name in [:symbol_macrolet, :"symbol-macrolet", :_cl_symbol_macrolet_] ->
         compile_symbol_macrolet(args, local_env)
 
+      name when name in [:with_accessors, :"with-accessors", :_cl_with_accessors_] ->
+        compile_with_accessors(args, local_env)
+
+      name when name in [:with_slots, :"with-slots", :_cl_with_slots_] ->
+        compile_with_slots(args, local_env)
+
+      name
+      when name in [
+             :with_hash_table_iterator,
+             :"with-hash-table-iterator",
+             :_cl_with_hash_table_iterator_
+           ] ->
+        compile_with_iterator(args, :hash_table_iterator, local_env)
+
+      name
+      when name in [
+             :with_package_iterator,
+             :"with-package-iterator",
+             :_cl_with_package_iterator_
+           ] ->
+        compile_with_package_iterator(args, local_env)
+
+      name when name in [:do_symbols, :_cl_do_symbols_, :"do-symbols"] ->
+        compile_do_symbols(args, :do_symbols, local_env)
+
+      name
+      when name in [
+             :do_external_symbols,
+             :_cl_do_external_symbols_,
+             :"do-external-symbols"
+           ] ->
+        compile_do_symbols(args, :do_external_symbols, local_env)
+
+      name when name in [:do_all_symbols, :_cl_do_all_symbols_, :"do-all-symbols"] ->
+        compile_do_symbols(args, :do_all_symbols, local_env)
+
       name when name in [:destructuring_bind, :"destructuring-bind", :_cl_destructuring_bind_] ->
         compile_destructuring_bind(args, local_env)
 
@@ -2440,6 +2476,199 @@ defmodule LispBeam do
   end
 
   def compile_symbol_macrolet([], _local_env), do: {:atom, 1, nil}
+
+  def compile_with_accessors([bindings_node, instance_node | body], local_env) do
+    temp = {:id, 1, ["__with_accessors_#{unique_id()}"]}
+
+    macros =
+      bindings_node
+      |> extract_bindings()
+      |> Enum.map(fn {variable, accessor_node} ->
+        {:list, 1,
+         [
+           {:id, 1, [Atom.to_string(variable)]},
+           {:list, 1, [accessor_node, temp]}
+         ]}
+      end)
+
+    compile_expr(
+      {:list, 1,
+       [
+         {:id, 1, ["let"]},
+         {:list, 1, [{:list, 1, [temp, instance_node]}]},
+         {:list, 1, [{:id, 1, ["symbol-macrolet"]}, {:list, 1, macros} | body]}
+       ]},
+      local_env
+    )
+  end
+
+  def compile_with_accessors(_, _), do: {:atom, 1, nil}
+
+  def compile_with_slots([bindings_node, instance_node | body], local_env) do
+    temp = {:id, 1, ["__with_slots_#{unique_id()}"]}
+
+    macros =
+      compile_slot_bindings(bindings_node)
+      |> Enum.map(fn {variable, slot} ->
+        {:list, 1,
+         [
+           {:id, 1, [Atom.to_string(variable)]},
+           {:list, 1,
+            [
+              {:id, 1, ["slot-value"]},
+              temp,
+              {:list, 1, [{:id, 1, ["quote"]}, {:id, 1, [Atom.to_string(slot)]}]}
+            ]}
+         ]}
+      end)
+
+    compile_expr(
+      {:list, 1,
+       [
+         {:id, 1, ["let"]},
+         {:list, 1, [{:list, 1, [temp, instance_node]}]},
+         {:list, 1, [{:id, 1, ["symbol-macrolet"]}, {:list, 1, macros} | body]}
+       ]},
+      local_env
+    )
+  end
+
+  def compile_with_slots(_, _), do: {:atom, 1, nil}
+
+  def compile_with_iterator([binding_node | body], helper, local_env) do
+    case binding_node do
+      {:list, _, [name_node, input_node]} ->
+        iterator = {:id, 1, ["__iterator_#{unique_id()}"]}
+
+        compile_expr(
+          {:list, 1,
+           [
+             {:id, 1, ["let"]},
+             {:list, 1,
+              [
+                {:list, 1,
+                 [
+                   iterator,
+                   {:list, 1, [{:id, 1, [Atom.to_string(helper)]}, input_node]}
+                 ]}
+              ]},
+             {:list, 1,
+              [
+                {:id, 1, ["flet"]},
+                {:list, 1,
+                 [
+                   {:list, 1,
+                    [
+                      name_node,
+                      {:list, 1, []},
+                      {:list, 1, [{:id, 1, ["funcall"]}, iterator]}
+                    ]}
+                 ]}
+                | body
+              ]}
+           ]},
+          local_env
+        )
+
+      _ ->
+        {:atom, 1, nil}
+    end
+  end
+
+  def compile_with_package_iterator([binding_node | body], local_env) do
+    case binding_node do
+      {:list, _, [name_node, packages_node | types]} ->
+        iterator = {:id, 1, ["__package_iterator_#{unique_id()}"]}
+        iterator_args =
+          if types == [] do
+            [packages_node]
+          else
+            [packages_node, {:list, 1, [{:id, 1, ["list"]} | types]}]
+          end
+
+        compile_expr(
+          {:list, 1,
+           [
+             {:id, 1, ["let"]},
+             {:list, 1,
+              [
+                {:list, 1,
+                 [
+                   iterator,
+                   {:list, 1,
+                    [{:id, 1, ["package-iterator"]} | iterator_args]}
+                 ]}
+              ]},
+             {:list, 1,
+              [
+                {:id, 1, ["flet"]},
+                {:list, 1,
+                 [
+                   {:list, 1,
+                    [
+                      name_node,
+                      {:list, 1, []},
+                      {:list, 1, [{:id, 1, ["funcall"]}, iterator]}
+                    ]}
+                 ]}
+                | body
+              ]}
+           ]},
+          local_env
+        )
+
+      _ ->
+        {:atom, 1, nil}
+    end
+  end
+
+  def compile_do_symbols([binding_node | body], helper, local_env) do
+    case binding_node do
+      {:list, _, [variable | rest]} ->
+        {package_node, result_node} =
+          case rest do
+            [package, result] -> {package, result}
+            [package] -> {package, {:lit, nil}}
+            [] -> {{:lit, nil}, {:lit, nil}}
+            _ -> {{:lit, nil}, {:lit, nil}}
+          end
+
+        callback =
+          {:list, 1,
+           [
+             {:id, 1, ["lambda"]},
+             {:list, 1, [variable]},
+             {:list, 1, [{:id, 1, ["progn"]} | body]}
+           ]}
+
+        args =
+          case helper do
+            :do_all_symbols -> [callback, result_node]
+            _ -> [package_node, callback, result_node]
+          end
+
+        compile_expr({:list, 1, [{:id, 1, [Atom.to_string(helper)]} | args]}, local_env)
+
+      _ ->
+        {:atom, 1, nil}
+    end
+  end
+
+  defp compile_slot_bindings({:list, _, elements}),
+    do: Enum.map(elements, &compile_slot_binding/1)
+
+  defp compile_slot_bindings(elements) when is_list(elements),
+    do: Enum.map(elements, &compile_slot_binding/1)
+
+  defp compile_slot_bindings(_), do: []
+
+  defp compile_slot_binding({:list, _, [variable, slot]}),
+    do: {extract_symbol_name(variable), extract_symbol_name(slot)}
+
+  defp compile_slot_binding(variable) do
+    symbol = extract_symbol_name(variable)
+    {symbol, symbol}
+  end
 
   defp substitute_symbol_macros(ast, macro_map) when map_size(macro_map) == 0, do: ast
 

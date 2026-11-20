@@ -8,9 +8,10 @@ defmodule ExLisp.Stream do
   - broadcast-stream-streams, concatenated-stream-streams, two-way-stream-input-stream, two-way-stream-output-stream,
     echo-stream-input-stream, echo-stream-output-stream, synonym-stream-symbol
   - open, file-length, file-position
-  - read-char, unread-char, peek-char, read-line, read-sequence
-  - write-char, write-string, write-line, write-sequence
+  - read-char, read-char-no-hang, read-byte, unread-char, peek-char, read-line, read-sequence
+  - write-char, write-byte, write-string, write-line, write-sequence
   - terpri, fresh_line, finish-output, force-output, clear-output, listen, clear-input
+  - file-string-length, stream-external-format
   """
 
   defstruct id: nil,
@@ -24,7 +25,16 @@ defmodule ExLisp.Stream do
 
   @type t :: %__MODULE__{
           id: any(),
-          type: :file | :string_input | :string_output | :broadcast | :concatenated | :two_way | :echo | :synonym | :standard,
+          type:
+            :file
+            | :string_input
+            | :string_output
+            | :broadcast
+            | :concatenated
+            | :two_way
+            | :echo
+            | :synonym
+            | :standard,
           device: any(),
           mode: :input | :output | :io,
           element_type: any(),
@@ -53,20 +63,24 @@ defmodule ExLisp.Stream do
   def open_stream_p(_), do: nil
 
   def input_stream_p(%__MODULE__{mode: mode, open: true}) when mode in [:input, :io], do: :t
+
   def input_stream_p(%__MODULE__{type: :synonym, extra: %{symbol: sym}}) do
     target = resolve_synonym(sym)
     input_stream_p(target)
   end
+
   def input_stream_p(pid) when is_pid(pid), do: :t
   def input_stream_p(:standard_io), do: :t
   def input_stream_p([s]), do: input_stream_p(s)
   def input_stream_p(_), do: nil
 
   def output_stream_p(%__MODULE__{mode: mode, open: true}) when mode in [:output, :io], do: :t
+
   def output_stream_p(%__MODULE__{type: :synonym, extra: %{symbol: sym}}) do
     target = resolve_synonym(sym)
     output_stream_p(target)
   end
+
   def output_stream_p(pid) when is_pid(pid), do: :t
   def output_stream_p(:standard_io), do: :t
   def output_stream_p([s]), do: output_stream_p(s)
@@ -120,6 +134,7 @@ defmodule ExLisp.Stream do
         _, _ -> :ok
       end
     end
+
     :t
   end
 
@@ -217,7 +232,9 @@ defmodule ExLisp.Stream do
 
   def make_broadcast_stream(single_stream), do: make_broadcast_stream([single_stream])
 
-  def broadcast_stream_streams(%__MODULE__{type: :broadcast, extra: %{streams: streams}}), do: streams
+  def broadcast_stream_streams(%__MODULE__{type: :broadcast, extra: %{streams: streams}}),
+    do: streams
+
   def broadcast_stream_streams([s]), do: broadcast_stream_streams(s)
   def broadcast_stream_streams(_), do: []
 
@@ -237,7 +254,9 @@ defmodule ExLisp.Stream do
 
   def make_concatenated_stream(single_stream), do: make_concatenated_stream([single_stream])
 
-  def concatenated_stream_streams(%__MODULE__{type: :concatenated, extra: %{streams: streams}}), do: streams
+  def concatenated_stream_streams(%__MODULE__{type: :concatenated, extra: %{streams: streams}}),
+    do: streams
+
   def concatenated_stream_streams([s]), do: concatenated_stream_streams(s)
   def concatenated_stream_streams(_), do: []
 
@@ -257,7 +276,9 @@ defmodule ExLisp.Stream do
   def two_way_stream_input_stream([s]), do: two_way_stream_input_stream(s)
   def two_way_stream_input_stream(_), do: nil
 
-  def two_way_stream_output_stream(%__MODULE__{type: :two_way, extra: %{output: out_s}}), do: out_s
+  def two_way_stream_output_stream(%__MODULE__{type: :two_way, extra: %{output: out_s}}),
+    do: out_s
+
   def two_way_stream_output_stream([s]), do: two_way_stream_output_stream(s)
   def two_way_stream_output_stream(_), do: nil
 
@@ -320,6 +341,7 @@ defmodule ExLisp.Stream do
 
     direction = Keyword.get(parsed_opts, :direction, :input)
     element_type = Keyword.get(parsed_opts, :element_type, :character)
+    external_format = Keyword.get(parsed_opts, :external_format, :default)
     if_exists = Keyword.get(parsed_opts, :if_exists, :supersede)
     if_does_not_exist = Keyword.get(parsed_opts, :if_does_not_exist, :error)
 
@@ -330,14 +352,25 @@ defmodule ExLisp.Stream do
 
         :output ->
           case if_exists do
-            :append -> [:append, :utf8]
-            :supersede -> [:write, :utf8]
-            :overwrite -> [:write, :utf8]
+            :append ->
+              [:append, :utf8]
+
+            :supersede ->
+              [:write, :utf8]
+
+            :overwrite ->
+              [:write, :utf8]
+
             :error ->
-              if File.exists?(path_str), do: raise("File already exists: #{path_str}"), else: [:write, :utf8]
+              if File.exists?(path_str),
+                do: raise("File already exists: #{path_str}"),
+                else: [:write, :utf8]
+
             nil ->
               if File.exists?(path_str), do: :abort, else: [:write, :utf8]
-            _ -> [:write, :utf8]
+
+            _ ->
+              [:write, :utf8]
           end
 
         :io ->
@@ -364,9 +397,11 @@ defmodule ExLisp.Stream do
 
         not file_exists and direction == :input and if_does_not_exist == :create ->
           File.touch(path_str)
+
           case File.open(path_str, modes) do
             {:ok, pid} ->
-              build_file_stream(pid, path_str, direction, element_type)
+              build_file_stream(pid, path_str, direction, element_type, external_format)
+
             {:error, reason} ->
               raise "Error opening file #{path_str}: #{inspect(reason)}"
           end
@@ -374,7 +409,7 @@ defmodule ExLisp.Stream do
         true ->
           case File.open(path_str, modes) do
             {:ok, pid} ->
-              build_file_stream(pid, path_str, direction, element_type)
+              build_file_stream(pid, path_str, direction, element_type, external_format)
 
             {:error, reason} ->
               if if_does_not_exist == nil do
@@ -389,7 +424,7 @@ defmodule ExLisp.Stream do
 
   def open(filespec, other), do: open(filespec, [other])
 
-  defp build_file_stream(pid, path_str, direction, element_type) do
+  defp build_file_stream(pid, path_str, direction, element_type, external_format) do
     %__MODULE__{
       id: System.unique_integer([:positive, :monotonic]),
       type: :file,
@@ -397,7 +432,7 @@ defmodule ExLisp.Stream do
       mode: direction,
       element_type: element_type,
       open: true,
-      extra: %{path: path_str}
+      extra: %{path: path_str, external_format: external_format}
     }
   end
 
@@ -432,6 +467,51 @@ defmodule ExLisp.Stream do
 
   def file_length([s]), do: file_length(s)
   def file_length(_), do: nil
+
+  @doc "Returns the number of file-position units occupied by `string` on `stream`."
+  def file_string_length(stream, string, opts \\ []) do
+    text = if is_binary(string), do: string, else: ExLisp.Builtins.to_string_val(string)
+    opt_list = if is_list(opts), do: opts, else: [opts]
+    parsed_opts = ExLisp.Builtins.parse_lisp_keywords(opt_list)
+    start_idx = Keyword.get(parsed_opts, :start, 0) || 0
+    end_idx = Keyword.get(parsed_opts, :end, nil)
+
+    slice =
+      if is_integer(end_idx),
+        do: String.slice(text, start_idx, end_idx - start_idx),
+        else: String.slice(text, start_idx..-1//1)
+
+    case stream_external_format(stream) do
+      format when format in [:utf_8, :"utf-8", :default, :utf8] -> byte_size(slice)
+      _ -> byte_size(slice)
+    end
+  end
+
+  @doc "Returns the external format associated with a stream."
+  def stream_external_format(stream \\ nil) do
+    case resolve_stream(stream) do
+      %__MODULE__{extra: %{external_format: format}} ->
+        normalize_external_format(format)
+
+      %__MODULE__{type: :string_input} ->
+        :utf_8
+
+      %__MODULE__{type: :string_output} ->
+        :utf_8
+
+      %__MODULE__{type: :two_way, extra: %{output: output}} ->
+        stream_external_format(output)
+
+      %__MODULE__{type: :echo, extra: %{input: input}} ->
+        stream_external_format(input)
+
+      %__MODULE__{type: :broadcast, extra: %{streams: streams}} ->
+        normalize_external_format(Enum.map(streams, &stream_external_format/1))
+
+      _ ->
+        :utf_8
+    end
+  end
 
   def file_position(stream, pos_spec \\ nil)
 
@@ -532,8 +612,111 @@ defmodule ExLisp.Stream do
     end
   end
 
+  @doc """
+  Reads and returns a character if input is immediately available.
+
+  Interactive terminal input that is not already buffered is not polled, avoiding
+  an accidental blocking read.
+  """
+  def read_char_no_hang(
+        stream \\ nil,
+        eof_error_p \\ :t,
+        eof_value \\ nil,
+        recursive_p \\ nil
+      ) do
+    s = resolve_input_stream(stream)
+
+    case s do
+      %__MODULE__{type: :concatenated, extra: %{streams: []}} ->
+        handle_eof(eof_error_p, eof_value)
+
+      %__MODULE__{type: :concatenated, extra: %{streams: [head | tail]}} = concat ->
+        case read_char_no_hang(head, nil, :eof) do
+          :eof -> read_char_no_hang(%{concat | extra: %{streams: tail}}, eof_error_p, eof_value)
+          value -> value
+        end
+
+      %__MODULE__{type: :two_way, extra: %{input: input}} ->
+        read_char_no_hang(input, eof_error_p, eof_value, recursive_p)
+
+      %__MODULE__{type: :echo, extra: %{input: input, output: output}} ->
+        case read_char_no_hang(input, eof_error_p, eof_value, recursive_p) do
+          %ExLisp.Character{} = char ->
+            write_char(char, output)
+            char
+
+          other ->
+            other
+        end
+
+      %__MODULE__{type: :string_input} ->
+        read_char(s, eof_error_p, eof_value, recursive_p)
+
+      %__MODULE__{type: :file, device: pid} when is_pid(pid) ->
+        if immediately_available?(s),
+          do: read_char(s, eof_error_p, eof_value, recursive_p),
+          else: nil
+
+      pid when pid == :stdio ->
+        nil
+
+      _ when s == :stdio ->
+        nil
+
+      pid when is_pid(pid) ->
+        if Process.alive?(pid),
+          do: read_char(s, eof_error_p, eof_value, recursive_p),
+          else: nil
+
+      _ ->
+        nil
+    end
+  end
+
+  @doc "Reads one octet from a binary stream."
+  def read_byte(stream \\ nil, eof_error_p \\ :t, eof_value \\ nil) do
+    s = resolve_input_stream(stream)
+
+    case s do
+      %__MODULE__{type: :concatenated, extra: %{streams: []}} ->
+        handle_eof(eof_error_p, eof_value)
+
+      %__MODULE__{type: :concatenated, extra: %{streams: [head | tail]}} = concat ->
+        case read_byte(head, nil, :eof) do
+          :eof -> read_byte(%{concat | extra: %{streams: tail}}, eof_error_p, eof_value)
+          byte -> byte
+        end
+
+      %__MODULE__{type: :two_way, extra: %{input: input}} ->
+        read_byte(input, eof_error_p, eof_value)
+
+      %__MODULE__{type: :echo, extra: %{input: input, output: output}} ->
+        case read_byte(input, eof_error_p, eof_value) do
+          byte when is_integer(byte) ->
+            write_byte(byte, output)
+            byte
+
+          other ->
+            other
+        end
+
+      %__MODULE__{device: pid} when is_pid(pid) ->
+        read_byte_from_pid(pid, s, eof_error_p, eof_value)
+
+      pid when is_pid(pid) ->
+        read_byte_from_pid(pid, pid, eof_error_p, eof_value)
+
+      :stdio ->
+        read_byte_from_pid(:stdio, :stdio, eof_error_p, eof_value)
+
+      _ ->
+        handle_eof(eof_error_p, eof_value)
+    end
+  end
+
   defp read_char_from_pid(pid, s_ref, eof_error_p, eof_value) do
     key = {:exlisp_stream_unread, stream_id(s_ref)}
+
     case Process.get(key, []) do
       [c | rest] ->
         Process.put(key, rest)
@@ -559,6 +742,33 @@ defmodule ExLisp.Stream do
     end
   end
 
+  defp read_byte_from_pid(pid, s_ref, eof_error_p, eof_value) do
+    key = {:exlisp_stream_unread_byte, stream_id(s_ref)}
+
+    case Process.get(key, []) do
+      [byte | rest] ->
+        Process.put(key, rest)
+        byte
+
+      [] ->
+        result =
+          try do
+            IO.binread(pid, 1)
+          rescue
+            _ -> {:error, :not_binary_io}
+          catch
+            _, _ -> {:error, :not_binary_io}
+          end
+
+        case result do
+          <<byte>> -> byte
+          :eof -> handle_eof(eof_error_p, eof_value)
+          {:error, _} -> handle_eof(eof_error_p, eof_value)
+          _ -> handle_eof(eof_error_p, eof_value)
+        end
+    end
+  end
+
   @doc """
   Pushes character back to input stream.
   """
@@ -574,7 +784,13 @@ defmodule ExLisp.Stream do
   @doc """
   Peeks at next character without consuming it.
   """
-  def peek_char(_peek_type \\ nil, stream \\ nil, eof_error_p \\ :t, eof_value \\ nil, _rec \\ nil) do
+  def peek_char(
+        _peek_type \\ nil,
+        stream \\ nil,
+        eof_error_p \\ :t,
+        eof_value \\ nil,
+        _rec \\ nil
+      ) do
     s = resolve_input_stream(stream)
 
     case read_char(s, eof_error_p, eof_value) do
@@ -756,6 +972,19 @@ defmodule ExLisp.Stream do
     char
   end
 
+  @doc "Writes one octet to a binary stream and returns it."
+  def write_byte(byte, stream \\ nil)
+
+  def write_byte(byte, stream) when is_integer(byte) and byte in 0..255 do
+    s = resolve_output_stream(stream)
+    do_write_binary(s, <<byte>>)
+    byte
+  end
+
+  def write_byte(byte, _stream) do
+    raise ArgumentError, "BYTE must be an octet, got: #{inspect(byte)}"
+  end
+
   def write_string(string, stream \\ nil, opts \\ []) do
     string = unwrap_mv(string)
 
@@ -802,11 +1031,18 @@ defmodule ExLisp.Stream do
 
     elements =
       cond do
-        is_list(sequence) -> sequence
+        is_list(sequence) ->
+          sequence
+
         match?({:array, [_], _}, sequence) ->
-          for i <- 0..(ExLisp.Builtins.length(sequence) - 1), do: ExLisp.Builtins.aref(sequence, i)
-        is_binary(sequence) -> String.to_charlist(sequence)
-        true -> []
+          for i <- 0..(ExLisp.Builtins.length(sequence) - 1),
+              do: ExLisp.Builtins.aref(sequence, i)
+
+        is_binary(sequence) ->
+          String.to_charlist(sequence)
+
+        true ->
+          []
       end
 
     total_len = length(elements)
@@ -842,23 +1078,83 @@ defmodule ExLisp.Stream do
     end
   end
 
-  def finish_output(_stream \\ nil), do: nil
-  def force_output(_stream \\ nil), do: nil
-  def clear_output(_stream \\ nil), do: nil
-  def listen(_stream \\ nil), do: :t
-  def clear_input(_stream \\ nil), do: nil
+  def finish_output(stream \\ nil) do
+    flush_output(resolve_output_stream(stream), true)
+    nil
+  end
+
+  def force_output(stream \\ nil) do
+    flush_output(resolve_output_stream(stream), false)
+    nil
+  end
+
+  def clear_output(stream \\ nil) do
+    # BEAM IO devices do not expose a portable "discard pending writes" operation.
+    # Synchronizing is the safe behavior; no successful output is lost.
+    flush_output(resolve_output_stream(stream), false)
+    nil
+  end
+
+  def listen(stream \\ nil) do
+    s = resolve_input_stream(stream)
+    key = {:exlisp_stream_unread, stream_id(s)}
+    byte_key = {:exlisp_stream_unread_byte, stream_id(s)}
+
+    cond do
+      Process.get(key, []) != [] ->
+        :t
+
+      Process.get(byte_key, []) != [] ->
+        :t
+
+      true ->
+        case read_char_no_hang(s, nil, :eof) do
+          nil ->
+            nil
+
+          :eof ->
+            nil
+
+          char ->
+            unread_char(char, s)
+            :t
+        end
+    end
+  end
+
+  def clear_input(stream \\ nil) do
+    s = resolve_input_stream(stream)
+    Process.delete({:exlisp_stream_unread, stream_id(s)})
+    Process.delete({:exlisp_stream_unread_byte, stream_id(s)})
+    clear_buffered_input(s)
+    nil
+  end
 
   # --- Internal Helpers ---
 
   defp resolve_input_stream(nil), do: resolve_synonym(:":*standard-input*:")
   defp resolve_input_stream(:t), do: resolve_synonym(:":*terminal-io*:")
-  defp resolve_input_stream(%__MODULE__{type: :synonym, extra: %{symbol: sym}}), do: resolve_synonym(sym)
+
+  defp resolve_input_stream(%__MODULE__{type: :synonym, extra: %{symbol: sym}}),
+    do: resolve_synonym(sym)
+
   defp resolve_input_stream(stream), do: stream
 
   defp resolve_output_stream(nil), do: resolve_synonym(:":*standard-output*:")
   defp resolve_output_stream(:t), do: resolve_synonym(:":*terminal-io*:")
-  defp resolve_output_stream(%__MODULE__{type: :synonym, extra: %{symbol: sym}}), do: resolve_synonym(sym)
+
+  defp resolve_output_stream(%__MODULE__{type: :synonym, extra: %{symbol: sym}}),
+    do: resolve_synonym(sym)
+
   defp resolve_output_stream(stream), do: stream
+
+  defp resolve_stream(nil), do: resolve_synonym(:":*standard-input*:")
+  defp resolve_stream(:t), do: resolve_synonym(:":*terminal-io*:")
+
+  defp resolve_stream(%__MODULE__{type: :synonym, extra: %{symbol: sym}}),
+    do: resolve_synonym(sym)
+
+  defp resolve_stream(stream), do: stream
 
   defp resolve_synonym(sym) do
     norm_sym =
@@ -902,6 +1198,109 @@ defmodule ExLisp.Stream do
     end
   end
 
+  defp do_write_binary(s, bytes) do
+    case s do
+      %__MODULE__{type: :broadcast, extra: %{streams: streams}} ->
+        Enum.each(streams, &do_write_binary(&1, bytes))
+
+      %__MODULE__{type: :two_way, extra: %{output: output}} ->
+        do_write_binary(output, bytes)
+
+      %__MODULE__{device: pid} when is_pid(pid) ->
+        IO.binwrite(pid, bytes)
+
+      pid when is_pid(pid) or pid in [:stdio, :stderr] ->
+        IO.binwrite(pid, bytes)
+
+      _ ->
+        IO.binwrite(bytes)
+    end
+  end
+
+  defp flush_output(%__MODULE__{type: :broadcast, extra: %{streams: streams}}, synchronous) do
+    Enum.each(streams, &flush_output(&1, synchronous))
+  end
+
+  defp flush_output(%__MODULE__{type: :two_way, extra: %{output: output}}, synchronous),
+    do: flush_output(output, synchronous)
+
+  defp flush_output(%__MODULE__{type: type, device: pid}, synchronous)
+       when type not in [:string_input, :string_output] and is_pid(pid) do
+    if synchronous, do: sync_file(pid)
+    IO.write(pid, "")
+  end
+
+  defp flush_output(pid, synchronous) when is_pid(pid) do
+    if synchronous, do: sync_file(pid)
+    IO.write(pid, "")
+  end
+
+  defp flush_output(device, _synchronous) when device in [:stdio, :stderr],
+    do: IO.write(device, "")
+
+  defp flush_output(_stream, _synchronous), do: :ok
+
+  defp sync_file(pid) do
+    case :file.sync(pid) do
+      :ok -> :ok
+      _ -> :ok
+    end
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
+  end
+
+  defp immediately_available?(%__MODULE__{type: :string_input}), do: true
+
+  defp immediately_available?(%__MODULE__{type: :file, device: pid}) when is_pid(pid) do
+    case :file.position(pid, :cur) do
+      {:ok, pos} ->
+        case :file.pread(pid, pos, 1) do
+          {:ok, _} -> true
+          :eof -> true
+          _ -> false
+        end
+
+      _ ->
+        false
+    end
+  end
+
+  defp immediately_available?(_), do: false
+
+  defp normalize_external_format(:default), do: :utf_8
+  defp normalize_external_format(:utf8), do: :utf_8
+  defp normalize_external_format(:"utf-8"), do: :utf_8
+  defp normalize_external_format([format]), do: normalize_external_format(format)
+
+  defp normalize_external_format(formats) when is_list(formats),
+    do: Enum.map(formats, &normalize_external_format/1)
+
+  defp normalize_external_format(format), do: format
+
+  defp clear_buffered_input(%__MODULE__{type: :string_input, device: pid}) when is_pid(pid) do
+    try do
+      IO.binread(pid, :all)
+    rescue
+      _ -> :ok
+    catch
+      _, _ -> :ok
+    end
+  end
+
+  defp clear_buffered_input(%__MODULE__{
+         type: type,
+         extra: %{input: input}
+       })
+       when type in [:two_way, :echo],
+       do: clear_buffered_input(input)
+
+  defp clear_buffered_input(%__MODULE__{type: :concatenated, extra: %{streams: streams}}),
+    do: Enum.each(streams, &clear_buffered_input/1)
+
+  defp clear_buffered_input(_), do: :ok
+
   defp handle_eof(:t, _eof_val), do: raise("End of file on stream")
   defp handle_eof(nil, eof_val), do: eof_val
   defp handle_eof(false, eof_val), do: eof_val
@@ -920,5 +1319,4 @@ defmodule ExLisp.Stream do
   end
 
   defp set_sequence_elt(_seq, _index, _val), do: :ok
-
 end

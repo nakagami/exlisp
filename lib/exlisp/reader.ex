@@ -13,6 +13,51 @@ defmodule ExLisp.Reader do
     scan(chars, [], false, false, 0, [], [])
   end
 
+  @doc """
+  Reads objects up to the specified terminating character.
+  """
+  def read_delimited_list(char, stream \\ nil, recursive_p \\ nil) do
+    delimiter = normalize_delimiter(char)
+    resolved = if is_nil(stream), do: :standard_io, else: stream
+
+    do_read_delimited(resolved, delimiter, recursive_p, [])
+  end
+
+  @doc """
+  Reads one expression without consuming trailing whitespace.
+  """
+  def read_preserving_whitespace(
+        stream \\ nil,
+        eof_error_p \\ :t,
+        eof_value \\ nil,
+        _recursive_p \\ nil
+      ) do
+    ExLisp.Builtins.read([stream, eof_error_p, eof_value])
+  end
+
+  defp do_read_delimited(stream, delimiter, recursive_p, acc) do
+    case ExLisp.Stream.peek_char(nil, stream, nil, :eof, recursive_p) do
+      %ExLisp.Character{code: ^delimiter} ->
+        ExLisp.Stream.read_char(stream, nil, nil, recursive_p)
+        Enum.reverse(acc)
+
+      ^delimiter ->
+        ExLisp.Stream.read_char(stream, nil, nil, recursive_p)
+        Enum.reverse(acc)
+
+      :eof ->
+        raise RuntimeError, "Unterminated delimited read"
+
+      _ ->
+        value = ExLisp.Builtins.read([stream, nil, :eof])
+        do_read_delimited(stream, delimiter, recursive_p, [value | acc])
+    end
+  end
+
+  defp normalize_delimiter(%ExLisp.Character{code: code}), do: code
+  defp normalize_delimiter(code) when is_integer(code), do: code
+  defp normalize_delimiter(<<code::utf8>>), do: code
+
   defp scan([], _stack, _in_str, _in_cmt, _block_cmt_depth, current, acc) do
     chunk = current |> Enum.reverse() |> List.to_string() |> String.trim()
     if chunk != "", do: Enum.reverse([chunk | acc]), else: Enum.reverse(acc)

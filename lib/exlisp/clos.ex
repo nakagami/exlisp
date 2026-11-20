@@ -70,6 +70,14 @@ defmodule ExLisp.CLOS do
     end)
   end
 
+  @doc "Returns true when object is a registered CLOS class."
+  def classp(%{name: name}), do: lisp_bool(find_class(name) != nil)
+
+  def classp(name) when is_atom(name) or is_binary(name),
+    do: lisp_bool(find_class(name) != nil)
+
+  def classp(_), do: nil
+
   # --- CPL (Class Precedence List) Computation ---
 
   @doc """
@@ -180,9 +188,75 @@ defmodule ExLisp.CLOS do
     end
   end
 
+  def find_class(name, errorp) do
+    case find_class(name) do
+      nil when errorp in [:t, true] ->
+        raise ArgumentError, "No class named #{inspect(name)}"
+
+      class ->
+        class
+    end
+  end
+
   def class_name(%{name: name}), do: name
   def class_name(name) when is_atom(name), do: name
   def class_name(_), do: nil
+
+  def class_precedence_list(class) do
+    class
+    |> class_object()
+    |> Map.fetch!(:cpl)
+    |> Enum.map(&find_class/1)
+  end
+
+  def class_direct_superclasses(class) do
+    class_object(class).direct_supers
+    |> Enum.map(&find_class/1)
+  end
+
+  def class_direct_subclasses(class) do
+    name = class_name(class_object(class))
+
+    :persistent_term.get()
+    |> Enum.flat_map(fn
+      {{:exlisp_clos_class, candidate}, %{direct_supers: supers}} ->
+        if name in supers, do: [candidate], else: []
+
+      _ ->
+        []
+    end)
+    |> Enum.map(&find_class/1)
+  end
+
+  def class_direct_slots(class),
+    do: class_object(class) |> Map.get(:direct_slots, %{}) |> Map.values()
+
+  def class_slots(class), do: class_object(class) |> Map.fetch!(:slots) |> Map.values()
+  def slot_definition_name(%{name: name}), do: name
+  def slot_definition_name(other), do: other
+  def slot_definition_initargs(%{initargs: args}), do: Enum.reverse(args)
+  def slot_definition_initform(%{initform_ast: form}), do: form
+  def slot_definition_readers(%{readers: readers}), do: Enum.reverse(readers)
+  def slot_definition_writers(%{writers: writers}), do: Enum.reverse(writers)
+  def slot_definition_type(%{type: type}), do: type
+  def slot_definition_allocation(%{allocation: allocation}), do: allocation
+  def slot_definition_initfunction(%{initform_fun: initfun}), do: initfun
+
+  def class_finalized_p(class), do: lisp_bool(class_object(class).cpl != [])
+  def class_prototype(class), do: allocate_instance(class)
+  def finalize_inheritance(class), do: class_object(class)
+
+  def ensure_class(name, supers \\ [], slots \\ [], options \\ []) do
+    register_class(name, supers, slots, options)
+  end
+
+  defp class_object(%{name: name} = class) do
+    find_class(name) || class
+  end
+
+  defp class_object(name) do
+    find_class(name) || raise(ArgumentError, "No class named #{inspect(name)}")
+  end
 
   defp parse_slots_spec(slots_spec) do
     Enum.map(slots_spec, fn
@@ -431,6 +505,7 @@ defmodule ExLisp.CLOS do
     init_map = parse_initargs_kv(initargs)
 
     tid = :ets.new(:lisp_instance, [:set, :public])
+    :ets.insert(tid, {:"$clos_class", class_name})
 
     Enum.each(slots, fn {slot_name, slot_def} ->
       # Check if any initarg matches
@@ -479,6 +554,280 @@ defmodule ExLisp.CLOS do
     end
 
     inst
+  end
+
+  @doc """
+  Allocates an instance without performing initialization.
+  """
+  def allocate_instance(class) do
+    class_name =
+      case class_object(class) do
+        %{name: name} -> name
+      end
+
+    tid = :ets.new(:lisp_instance, [:set, :public])
+    :ets.insert(tid, {:"$clos_class", class_name})
+    {:instance, class_name, tid}
+  end
+
+  def initialize_instance(instance, initargs \\ []) do
+    shared_initialize(instance, :t, initargs)
+    maybe_call_initialization_generic(:initialize_instance, instance, initargs)
+    instance
+  end
+
+  def reinitialize_instance(instance, initargs \\ []) do
+    shared_initialize(instance, nil, initargs)
+    maybe_call_initialization_generic(:reinitialize_instance, instance, initargs)
+    instance
+  end
+
+  @doc """
+  Initializes the named slots from initargs and, when requested, their initforms.
+  `slot_names` is `:t` for all slots, nil for no initforms, or a list of slot names.
+  """
+  def shared_initialize(instance, slot_names \\ :t, initargs \\ [])
+
+  def shared_initialize({:instance, _class, tid} = instance, slot_names, initargs) do
+    class_info = find_class(instance_class(instance))
+    init_map = parse_initargs_kv(initargs)
+
+    if class_info do
+      Enum.each(class_info.slots, fn {slot_name, slot_def} ->
+        explicit =
+          Enum.find_value(slot_def[:initargs] || [], fn initarg ->
+            case Map.fetch(init_map, initarg) do
+              {:ok, value} -> {:ok, value}
+              :error -> nil
+            end
+          end)
+
+        should_initform? =
+          slot_names == :t or
+            (is_list(slot_names) and
+               normalize_slot_name(slot_name) in Enum.map(slot_names, &normalize_slot_name/1))
+
+        case {explicit, should_initform?, slot_def[:initform_fun]} do
+          {{:ok, value}, _, _} ->
+            :ets.insert(tid, {slot_name, value})
+
+          {nil, true, initfun} when is_function(initfun, 0) ->
+            unless :ets.member(tid, slot_name) do
+              :ets.insert(tid, {slot_name, initfun.()})
+            end
+
+          _ ->
+            :ok
+        end
+      end)
+    end
+
+    Enum.each(init_map, fn {key, value} ->
+      if not :ets.member(tid, key), do: :ets.insert(tid, {key, value})
+    end)
+
+    instance
+  end
+
+  def shared_initialize(other, _slot_names, _initargs), do: other
+
+  def update_instance_for_different_class(previous, instance, initargs \\ []) do
+    shared_values =
+      case {previous, instance} do
+        {{:instance, _, previous_tid}, {:instance, _, tid}} ->
+          old_slots = instance_slot_values(previous)
+          new_slots = (find_class(instance_class(instance)) || %{slots: %{}}).slots
+
+          Enum.each(old_slots, fn {name, value} ->
+            if Map.has_key?(new_slots, name), do: :ets.insert(tid, {name, value})
+          end)
+
+          :ets.insert(tid, {:"$clos_class", instance_class(instance)})
+          previous_tid
+
+        _ ->
+          nil
+      end
+
+    _ = shared_values
+    shared_initialize(instance, :t, initargs)
+
+    maybe_call_update_generic(:update_instance_for_different_class, [previous, instance, initargs])
+
+    instance
+  end
+
+  def update_instance_for_redefined_class(
+        instance,
+        added_slots \\ [],
+        discarded_slots \\ [],
+        property_list \\ []
+      ) do
+    class_info = find_class(instance_class(instance))
+
+    if class_info do
+      Enum.each(added_slots, fn slot ->
+        name =
+          case slot do
+            %{name: n} -> n
+            n -> normalize_slot_name(n)
+          end
+
+        with %{^name => definition} <- class_info.slots,
+             true <- is_function(definition[:initform_fun], 0),
+             false <- slot_boundp(instance, name) == :t do
+          set_slot_value(instance, name, definition.initform_fun.())
+        else
+          _ -> :ok
+        end
+      end)
+
+      Enum.each(discarded_slots, &set_slot_value(instance, &1, nil))
+    end
+
+    maybe_call_update_generic(:update_instance_for_redefined_class, [
+      instance,
+      added_slots,
+      discarded_slots,
+      property_list
+    ])
+
+    instance
+  end
+
+  def change_class({:instance, _old_class, tid} = instance, new_class, initargs \\ []) do
+    previous_values = instance_slot_values(instance)
+    class_name = class_object(new_class).name
+    old_class = instance_class(instance)
+    new_slots = class_object(new_class).slots
+
+    :ets.delete_all_objects(tid)
+    :ets.insert(tid, {:"$clos_class", class_name})
+
+    Enum.each(previous_values, fn {name, value} ->
+      if Map.has_key?(new_slots, name), do: :ets.insert(tid, {name, value})
+    end)
+
+    previous =
+      previous_values
+      |> Enum.reduce(allocate_instance(old_class), fn {name, value}, acc ->
+        set_slot_value(acc, name, value)
+      end)
+
+    update_instance_for_different_class(previous, instance, initargs)
+    instance
+  end
+
+  def make_instances_obsolete(class) do
+    normalized = class_name(class)
+
+    if normalized do
+      :persistent_term.put({:exlisp_clos_obsolete, normalized}, System.unique_integer([:positive]))
+      normalized
+    else
+      nil
+    end
+  end
+
+  def make_load_form(object, environment \\ nil) do
+    case maybe_load_form_generic(object, environment) do
+      {:ok, result} ->
+        result
+
+      :error ->
+        case object do
+          {:instance, _class, _tid} ->
+            class = instance_class(object)
+            initargs = load_form_initargs(object)
+            [:_values_, [[:make_instance, class | initargs], nil]]
+
+          _ ->
+            [:_values_, [object, nil]]
+        end
+    end
+  end
+
+  def make_load_form_saving_slots(
+        object,
+        environment \\ nil,
+        slot_names \\ nil
+      ) do
+    _ = environment
+    class = instance_class(object)
+
+    names =
+      cond do
+        slot_names in [nil, :t] -> nil
+        true -> Enum.map(slot_names, &normalize_slot_name/1)
+      end
+
+    initargs = load_form_initargs(object, names)
+    creation = [:make_instance, class | initargs]
+    [:_values_, [creation, nil]]
+  end
+
+  defp maybe_load_form_generic(object, environment) do
+    if generic_defined?(:make_load_form) do
+      {:ok, apply_generic(:make_load_form, [object, environment])}
+    else
+      :error
+    end
+  rescue
+    _ -> :error
+  end
+
+  defp load_form_initargs(instance, selected_names \\ nil) do
+    slots = instance_slot_values(instance)
+
+    class_slots =
+      case find_class(instance_class(instance)) do
+        %{slots: map} -> map
+        _ -> %{}
+      end
+
+    slots
+    |> Enum.filter(fn {name, _value} ->
+      selected_names == nil or name in selected_names
+    end)
+    |> Enum.flat_map(fn {name, value} ->
+      case Map.get(class_slots, name) do
+        %{initargs: [initarg | _]} -> [initarg, value]
+        _ -> [name, value]
+      end
+    end)
+  end
+
+  defp instance_slot_values({:instance, _class, tid}) do
+    :ets.tab2list(tid)
+    |> Enum.reject(fn {name, _value} -> name == :"$clos_class" end)
+  end
+
+  defp instance_slot_values(_), do: []
+
+  defp instance_class({:instance, class, tid}) do
+    case :ets.lookup(tid, :"$clos_class") do
+      [{:"$clos_class", value}] -> value
+      _ -> class
+    end
+  end
+
+  defp instance_class(%{name: name}), do: name
+  defp instance_class(other), do: normalize_name(other)
+
+  defp maybe_call_initialization_generic(kind, instance, initargs) do
+    if generic_defined?(kind) do
+      apply_generic(kind, [instance, initargs])
+    end
+
+    instance
+  rescue
+    _ -> instance
+  end
+
+  defp maybe_call_update_generic(kind, args) do
+    if generic_defined?(kind), do: apply_generic(kind, args)
+  rescue
+    _ -> nil
   end
 
   defp parse_initargs_kv(initargs) when is_map(initargs) do
@@ -576,15 +925,15 @@ defmodule ExLisp.CLOS do
 
   def slot_makunbound(other, _slot), do: other
 
-  def slot_exists_p({:instance, class_name, _tid}, slot_name) do
+  def slot_exists_p({:instance, _class_name, _tid} = instance, slot_name) do
     norm = normalize_slot_name(slot_name)
-    class_info = find_class(class_name)
+    class_info = find_class(instance_class(instance))
     if class_info != nil and Map.has_key?(class_info.slots, norm), do: :t, else: nil
   end
 
   def slot_exists_p(_other, _slot), do: nil
 
-  def class_of({:instance, class_name, _tid}), do: class_name
+  def class_of({:instance, _class_name, _tid} = instance), do: instance_class(instance)
   def class_of({:struct, struct_name, _tid}), do: struct_name
   def class_of(val) when is_integer(val), do: :integer
   def class_of(val) when is_float(val), do: :float
@@ -672,13 +1021,18 @@ defmodule ExLisp.CLOS do
     norm_qualifier = normalize_qualifier(qualifier)
     norm_specializers = Enum.map(specializers, &normalize_specializer/1)
 
+    unless generic_defined?(gen_name) do
+      register_generic(gen_name, List.duplicate(:t, length(norm_specializers)))
+    end
+
     key = {:exlisp_clos_methods, gen_name}
     current_methods = :persistent_term.get(key, [])
 
     method_entry = %{
       qualifier: norm_qualifier,
       specializers: norm_specializers,
-      fun: fun
+      fun: fun,
+      generic: gen_name
     }
 
     updated_methods =
@@ -858,6 +1212,10 @@ defmodule ExLisp.CLOS do
     end
   end
 
+  def call_method(method, args \\ []) do
+    invoke_method(method, List.wrap(args), [])
+  end
+
   @doc """
   Returns :t if a next method is available, nil otherwise.
   """
@@ -866,6 +1224,245 @@ defmodule ExLisp.CLOS do
       [] -> nil
       [_ | _] -> :t
       _ -> nil
+    end
+  end
+
+  @doc "Returns a generic function's method objects."
+  def generic_function_methods(generic) do
+    :persistent_term.get({:exlisp_clos_methods, generic_name(generic)}, [])
+  end
+
+  def find_method(generic, qualifiers \\ [], specializers \\ [], errorp \\ :t) do
+    wanted_qualifiers =
+      case qualifiers do
+        nil -> []
+        :primary -> []
+        [] -> []
+        list when is_list(list) -> Enum.map(list, &normalize_qualifier/1)
+        one -> [normalize_qualifier(one)]
+      end
+
+    wanted_specializers =
+      Enum.map(List.wrap(specializers), &normalize_specializer/1)
+
+    method =
+      generic_function_methods(generic)
+      |> Enum.find(fn m ->
+        method_qualifiers(m) == wanted_qualifiers and m.specializers == wanted_specializers
+      end)
+
+    if method == nil and errorp in [:t, true] do
+      raise ArgumentError, "No matching method on #{inspect(generic)}"
+    else
+      method
+    end
+  end
+
+  def remove_method(generic, method) do
+    name = generic_name(generic)
+    key = {:exlisp_clos_methods, name}
+    methods = :persistent_term.get(key, [])
+
+    case Enum.find(methods, fn candidate ->
+           candidate == method or method_identity(candidate) == method_identity(method)
+         end) do
+      nil ->
+        nil
+
+      found ->
+        :persistent_term.put(key, List.delete(methods, found))
+        if generic_defined?(name), do: ensure_generic_dispatcher(name)
+        generic
+    end
+  end
+
+  def add_method(generic, method) do
+    name = generic_name(generic)
+    key = {:exlisp_clos_methods, name}
+    methods = :persistent_term.get(key, [])
+    normalized = Map.merge(method, %{generic: name})
+    :persistent_term.put(key, [normalized | Enum.reject(methods, &(&1 == normalized))])
+    unless generic_defined?(name), do: register_generic(name)
+    ensure_generic_dispatcher(name)
+    generic
+  end
+
+  def methodp(%{qualifier: qualifier, specializers: specializers, fun: fun})
+      when is_list(specializers) and
+             (is_function(fun) or is_struct(fun, ExLisp.Closure)),
+      do: if(is_atom(qualifier), do: :t, else: nil)
+
+  def methodp(_), do: nil
+
+  def generic_function_p(generic) do
+    lisp_bool(find_generic(generic) != nil)
+  end
+
+  def ensure_generic_function(name, lambda_list \\ [], options \\ []) do
+    normalized = generic_name(name)
+
+    case find_generic(normalized) do
+      nil ->
+        register_generic(normalized, lambda_list, options)
+        find_generic(normalized)
+
+      generic ->
+        generic
+    end
+  end
+
+  def method_qualifiers(%{qualifier: :primary}), do: []
+  def method_qualifiers(%{qualifier: qualifier}), do: [qualifier]
+  def method_qualifiers(_), do: []
+  def method_specializers(%{specializers: specializers}), do: specializers
+  def method_specializers(_), do: []
+  def method_generic_function(%{generic: generic}), do: find_generic(generic)
+  def method_generic_function(_), do: nil
+  def method_function(%{fun: fun}), do: fun
+  def method_function(_), do: nil
+
+  def function_keywords(method) do
+    key_args =
+      case method do
+        %{lambda_list: lambda_list} -> lambda_list
+        %{ast: ast} -> ast
+        %ExLisp.Closure{params: params} -> params
+        _ -> []
+      end
+
+    [:_values_, [extract_keyword_names(key_args), nil]]
+  end
+
+  def function_lambda_expression(function) do
+    case function do
+      %ExLisp.Closure{ast: ast, fun: fun, env: env} ->
+        [:_values_, [ast, fun != nil, env != %{}]]
+
+      fun when is_function(fun) ->
+        module = :erlang.fun_info(fun, :module) |> elem(1)
+        name = :erlang.fun_info(fun, :name) |> elem(1)
+        [:_values_, [nil, module != nil or name != nil, nil]]
+
+      symbol ->
+        [:_values_, [ExLisp.Env.get_fun_ast(normalize_name(symbol)), nil, nil]]
+    end
+  end
+
+  defp extract_keyword_names({:list, _, elements}),
+    do:
+      elements
+      |> Enum.drop_while(
+        &(LispBeam.extract_symbol_name(&1) not in [:"&", :"&key"])
+      )
+      |> extract_keyword_names()
+
+  defp extract_keyword_names(elements) when is_list(elements) do
+    elements
+    |> Enum.drop_while(&(LispBeam.extract_symbol_name(&1) != :"&key"))
+    |> Enum.drop(1)
+    |> Enum.map(fn
+      {:list, _, [name | _]} -> LispBeam.extract_symbol_name(name)
+      name -> LispBeam.extract_symbol_name(name)
+    end)
+    |> Enum.take_while(&(&1 not in [:"&allow-other-keys", :"&aux", :"&rest"]))
+  end
+
+  defp extract_keyword_names(_), do: []
+
+  def generic_function_name(generic) do
+    case find_generic(generic) do
+      %{name: name} -> name
+      _ -> generic_name(generic)
+    end
+  end
+
+  def generic_function_lambda_list(generic) do
+    case find_generic(generic) do
+      %{lambda_list: lambda_list} -> lambda_list
+      _ -> nil
+    end
+  end
+
+  def generic_function_method_combination(generic) do
+    options =
+      case find_generic(generic) do
+        %{options: options} -> options
+        _ -> []
+      end
+
+    case option_value(options, :method_combination) do
+      nil -> :standard
+      combination -> combination
+    end
+  end
+
+  def compute_applicable_methods(generic, args) do
+    generic_function_methods(generic)
+    |> find_applicable_methods(args)
+  end
+
+  def compute_applicable_methods(generic, args, next_method_context)
+      when is_boolean(next_method_context) or is_atom(next_method_context) do
+    _ = next_method_context
+    compute_applicable_methods(generic, args)
+  end
+
+  def no_applicable_method(generic, args) do
+    raise RuntimeError,
+          "No applicable method for #{inspect(generic_function_name(generic))} with arguments #{inspect(args)}"
+  end
+
+  def method_combination_type(combination) when is_atom(combination), do: combination
+  def method_combination_type(%{type: type}), do: type
+  def method_combination_type(%{name: name}), do: name
+  def method_combination_type(_), do: :standard
+  def method_combination_options(%{options: options}), do: options
+  def method_combination_options(options) when is_list(options), do: options
+  def method_combination_options(_), do: []
+
+  def standard_method_combination, do: %{type: :standard, options: []}
+
+  def find_generic(name) do
+    normalized = generic_name(name)
+    :persistent_term.get({:exlisp_clos_generic, normalized}, nil)
+  end
+
+  defp generic_name(%{name: name}), do: normalize_name(name)
+  defp generic_name(%ExLisp.Closure{name: name}), do: normalize_name(name)
+  defp generic_name(name), do: normalize_name(name)
+
+  defp method_identity(method) do
+    case method do
+      %{qualifier: qualifier, specializers: specializers} ->
+        {normalize_qualifier(qualifier), Enum.map(specializers, &normalize_specializer/1)}
+
+      _ ->
+        nil
+    end
+  end
+
+  defp option_value(options, key) do
+    cond do
+      is_map(options) ->
+        Map.get(options, key)
+
+      Keyword.keyword?(options) ->
+        Keyword.get(options, key)
+
+      is_list(options) ->
+        Enum.find_value(options, fn
+          [k, value] ->
+            if normalize_name(k) == key, do: value
+
+          {k, value} ->
+            if normalize_name(k) == key, do: value
+
+          _ ->
+            nil
+        end)
+
+      true ->
+        nil
     end
   end
 
@@ -878,9 +1475,9 @@ defmodule ExLisp.CLOS do
   end
 
   defp method_applicable?(specializers, args) do
-    # Match specializers with args (prefix match allowed for rest args)
-    Enum.zip(specializers, args)
-    |> Enum.all?(fn {spec, arg} -> specializer_matches?(spec, arg) end)
+    length(specializers) == length(args) and
+      Enum.zip(specializers, args)
+      |> Enum.all?(fn {spec, arg} -> specializer_matches?(spec, arg) end)
   end
 
   defp specializer_matches?({:eql, val}, arg), do: val == arg
@@ -939,4 +1536,7 @@ defmodule ExLisp.CLOS do
   defp normalize_slot_name({:atom, _pos, val}), do: normalize_slot_name(val)
 
   defp normalize_slot_name(name), do: normalize_name(name)
+
+  defp lisp_bool(true), do: :t
+  defp lisp_bool(false), do: nil
 end

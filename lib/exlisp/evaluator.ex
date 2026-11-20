@@ -995,6 +995,39 @@ defmodule ExLisp.Evaluator do
       op when op in [:symbol_macrolet, :_cl_symbol_macrolet_] ->
         eval_symbol_macrolet(args, env)
 
+      op when op in [:with_accessors, :_cl_with_accessors_, :"with-accessors"] ->
+        eval_with_accessors(args, env)
+
+      op when op in [:with_slots, :_cl_with_slots_, :"with-slots"] ->
+        eval_with_slots(args, env)
+
+      op when op in [
+        :with_hash_table_iterator,
+        :_cl_with_hash_table_iterator_,
+        :"with-hash-table-iterator"
+      ] ->
+        eval_with_hash_table_iterator(args, env)
+
+      op when op in [
+        :with_package_iterator,
+        :_cl_with_package_iterator_,
+        :"with-package-iterator"
+      ] ->
+        eval_with_package_iterator(args, env)
+
+      op when op in [:do_symbols, :_cl_do_symbols_, :"do-symbols"] ->
+        eval_do_symbols(args, :present, env)
+
+      op when op in [
+        :do_external_symbols,
+        :_cl_do_external_symbols_,
+        :"do-external-symbols"
+      ] ->
+        eval_do_symbols(args, :external, env)
+
+      op when op in [:do_all_symbols, :_cl_do_all_symbols_, :"do-all-symbols"] ->
+        eval_do_all_symbols(args, env)
+
       op when op in [:catch, :_cl_catch_] ->
         case args do
           [tag_node | body] ->
@@ -1252,6 +1285,16 @@ defmodule ExLisp.Evaluator do
         :_cl_with_compilation_unit_
       ] ->
         eval_progn(args, env)
+
+      op when op in [
+        :with_condition_restarts,
+        :_cl_with_condition_restarts_,
+        :"with-condition-restarts"
+      ] ->
+        case args do
+          [_condition, _restarts | body] -> eval_progn(body, env)
+          _ -> nil
+        end
 
       op when op in [:defpackage, :_cl_defpackage_] ->
         case args do
@@ -3434,6 +3477,161 @@ defmodule ExLisp.Evaluator do
   end
 
   defp eval_symbol_macrolet([], _env), do: nil
+
+  defp eval_with_accessors([slots_node, instance_node | body], env) do
+    instance = eval(instance_node, env) |> Builtins.unwrap_mv_primary()
+    temp_var = :"__with_accessors_#{System.unique_integer([:positive])}"
+    base_env = bind_lexical(env, temp_var, instance)
+
+    macros =
+      LispBeam.extract_bindings(slots_node)
+      |> Map.new(fn {variable, accessor_node} ->
+        accessor = LispBeam.extract_symbol_name(accessor_node)
+
+        expansion =
+          {:list, 1,
+           [
+             {:id, 1, [Atom.to_string(accessor)]},
+             {:id, 1, [Atom.to_string(temp_var)]}
+           ]}
+
+        {{:symbol_macro, variable}, expansion}
+      end)
+
+    eval_progn(body, Map.merge(base_env, macros))
+  end
+
+  defp eval_with_accessors(_, _env), do: nil
+
+  defp eval_with_slots([slots_node, instance_node | body], env) do
+    instance = eval(instance_node, env) |> Builtins.unwrap_mv_primary()
+    temp_var = :"__with_slots_#{System.unique_integer([:positive])}"
+    base_env = bind_lexical(env, temp_var, instance)
+
+    macros =
+      slot_bindings(slots_node)
+      |> Map.new(fn {variable, slot} ->
+        expansion =
+          {:list, 1,
+           [
+             {:id, 1, ["slot-value"]},
+             {:id, 1, [Atom.to_string(temp_var)]},
+             {:list, 1, [{:id, 1, ["quote"]}, {:id, 1, [Atom.to_string(slot)]}]}
+           ]}
+
+        {{:symbol_macro, variable}, expansion}
+      end)
+
+    eval_progn(body, Map.merge(base_env, macros))
+  end
+
+  defp eval_with_slots(_, _env), do: nil
+
+  defp eval_with_hash_table_iterator([binding_node | body], env) do
+    case binding_node do
+      {:list, _, [name_node, table_node]} ->
+        name = LispBeam.extract_symbol_name(name_node)
+        table = eval(table_node, env) |> Builtins.unwrap_mv_primary()
+        iterator = Builtins.hash_table_iterator(table)
+        eval_progn(body, Map.put(env, {:fun, name}, iterator))
+
+      _ ->
+        nil
+    end
+  end
+
+  defp eval_with_hash_table_iterator(_, _env), do: nil
+
+  defp eval_with_package_iterator([binding_node | body], env) do
+    case binding_node do
+      {:list, _, [name_node, packages_node | type_nodes]} ->
+        name = LispBeam.extract_symbol_name(name_node)
+        packages = eval(packages_node, env) |> Builtins.unwrap_mv_primary()
+        types = if type_nodes == [], do: [:internal, :external, :inherited], else: Enum.map(type_nodes, &eval(&1, env))
+        iterator = ExLisp.Package.package_iterator(packages, types)
+        eval_progn(body, Map.put(env, {:fun, name}, iterator))
+
+      _ ->
+        nil
+    end
+  end
+
+  defp eval_with_package_iterator(_, _env), do: nil
+
+  defp eval_do_symbols([binding_node | body], type, env) do
+    case symbol_iteration_bindings(binding_node) do
+      {var, package_node, result_node} ->
+        package = eval(package_node, env) |> Builtins.unwrap_mv_primary()
+
+        entries =
+          ExLisp.Package.package_iterator(
+            package,
+            if(type == :present, do: [:internal, :external], else: [:external])
+          )
+
+        iterate_symbols(entries, var, body, env)
+        eval(result_node, env)
+
+      :error ->
+        nil
+    end
+  end
+
+  defp eval_do_symbols(_, _, _), do: nil
+
+  defp eval_do_all_symbols([binding_node | body], env) do
+    case symbol_iteration_bindings(binding_node) do
+      {var, nil, result_node} ->
+        iterator = ExLisp.Package.package_iterator(ExLisp.Package.list_all_packages(), [:internal, :external])
+        iterate_symbols(iterator, var, body, env)
+        eval(result_node, env)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp eval_do_all_symbols(_, _), do: nil
+
+  defp symbol_iteration_bindings({:list, _, [variable | rest]}) do
+    case rest do
+      [package, result] -> {LispBeam.extract_symbol_name(variable), package, result}
+      [package] -> {LispBeam.extract_symbol_name(variable), package, {:lit, nil}}
+      [] -> {LispBeam.extract_symbol_name(variable), nil, {:lit, nil}}
+      _ -> :error
+    end
+  end
+
+  defp symbol_iteration_bindings(_), do: :error
+
+  defp iterate_symbols(iterator, variable, body, env) do
+    case iterator.() do
+      [:_values_, [more, symbol | _]] when more in [:t, true] ->
+        eval_progn(body, bind_lexical(env, variable, symbol))
+        iterate_symbols(iterator, variable, body, env)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp slot_bindings({:list, _, elements}), do: Enum.map(elements, &parse_slot_binding/1)
+  defp slot_bindings(elements) when is_list(elements), do: Enum.map(elements, &parse_slot_binding/1)
+  defp slot_bindings(_), do: []
+
+  defp parse_slot_binding({:list, _, [variable, slot]}),
+    do: {LispBeam.extract_symbol_name(variable), LispBeam.extract_symbol_name(slot)}
+
+  defp parse_slot_binding(variable) do
+    symbol = LispBeam.extract_symbol_name(variable)
+    {symbol, symbol}
+  end
+
+  defp bind_lexical(env, name, value) do
+    ref = make_ref()
+    :erlang.put(ref, value)
+    Map.put(env, name, {:box, ref})
+  end
 
   # --- Function / Closure creation ---
 

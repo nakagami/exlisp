@@ -91,7 +91,9 @@ defmodule ExLisp.Env do
           :exlisp_macro,
           :exlisp_fun_ast,
           :exlisp_symbol_macro,
-          :exlisp_compiler_macro
+          :exlisp_compiler_macro,
+          :exlisp_trace_original,
+          :exlisp_trace_traced
         ] do
       :persistent_term.erase(key)
     end
@@ -913,6 +915,283 @@ defmodule ExLisp.Env do
   def has_compiler_macro?(name) do
     :persistent_term.get({:exlisp_compiler_macro, normalize_name(name)}, :__not_found__) !=
       :__not_found__
+  end
+
+  # --- Environment and implementation introspection ---
+
+  def lisp_implementation_type, do: "ExLisp"
+
+  def lisp_implementation_version do
+    case Application.spec(:exlisp, :vsn) do
+      nil -> Mix.Project.config()[:version]
+      version -> to_string(version)
+    end
+  rescue
+    _ -> "0.1.4"
+  end
+
+  def short_site_name, do: System.get_env("HOSTNAME") || machine_instance()
+  def long_site_name, do: short_site_name()
+
+  def machine_type do
+    arch =
+      :erlang.system_info(:system_architecture)
+      |> to_string()
+
+    case String.split(arch, "-", parts: 2) do
+      [machine | _] -> machine
+      _ -> arch
+    end
+  end
+
+  def machine_version, do: nil
+
+  def machine_instance do
+    case :inet.gethostname() do
+      {:ok, hostname} -> to_string(hostname)
+      _ -> ""
+    end
+  end
+
+  def software_type, do: elem(:os.type(), 1) |> Atom.to_string()
+
+  def software_version do
+    case :os.version() do
+      {major, minor, patch} -> "#{major}.#{minor}.#{patch}"
+      tuple when is_tuple(tuple) -> tuple |> Tuple.to_list() |> Enum.join(".")
+      other -> to_string(other)
+    end
+  end
+
+  def compile_file_pathname(input_file, output_file \\ nil) do
+    input = pathname_namestring(input_file)
+    parsed = ExLisp.Pathname.pathname(input)
+    basename = parsed.name || Path.rootname(Path.basename(input))
+
+    target =
+      cond do
+        output_file != nil ->
+          pathname_namestring(output_file)
+
+        true ->
+          directory =
+            case parsed.directory do
+              nil -> ""
+              directory -> ExLisp.Pathname.directory_namestring(%{parsed | directory: directory})
+            end
+
+          Path.join(directory, "#{basename}.beam")
+      end
+
+    ExLisp.Pathname.pathname(target)
+  end
+
+  def type_of(value) do
+    cond do
+      value == nil or value == [] ->
+        :null
+
+      value == :t ->
+        :symbol
+
+      match?({:_values_, _}, value) ->
+        :values
+
+      match?({:instance, _, _}, value) ->
+        ExLisp.CLOS.class_of(value)
+
+      match?(%ExLisp.Pathname{}, value) ->
+        :pathname
+
+      match?(%ExLisp.Character{}, value) ->
+        :character
+
+      match?(%ExLisp.Ratio{}, value) ->
+        :ratio
+
+      match?(%ExLisp.Stream{}, value) ->
+        :stream
+
+      match?(%ExLisp.Symbol{}, value) ->
+        :symbol
+
+      match?(%ExLisp.Closure{compiled: true}, value) ->
+        :compiled_function
+
+      match?(%ExLisp.Closure{}, value) ->
+        :function
+
+      match?({:hash_table, _, _}, value) ->
+        :hash_table
+
+      match?({:array, _, _}, value) ->
+        :array
+
+      match?({:vector, _}, value) ->
+        :vector
+
+      match?({:complex, _, _}, value) ->
+        :complex
+
+      is_boolean(value) ->
+        :boolean
+
+      is_integer(value) ->
+        ExLisp.CLOS.class_of(value)
+
+      is_float(value) ->
+        :single_float
+
+      is_binary(value) ->
+        :simple_string
+
+      is_atom(value) ->
+        if keyword?(value), do: :keyword, else: :symbol
+
+      is_map(value) ->
+        :hash_table
+
+      is_list(value) ->
+        :cons
+
+      is_function(value) ->
+        :function
+
+      true ->
+        :t
+    end
+  end
+
+  @doc """
+  Determines whether a Lisp value is a constant expression. An optional
+  environment may provide a map with `:constants` and `:variables`.
+  """
+  def constantp(value, environment \\ nil) do
+    boolean =
+      cond do
+        value in [nil, :t, true, false] ->
+          true
+
+        is_number(value) or is_binary(value) ->
+          true
+
+        keyword?(value) ->
+          true
+
+        match?(%ExLisp.Character{}, value) ->
+          true
+
+        match?({:lit, _}, value) ->
+          true
+
+        match?({:keyword, _, _}, value) ->
+          true
+
+        match?({:atom, _, _}, value) ->
+          true
+
+        quoted_form?(value) ->
+          true
+
+        is_atom(value) ->
+          environment_constant?(environment, value) or
+            has_constant_var?(value)
+
+        match?({:id, _, _}, value) ->
+          normalized = normalize_name(value)
+          environment_constant?(environment, normalized) or has_constant_var?(normalized)
+
+        true ->
+          false
+      end
+
+    if boolean, do: :t, else: nil
+  end
+
+  def variable_information(name, environment \\ nil) do
+    normalized = normalize_name(name)
+
+    cond do
+      environment_constant?(environment, normalized) ->
+        :constant
+
+      is_map(environment) and normalized in Map.get(environment, :specials, []) ->
+        :special
+
+      is_map(environment) and normalized in Map.keys(Map.get(environment, :lexical, %{})) ->
+        :lexical
+
+      has_var?(normalized) ->
+        :special
+
+      true ->
+        nil
+    end
+  end
+
+  def function_information(name, environment \\ nil) do
+    normalized = normalize_name(name)
+
+    cond do
+      is_map(environment) and Map.has_key?(Map.get(environment, :functions, %{}), normalized) ->
+        :function
+
+      has_macro?(normalized) ->
+        :macro
+
+      has_fun?(normalized) ->
+        :function
+
+      true ->
+        nil
+    end
+  end
+
+  def declaration_information(name, environment \\ nil) do
+    if is_map(environment),
+      do: Map.get(environment, :declarations, %{}) |> Map.get(normalize_name(name)),
+      else: nil
+  end
+
+  defp pathname_namestring(%ExLisp.Pathname{} = path), do: ExLisp.Pathname.namestring(path)
+  defp pathname_namestring(path) when is_binary(path), do: path
+  defp pathname_namestring(path), do: ExLisp.Pathname.namestring(ExLisp.Pathname.pathname(path))
+
+  defp quoted_form?({:list, _pos, [head, _value]}), do: normalize_name(head) == :quote
+  defp quoted_form?([head, _value]) when is_atom(head), do: normalize_name(head) == :quote
+  defp quoted_form?(_), do: false
+
+  defp environment_constant?(environment, name) when is_map(environment) do
+    name in Map.get(environment, :constants, []) or
+      Map.has_key?(Map.get(environment, :constant_bindings, %{}), name)
+  end
+
+  defp environment_constant?(_, _), do: false
+
+  defp has_constant_var?(name) do
+    normalized = normalize_name(name)
+    text = Atom.to_string(normalized)
+
+    case normalized do
+      n when n in [:pi, :t, nil, :internal_time_units_per_second] ->
+        true
+
+      _ ->
+        String.starts_with?(text, "most-") or
+          String.starts_with?(text, "most_") or
+          String.starts_with?(text, "least-") or
+          String.starts_with?(text, "least_") or
+          String.starts_with?(text, "single-float-") or
+          String.starts_with?(text, "single_float_") or
+          String.starts_with?(text, "double-float-") or
+          String.starts_with?(text, "double_float_") or
+          String.starts_with?(text, "long-float-") or
+          String.starts_with?(text, "long_float_") or
+          String.starts_with?(text, "short-float-") or
+          String.starts_with?(text, "short_float_") or
+          String.starts_with?(text, "boole-") or
+          String.starts_with?(text, "boole_")
+    end
   end
 
   @doc """
