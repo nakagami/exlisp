@@ -861,7 +861,7 @@ defmodule ExLisp.LispParser do
          {:list, line, [{:id, line, ["quote"]}, {:list, line, elem_nodes}]}
        ]}
 
-    {:ok, ast, rest}
+    {:ok, {:reader_macro, line, ast}, rest}
   end
 
   # Array literal (#nA(...) or #A(...))
@@ -885,7 +885,7 @@ defmodule ExLisp.LispParser do
              rank_node
            ]}
 
-        {:ok, ast, rem}
+        {:ok, {:reader_macro, line, ast}, rem}
 
       err ->
         err

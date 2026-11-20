@@ -47,6 +47,9 @@ defmodule ExLisp.Macro do
 
   defp extract_elements({:list, _pos, elems}), do: elems
   defp extract_elements({:quoted, _pos, elems}), do: elems
+  defp extract_elements({:dotted_list, pos, elems, tail}),
+    do: elems ++ [{:id, pos, ["&rest"]}, tail]
+
   defp extract_elements(elems) when is_list(elems), do: elems
   defp extract_elements(_), do: []
 
@@ -614,10 +617,13 @@ defmodule ExLisp.Macro do
   def ast_to_lisp_data(ast) do
     case ast do
       {:keyword, _pos, val} ->
-        val
+        {:__keyword__, val}
+
+      {:reader_macro, _pos, inner} ->
+        LispBeam.evaluate_ast(inner)
 
       {:lit, val} ->
-        val
+        if is_atom(val) and ExLisp.Env.keyword?(val), do: {:__keyword__, val}, else: val
 
       {:id, _pos, [name]} ->
         LispBeam.extract_symbol_name(name)
@@ -706,6 +712,9 @@ defmodule ExLisp.Macro do
 
       val when is_boolean(val) ->
         if val, do: {:lit, :t}, else: {:lit, nil}
+
+      {:__keyword__, value} ->
+        {:keyword, line, value}
 
       %ExLisp.Symbol{name: name} ->
         {:id, line, [String.downcase(name)]}

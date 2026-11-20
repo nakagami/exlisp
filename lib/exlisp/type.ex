@@ -231,7 +231,12 @@ defmodule ExLisp.Type do
   Determines if `val` is of type `type_spec`.
   """
   def typep(val, type_spec) do
-    expanded = expand_type(type_spec)
+    expanded =
+      case type_spec do
+        %{name: name} -> expand_type(name)
+        _ -> expand_type(type_spec)
+      end
+
     do_typep(val, expanded)
   end
 

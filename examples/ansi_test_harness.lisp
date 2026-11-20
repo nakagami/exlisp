@@ -59,10 +59,18 @@
     nstring-downcase.1 nstring-downcase.2 nstring-downcase.13
     nstring-capitalize.1 nstring-capitalize.2 nstring-capitalize.4 nstring-capitalize.14))
 
+(defun %proper-list-p (val)
+  (cond
+    ((null val) t)
+    ((consp val) (%proper-list-p (cdr val)))
+    (t nil)))
+
 (defun %normalize-expected-val (val)
   (cond
     ((and (consp val) (member (car val) '(make_array make-array make_array_from_contents make-array-from-contents)))
      (eval val))
+    ((and (consp val) (%proper-list-p val))
+     (mapcar #'%normalize-expected-val val))
     (t val)))
 
 (defun %values-equal (actual-list expected-list)

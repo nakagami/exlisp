@@ -1642,6 +1642,9 @@ defmodule ExLisp.Builtins do
   # --- Equality and predicates ---
 
   def eq(x, y) when x in [nil, [], nil] and y in [nil, [], nil], do: :t
+  def eq({:__keyword__, x}, {:__keyword__, y}), do: eq(x, y)
+  def eq({:__keyword__, x}, y), do: eq(x, y)
+  def eq(x, {:__keyword__, y}), do: eq(x, y)
   def eq(x, y) when is_atom(x) and is_atom(y), do: (x === y) |> lisp_bool()
   def eq(x, y), do: (x === y) |> lisp_bool()
   def eqt(x, y), do: eq(x, y)
@@ -1700,8 +1703,8 @@ defmodule ExLisp.Builtins do
     end
   end
 
-  def equal({:array, d1, _} = x, {:array, d2, _} = y) do
-    if d1 == d2 do
+  def equal({:array, _, _} = x, {:array, _, _} = y) do
+    if array_dimensions(x) == array_dimensions(y) do
       l1 = seq_to_list(x)
       l2 = seq_to_list(y)
       equal(l1, l2)
@@ -1748,9 +1751,11 @@ defmodule ExLisp.Builtins do
     equalp(y, x)
   end
 
-  def equalp({:array, d1, _} = x, {:array, d2, _} = y) do
+  def equalp({:array, _, _} = x, {:array, _, _} = y) do
     lx = seq_to_list(x)
     ly = seq_to_list(y)
+    d1 = array_dimensions(x)
+    d2 = array_dimensions(y)
 
     cond do
       length(d1) == 1 and length(d2) == 1 ->
@@ -1853,6 +1858,7 @@ defmodule ExLisp.Builtins do
   def keywordp(:t), do: nil
   def keywordp(:":nil"), do: :t
   def keywordp(:":t"), do: :t
+  def keywordp({:__keyword__, _}), do: :t
 
   def keywordp(x) when is_atom(x) do
     str = Atom.to_string(x)
@@ -2438,6 +2444,7 @@ defmodule ExLisp.Builtins do
 
         case :ets.lookup(tid, :__meta__) do
           [{:__meta__, %{fill_pointer: fp}}] when is_integer(fp) -> fp
+          [{:__meta__, %{dimensions: [dim | _]}}] -> dim
           _ -> hd(dims)
         end
 
@@ -3843,19 +3850,25 @@ defmodule ExLisp.Builtins do
         for <<c::utf8 <- seq>>, do: ExLisp.Character.new(c)
 
       match?({:array, _dims, _tid}, seq) ->
-        {:array, [dim | _], tid} = seq
+        {:array, dims, tid} = seq
+        dims = current_array_dimensions(tid, dims)
 
         actual_len =
           case :ets.lookup(tid, :__meta__) do
             [{:__meta__, %{fill_pointer: fp}}] when is_integer(fp) -> fp
-            [{:__meta__, %{dimensions: [new_dim | _]}}] when is_integer(new_dim) -> new_dim
-            _ -> dim
+
+            _ ->
+              case dims do
+                [] -> 1
+                [dim] -> dim
+                _ -> Enum.reduce(dims, 1, &Kernel.*/2)
+              end
           end
 
         if actual_len <= 0 do
           []
         else
-          for i <- 0..(actual_len - 1), do: aref([seq, i])
+          for i <- 0..(actual_len - 1), do: row_major_aref(seq, i)
         end
 
       true ->
@@ -6236,6 +6249,7 @@ defmodule ExLisp.Builtins do
     actual_len =
       case meta do
         %{fill_pointer: fp} when is_integer(fp) -> fp
+        %{dimensions: [current_len | _]} -> current_len
         _ -> len
       end
 
@@ -6868,12 +6882,12 @@ defmodule ExLisp.Builtins do
 
         dimensions =
           cond do
+            is_nil(dims) -> []
             is_integer(dims) -> [dims]
             is_list(dims) -> dims
             true -> [0]
           end
 
-        total_size = Enum.reduce(dimensions, 1, &Kernel.*/2)
         initial_element = Keyword.get(opts, :initial_element, nil)
         initial_contents = Keyword.get(opts, :initial_contents, nil)
         displaced_to = Keyword.get(opts, :displaced_to, nil)
@@ -6889,12 +6903,7 @@ defmodule ExLisp.Builtins do
 
         cond do
           displaced_to != nil ->
-            src_list = seq_to_list(displaced_to)
-            slice = Enum.slice(src_list, displaced_offset, total_size)
-
-            slice
-            |> Enum.with_index()
-            |> Enum.each(fn {val, idx} -> :ets.insert(tid, {idx, val}) end)
+            :ok
 
           initial_contents != nil ->
             flat_contents = flatten_initial_contents(initial_contents, dimensions)
@@ -7001,6 +7010,9 @@ defmodule ExLisp.Builtins do
 
   defp flatten_initial_contents(contents, dims) do
     cond do
+      dims == [] ->
+        [contents]
+
       is_binary(contents) ->
         seq_to_list(contents)
 
@@ -7016,12 +7028,27 @@ defmodule ExLisp.Builtins do
     Enum.flat_map(contents, &flatten_multidim_contents(&1, depth - 1))
   end
 
+  defp flatten_multidim_contents(contents, depth) when depth > 1 do
+    if sequence_like?(contents) do
+      contents
+      |> seq_to_list()
+      |> Enum.flat_map(&flatten_multidim_contents(&1, depth - 1))
+    else
+      [contents]
+    end
+  end
+
   defp flatten_multidim_contents(contents, _depth) do
     cond do
       is_binary(contents) -> seq_to_list(contents)
       is_list(contents) -> contents
+      match?({:array, _, _}, contents) -> seq_to_list(contents)
       true -> [contents]
     end
+  end
+
+  defp sequence_like?(value) do
+    is_list(value) or is_binary(value) or match?({:array, _, _}, value)
   end
 
   def vector(args) when is_list(args) do
@@ -7034,14 +7061,14 @@ defmodule ExLisp.Builtins do
         val
 
       _ ->
-        case :ets.lookup(tid, :__init__) do
-          [{_, default}] ->
-            default
+        case :ets.lookup(tid, :__displaced__) do
+          [{_, target, offset}] ->
+            row_major_aref(target, offset + idx)
 
           _ ->
-            case :ets.lookup(tid, :__displaced__) do
-              [{_, target, offset}] ->
-                aref(target, offset + idx)
+            case :ets.lookup(tid, :__init__) do
+              [{_, default}] ->
+                default
 
               _ ->
                 nil
@@ -7071,6 +7098,8 @@ defmodule ExLisp.Builtins do
   def aref(args) when is_list(args) do
     case args do
       [{:array, dims, tid} | indices] ->
+        dims = current_array_dimensions(tid, dims)
+
         flat_idx =
           case {dims, indices} do
             {[_single_dim], [single_idx]} when is_integer(single_idx) -> single_idx
@@ -7082,14 +7111,14 @@ defmodule ExLisp.Builtins do
             val
 
           [] ->
-            case :ets.lookup(tid, :__init__) do
-              [{:__init__, default}] ->
-                default
+            case :ets.lookup(tid, :__displaced__) do
+              [{:__displaced__, target, offset}] ->
+                row_major_aref(target, offset + flat_idx)
 
               [] ->
-                case :ets.lookup(tid, :__displaced__) do
-                  [{:__displaced__, target, offset}] ->
-                    aref(target, offset + flat_idx)
+                case :ets.lookup(tid, :__init__) do
+                  [{:__init__, default}] ->
+                    default
 
                   [] ->
                     case :ets.lookup(tid, :__meta__) do
@@ -7123,9 +7152,15 @@ defmodule ExLisp.Builtins do
     set_aref({:array, [single_dim], tid}, index, val)
   end
 
+  def set_aref(str, [index], val) when is_binary(str) and is_integer(index) do
+    set_elt_update_seq(str, index, val)
+  end
+
   def set_aref(arr, indices, val) do
     case arr do
       {:array, dims, tid} ->
+        dims = current_array_dimensions(tid, dims)
+
         flat_idx =
           case {dims, indices} do
             {[_single_dim], single_idx} when is_integer(single_idx) ->
@@ -7151,6 +7186,11 @@ defmodule ExLisp.Builtins do
       _ ->
         val
     end
+  end
+
+  def set_aref_update_seq(arr, indices, val) do
+    updated = set_aref(arr, indices, val)
+    if is_binary(arr), do: updated, else: arr
   end
 
   def set_svref({:array, [_dim], tid}, index, val) when is_integer(index) do
@@ -7262,10 +7302,12 @@ defmodule ExLisp.Builtins do
 
   def arrayp([arr]), do: arrayp(arr)
   def arrayp({:array, _, _}), do: :t
+  def arrayp(str) when is_binary(str), do: :t
   def arrayp(_), do: nil
 
   def vectorp([arr]), do: vectorp(arr)
   def vectorp({:array, [_], _}), do: :t
+  def vectorp(str) when is_binary(str), do: :t
   def vectorp(_), do: nil
 
   def simple_vector_p([arr]), do: simple_vector_p(arr)
@@ -7288,22 +7330,46 @@ defmodule ExLisp.Builtins do
   def simple_vector_p(_), do: nil
 
   def array_dimensions([arr]), do: array_dimensions(arr)
-  def array_dimensions({:array, dims, _}), do: dims
+
+  def array_dimensions({:array, dims, tid}) do
+    current_array_dimensions(tid, dims)
+  end
+
+  def array_dimensions(str) when is_binary(str), do: [String.length(str)]
   def array_dimensions(_), do: nil
 
   def array_dimension([arr, axis]), do: array_dimension(arr, axis)
 
-  def array_dimension({:array, dims, _}, axis) when is_integer(axis) do
-    Enum.at(dims, axis)
+  def array_dimension({:array, dims, tid}, axis) when is_integer(axis) do
+    current_array_dimensions(tid, dims) |> Enum.at(axis)
+  end
+
+  def array_dimension(str, axis) when is_binary(str) and is_integer(axis) do
+    if axis == 0, do: String.length(str)
   end
 
   def array_dimension(_, _), do: nil
 
   def array_rank([arr]), do: array_rank(arr)
-  def array_rank({:array, dims, _}), do: length(dims)
+  def array_rank({:array, _, _} = arr), do: arr |> array_dimensions() |> length()
+  def array_rank(str) when is_binary(str), do: 1
   def array_rank(_), do: 0
 
-  def array_in_bounds_p([{:array, dims, _} | indices]) do
+  def array_in_bounds_p([str | indices]) when is_binary(str) do
+    indices =
+      case indices do
+        [single] when is_list(single) -> single
+        _ -> indices
+      end
+
+    if length(indices) == 1 and is_integer(hd(indices)) and hd(indices) >= 0 and
+         hd(indices) < String.length(str),
+       do: :t
+  end
+
+  def array_in_bounds_p([{:array, dims, tid} | indices]) do
+    dims = current_array_dimensions(tid, dims)
+
     flat_indices =
       case indices do
         [single] when is_list(single) -> single
@@ -7319,7 +7385,9 @@ defmodule ExLisp.Builtins do
     end
   end
 
-  def array_in_bounds_p({:array, dims, _}, indices) when is_list(indices) do
+  def array_in_bounds_p({:array, dims, tid}, indices) when is_list(indices) do
+    dims = current_array_dimensions(tid, dims)
+
     if length(dims) == length(indices) and
          Enum.zip(indices, dims) |> Enum.all?(fn {i, d} -> is_integer(i) and i >= 0 and i < d end) do
       :t
@@ -7334,7 +7402,9 @@ defmodule ExLisp.Builtins do
 
   def array_in_bounds_p(_arr, _), do: nil
 
-  def array_row_major_index([{:array, dims, _} | subscripts]) do
+  def array_row_major_index([{:array, dims, tid} | subscripts]) do
+    dims = current_array_dimensions(tid, dims)
+
     flat_subs =
       case subscripts do
         [single] when is_list(single) -> single
@@ -7344,7 +7414,8 @@ defmodule ExLisp.Builtins do
     compute_flat_index(dims, flat_subs)
   end
 
-  def array_row_major_index({:array, dims, _}, subscripts) when is_list(subscripts) do
+  def array_row_major_index({:array, dims, tid}, subscripts) when is_list(subscripts) do
+    dims = current_array_dimensions(tid, dims)
     compute_flat_index(dims, subscripts)
   end
 
@@ -7357,14 +7428,14 @@ defmodule ExLisp.Builtins do
         val
 
       [] ->
-        case :ets.lookup(tid, :__init__) do
-          [{:__init__, default}] ->
-            default
+        case :ets.lookup(tid, :__displaced__) do
+          [{:__displaced__, target, offset}] ->
+            row_major_aref(target, offset + idx)
 
           [] ->
-            case :ets.lookup(tid, :__displaced__) do
-              [{:__displaced__, target, offset}] ->
-                aref(target, offset + idx)
+            case :ets.lookup(tid, :__init__) do
+              [{:__init__, default}] ->
+                default
 
               [] ->
                 case :ets.lookup(tid, :__meta__) do
@@ -7379,6 +7450,7 @@ defmodule ExLisp.Builtins do
     end
   end
 
+  def row_major_aref(str, idx) when is_binary(str) and is_integer(idx), do: aref(str, idx)
   def row_major_aref([arr, idx]), do: row_major_aref(arr, idx)
 
   def set_row_major_aref({:array, _dims, tid} = _arr, idx, val) when is_integer(idx) do
@@ -7419,16 +7491,18 @@ defmodule ExLisp.Builtins do
   def array_displacement([arr]), do: array_displacement(arr)
   def array_displacement(_), do: [:_values_, [nil, 0]]
 
-  def array_total_size({:array, dims, _}) do
-    Enum.reduce(dims, 1, &Kernel.*/2)
+  def array_total_size({:array, dims, tid}) do
+    current_array_dimensions(tid, dims) |> Enum.reduce(1, &Kernel.*/2)
   end
 
+  def array_total_size(str) when is_binary(str), do: String.length(str)
   def array_total_size(_), do: 0
 
-  def vector_push(val, {:array, [max_dim], tid}) do
+  def vector_push(val, {:array, _dims, tid} = arr) do
     case :ets.lookup(tid, :__meta__) do
-      [{:__meta__, %{fill_pointer: fp} = meta}] when is_integer(fp) and fp < max_dim ->
-        :ets.insert(tid, {fp, val})
+      [{:__meta__, %{fill_pointer: fp, dimensions: [max_dim]} = meta}]
+      when is_integer(fp) and fp < max_dim ->
+        set_aref(arr, fp, val)
         :ets.insert(tid, {:__meta__, %{meta | fill_pointer: fp + 1}})
         fp
 
@@ -7437,17 +7511,58 @@ defmodule ExLisp.Builtins do
     end
   end
 
-  def vector_push_extend(val, {:array, [max_dim], tid} = arr, extension \\ nil) do
+  def vector_push_extend(val, {:array, dims, tid} = arr, extension \\ nil) do
     case :ets.lookup(tid, :__meta__) do
-      [{:__meta__, %{fill_pointer: fp, adjustable: true} = meta}] when is_integer(fp) ->
-        ext = if is_integer(extension) and extension > 0, do: extension, else: max(max_dim, 1)
-        new_max = if fp >= max_dim, do: max_dim + ext, else: max_dim
-        :ets.insert(tid, {fp, val})
-        :ets.insert(tid, {:__meta__, %{meta | dimensions: [new_max], fill_pointer: fp + 1}})
-        fp
+      [{:__meta__, %{fill_pointer: fp} = meta}]
+      when is_integer(fp) ->
+        max_dim =
+          case Map.get(meta, :dimensions, dims) do
+            [dimension] -> dimension
+            _ -> 0
+          end
+
+        if fp < max_dim do
+          set_aref(arr, fp, val)
+          :ets.insert(tid, {:__meta__, %{meta | fill_pointer: fp + 1}})
+          fp
+        else
+          if Map.get(meta, :adjustable, false) do
+            ext = if is_integer(extension) and extension > 0, do: extension, else: max(max_dim, 1)
+            new_max = max_dim + ext
+
+            old_values =
+              if max_dim > 0 do
+                for index <- 0..(max_dim - 1),
+                    do: {index, row_major_aref(arr, index)}
+              else
+                []
+              end
+
+            :ets.select_delete(tid, [{{:"$1", :_}, [{:is_integer, :"$1"}], [true]}])
+            :ets.delete(tid, :__displaced__)
+            Enum.each(old_values, fn {index, value} -> :ets.insert(tid, {index, value}) end)
+            :ets.insert(tid, {fp, val})
+
+            :ets.insert(
+              tid,
+              {:__meta__,
+               %{
+                 meta
+                 | dimensions: [new_max],
+                   fill_pointer: fp + 1,
+                   displaced_to: nil,
+                   displaced_index_offset: 0
+               }}
+            )
+
+            fp
+          else
+            nil
+          end
+        end
 
       _ ->
-        vector_push(val, arr)
+        nil
     end
   end
 
@@ -7478,43 +7593,126 @@ defmodule ExLisp.Builtins do
 
     dimensions =
       cond do
+        is_nil(new_dims) -> []
         is_integer(new_dims) -> [new_dims]
         is_list(new_dims) -> new_dims
         true -> [0]
       end
 
-    total_size = Enum.reduce(dimensions, 1, &Kernel.*/2)
-    initial_element = Keyword.get(opts, :initial_element, nil)
-    initial_contents = Keyword.get(opts, :initial_contents, nil)
-
-    if initial_contents != nil do
-      flat = flatten_initial_contents(initial_contents, dimensions)
-
-      flat
-      |> Enum.with_index()
-      |> Enum.each(fn {val, idx} -> :ets.insert(tid, {idx, val}) end)
-    else
-      current_count = :ets.select_count(tid, [{{:"$1", :_}, [{:is_integer, :"$1"}], [true]}])
-
-      if total_size > current_count do
-        for idx <- current_count..(total_size - 1) do
-          :ets.insert(tid, {idx, initial_element})
-        end
-      end
-    end
-
-    meta =
+    old_meta =
       case :ets.lookup(tid, :__meta__) do
         [{:__meta__, m}] -> m
         [] -> %{}
       end
 
-    new_meta = Map.put(meta, :dimensions, dimensions)
-    :ets.insert(tid, {:__meta__, new_meta})
-    arr
+    old_dims = Map.get(old_meta, :dimensions, [])
+    initial_element = Keyword.get(opts, :initial_element, Map.get(old_meta, :initial_element))
+    initial_contents = Keyword.get(opts, :initial_contents)
+    element_type = Keyword.get(opts, :element_type, Map.get(old_meta, :element_type, :t))
+    adjustable = Map.get(old_meta, :adjustable, false)
+    old_fill_pointer = Map.get(old_meta, :fill_pointer)
+
+    fill_pointer =
+      cond do
+        Keyword.has_key?(opts, :fill_pointer) and opts[:fill_pointer] == :t ->
+          if length(dimensions) == 1, do: hd(dimensions)
+
+        Keyword.has_key?(opts, :fill_pointer) and is_integer(opts[:fill_pointer]) ->
+          opts[:fill_pointer]
+
+        Keyword.has_key?(opts, :fill_pointer) ->
+          old_fill_pointer
+
+        true ->
+          if is_integer(old_fill_pointer), do: min(old_fill_pointer, hd(dimensions))
+      end
+
+    displaced_to =
+      if Keyword.has_key?(opts, :displaced_to),
+        do: opts[:displaced_to],
+        else: nil
+
+    displaced_offset =
+      if Keyword.has_key?(opts, :displaced_index_offset),
+        do: opts[:displaced_index_offset] || 0,
+        else: 0
+
+    old_values =
+      if initial_contents == nil and displaced_to == nil do
+        copy_array_overlap(arr, old_dims, dimensions)
+      else
+        []
+      end
+
+    new_tid =
+      if adjustable do
+        tid
+      else
+        :ets.new(:lisp_array, [:set, :public])
+      end
+
+    :ets.select_delete(new_tid, [{{:"$1", :_}, [{:is_integer, :"$1"}], [true]}])
+    :ets.delete(new_tid, :__displaced__)
+    :ets.insert(new_tid, {:__init__, initial_element})
+
+    cond do
+      displaced_to != nil ->
+        :ets.insert(new_tid, {:__displaced__, displaced_to, displaced_offset})
+
+      initial_contents != nil ->
+        initial_contents
+        |> flatten_initial_contents(dimensions)
+        |> Enum.with_index()
+        |> Enum.each(fn {value, index} -> :ets.insert(new_tid, {index, value}) end)
+
+      true ->
+        Enum.each(old_values, fn {index, value} -> :ets.insert(new_tid, {index, value}) end)
+    end
+
+    new_meta =
+      old_meta
+      |> Map.put(:dimensions, dimensions)
+      |> Map.put(:initial_element, initial_element)
+      |> Map.put(:element_type, element_type)
+      |> Map.put(:fill_pointer, fill_pointer)
+      |> Map.put(:adjustable, adjustable)
+      |> Map.put(:displaced_to, displaced_to)
+      |> Map.put(:displaced_index_offset, displaced_offset)
+
+    :ets.insert(new_tid, {:__meta__, new_meta})
+
+    if adjustable, do: arr, else: {:array, dimensions, new_tid}
   end
 
   def adjust_array(arr, new_dims), do: adjust_array([arr, new_dims])
+
+  defp copy_array_overlap(arr, old_dims, new_dims) do
+    shared_dims = Enum.zip(old_dims, new_dims) |> Enum.map(fn {old, new} -> min(old, new) end)
+
+    if length(shared_dims) == length(old_dims) and length(shared_dims) == length(new_dims) do
+      for indices <- cartesian_indices(shared_dims) do
+        {compute_flat_index(new_dims, indices), row_major_aref(arr, compute_flat_index(old_dims, indices))}
+      end
+    else
+      old_size = Enum.reduce(old_dims, 1, &Kernel.*/2)
+      new_size = Enum.reduce(new_dims, 1, &Kernel.*/2)
+
+      if old_dims == [] or new_dims == [] do
+        []
+      else
+        for index <- 0..(min(old_size, new_size) - 1), index >= 0,
+            do: {index, row_major_aref(arr, index)}
+      end
+    end
+  end
+
+  defp cartesian_indices([]), do: [[]]
+  defp cartesian_indices([0 | _rest]), do: []
+
+  defp cartesian_indices([dimension | rest]) do
+    for index <- 0..(dimension - 1), index >= 0, suffix <- cartesian_indices(rest),
+        do: [index | suffix]
+  end
 
   def coerce(args) when is_list(args) do
     case args do
@@ -7832,6 +8030,13 @@ defmodule ExLisp.Builtins do
     |> Enum.reduce(0, fn {idx, dim}, acc ->
       acc * dim + idx
     end)
+  end
+
+  defp current_array_dimensions(tid, fallback) do
+    case :ets.lookup(tid, :__meta__) do
+      [{:__meta__, %{dimensions: dims}}] -> dims
+      _ -> fallback
+    end
   end
 
   def parse_lisp_keywords(args, allowed_keys \\ nil) do
@@ -8329,6 +8534,9 @@ defmodule ExLisp.Builtins do
 
   defp ast_to_lisp_val(ast) do
     case ast do
+      {:reader_macro, _, inner} ->
+        LispBeam.evaluate_ast(inner)
+
       {:lit, v} ->
         v
 
@@ -8338,6 +8546,9 @@ defmodule ExLisp.Builtins do
       {:float, _, v} ->
         v
 
+      {:keyword, _, v} ->
+        v
+
       {:id, _, [name]} ->
         case String.downcase(name) do
           "nil" -> nil
@@ -8345,8 +8556,15 @@ defmodule ExLisp.Builtins do
           _ -> String.downcase(name) |> String.to_atom()
         end
 
+      {:list, _, [{:id, _, [op]} | _]} = reader_macro
+      when op in ["make_array", "make_array_from_contents"] ->
+        LispBeam.evaluate_ast(reader_macro)
+
       {:list, _, items} ->
         Enum.map(items, &ast_to_lisp_val/1)
+
+      {:vector, _, items} ->
+        items |> Enum.map(&ast_to_lisp_val/1) |> vector()
 
       {:quoted, _, items} ->
         Enum.map(items, &ast_to_lisp_val/1)

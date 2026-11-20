@@ -660,6 +660,66 @@ defmodule CommonLispTest do
       assert ExLisp.eval(code) == [4, 5, 99, 99]
     end
 
+    test "rank-zero arrays and strings follow array semantics" do
+      code = """
+      (let* ((scalar (make-array nil :initial-element 'x))
+             (s (copy-seq "abcd"))
+             (adjustable (make-array '(2) :adjustable t)))
+        (setf (aref scalar) 'z)
+        (setf (aref s 0) #\\z)
+        (adjust-array adjustable '(5))
+        (list (arrayp s)
+              (vectorp s)
+              (array-rank scalar)
+              (array-dimensions scalar)
+              (array-total-size scalar)
+              (aref scalar)
+              s
+              (array-dimension s 0)
+              (array-dimensions adjustable)))
+      """
+
+      assert ExLisp.eval(code) == [:t, :t, 0, [], 1, :z, "zbcd", 4, [5]]
+    end
+
+    test "adjust-array preserves identity and multidimensional contents by subscript" do
+      code = """
+      (let ((adjustable (make-array '(2 3)
+                                    :adjustable t
+                                    :initial-contents '((a b c) (d e f))))
+            (plain (make-array '(2 3)
+                               :initial-contents '((a b c) (d e f)))))
+        (let ((same (adjust-array adjustable '(3 2) :initial-element 'x))
+              (fresh (adjust-array plain '(3 2) :initial-element 'x)))
+          (list (eq same adjustable)
+                (eq fresh plain)
+                (array-dimensions adjustable)
+                (aref same 0 1)
+                (aref same 1 1)
+                (aref same 2 1)
+                (array-dimensions plain)
+                (aref fresh 1 1))))
+      """
+
+      assert ExLisp.eval(code) == [:t, nil, [3, 2], :b, :e, :x, [2, 3], :e]
+    end
+
+    test "reader array literals stay values through macros and quote" do
+      code = """
+      (progn
+        (defmacro keyword-probe (form) `(progn ,form))
+        (let ((a (make-array 2))
+              (initial-element 'wrong))
+          (list
+            (equal (car '(#*101)) #*101)
+            (keyword-probe
+              (list (arrayp a)
+                    (make-list 1 :initial-element 0))))))
+      """
+
+      assert ExLisp.eval(code) == [:t, [:t, [0]]]
+    end
+
     test "vector fill-pointer, adjustable and vector-push-extend" do
       code = """
       (let ((v (make-array 2 :fill-pointer 0 :adjustable t)))
@@ -677,6 +737,29 @@ defmodule CommonLispTest do
       """
 
       assert ExLisp.eval(code) == [3, :t, :t, 10, 20, 30, 30, 2]
+    end
+
+    test "vector-push-extend updates displaced storage or detaches when full" do
+      code = """
+      (let* ((source (make-array 6 :initial-element nil))
+             (partial (make-array 4 :displaced-to source
+                                    :displaced-index-offset 2
+                                    :adjustable t
+                                    :fill-pointer 1))
+             (empty (make-array 0 :displaced-to source
+                                   :displaced-index-offset 2
+                                   :adjustable t
+                                   :fill-pointer 0)))
+        (vector-push-extend :partial partial)
+        (vector-push-extend :detached empty 3)
+        (list (aref source 3)
+              (fill-pointer partial)
+              (array-displacement empty)
+              (array-dimension empty 0)
+              (aref empty 0)))
+      """
+
+      assert ExLisp.eval(code) == [:partial, 2, nil, 3, :detached]
     end
 
     test "bit vectors and bit array operations" do

@@ -391,6 +391,10 @@ defmodule LispBeam do
   def compile_expr({:cons, _line, _h, _t} = erl_ast, _local_env), do: erl_ast
   def compile_expr({nil, _line} = erl_ast, _local_env), do: erl_ast
 
+  def compile_expr({:reader_macro, _line, inner}, local_env) do
+    compile_expr(inner, local_env)
+  end
+
   # Array object
   def compile_expr({:array, _dims, _tid} = arr, _local_env) do
     elements = ExLisp.Builtins.seq_to_list(arr)
@@ -4397,49 +4401,49 @@ defmodule LispBeam do
 
           name when name in [:aref, :_cl_aref_, :bit, :_cl_bit_, :sbit, :_cl_sbit_] ->
             case place_args do
-              [arr_node, idx_node] ->
-                arr_var = :"V_arr_#{unique_id()}"
-                idx_var = :"V_idx_#{unique_id()}"
-                val_var = :"V_val_#{unique_id()}"
-
-                {:block, 1,
-                 [
-                   {:match, 1, {:var, 1, arr_var}, compile_expr(arr_node, local_env)},
-                   {:match, 1, {:var, 1, idx_var}, compile_expr(idx_node, local_env)},
-                   {:match, 1, {:var, 1, val_var}, compile_expr(val_node, local_env)},
-                   {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_aref}},
-                    [{:var, 1, arr_var}, {:var, 1, idx_var}, {:var, 1, val_var}]}
-                 ]}
-
               [arr_node | idx_nodes] ->
-                arr_var = :"V_arr_#{unique_id()}"
-                val_var = :"V_val_#{unique_id()}"
+                {kind, target, target_bindings} = decompose_place_target(arr_node)
 
                 idx_vars =
                   Enum.map(idx_nodes, fn _ ->
-                    :"V_idx_#{unique_id()}"
+                    {:id, 1, ["__setf_aref_idx_#{unique_id()}"]}
                   end)
 
-                arr_match = {:match, 1, {:var, 1, arr_var}, compile_expr(arr_node, local_env)}
+                val_var = {:id, 1, ["__setf_aref_val_#{unique_id()}"]}
 
-                idx_matches =
+                idx_bindings =
                   Enum.zip(idx_vars, idx_nodes)
-                  |> Enum.map(fn {v, node} ->
-                    {:match, 1, {:var, 1, v}, compile_expr(node, local_env)}
-                  end)
+                  |> Enum.map(fn {var, node} -> {:list, 1, [var, node]} end)
 
-                val_match = {:match, 1, {:var, 1, val_var}, compile_expr(val_node, local_env)}
+                all_bindings =
+                  target_bindings ++ idx_bindings ++ [{:list, 1, [val_var, val_node]}]
 
-                idx_cons = ast_cons_list(Enum.map(idx_vars, fn v -> {:var, 1, v} end))
-
-                {:block, 1,
-                 [arr_match] ++
-                   idx_matches ++
+                update_call =
+                  {:list, 1,
                    [
-                     val_match,
-                     {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_aref}},
-                      [{:var, 1, arr_var}, idx_cons, {:var, 1, val_var}]}
+                     {:id, 1, ["_cl_set_aref_update_seq_"]},
+                     target,
+                     {:list, 1, [{:id, 1, ["list"]} | idx_vars]},
+                     val_var
                    ]}
+
+                set_form =
+                  case kind do
+                    :var -> {:list, 1, [{:id, 1, ["setq"]}, target, update_call]}
+                    :accessor -> {:list, 1, [{:id, 1, ["setf"]}, target, update_call]}
+                    :expr -> update_call
+                  end
+
+                compile_expr(
+                  {:list, 1,
+                   [
+                     {:id, 1, ["let*"]},
+                     {:list, 1, all_bindings},
+                     set_form,
+                     val_var
+                   ]},
+                  local_env
+                )
 
               _ ->
                 compile_setq([place, val_node], local_env)

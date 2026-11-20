@@ -31,6 +31,7 @@ defmodule ExLisp.Evaluator do
   def eval(val, _env) when is_integer(val) or is_float(val) or is_binary(val), do: val
   def eval(%ExLisp.Ratio{} = val, _env), do: val
   def eval(%ExLisp.Character{} = val, _env), do: val
+  def eval({:reader_macro, _pos, inner}, env), do: eval(inner, env)
   def eval({:keyword, _pos, kw}, _env), do: kw
   def eval(nil, _env), do: nil
   def eval(:t, _env), do: :t
@@ -2172,10 +2173,21 @@ defmodule ExLisp.Evaluator do
 
           op in [:aref, :_cl_aref_] ->
             [arr_node | idx_nodes] = place_args
-            arr = eval(arr_node, env) |> Builtins.unwrap_mv_primary()
+            {arr_getter, arr_setter} = get_setf_expansion(arr_node, env)
             idxs = Enum.map(idx_nodes, &(eval(&1, env) |> Builtins.unwrap_mv_primary()))
-            getter = fn -> Builtins.aref([arr | idxs]) end
-            setter = fn unwrapped -> Builtins.set_aref(arr, idxs, unwrapped) end
+            getter = fn -> Builtins.aref([arr_getter.() | idxs]) end
+
+            setter = fn unwrapped ->
+              arr = arr_getter.()
+              updated = Builtins.set_aref(arr, idxs, unwrapped)
+
+              if is_binary(arr) do
+                arr_setter.(updated)
+              end
+
+              unwrapped
+            end
+
             {getter, setter}
 
           op in [:svref, :_cl_svref_] ->
@@ -2340,16 +2352,6 @@ defmodule ExLisp.Evaluator do
 
         val
     end
-  end
-
-  defp eval_setf_pair({:list, _pos, [op_node, arr_node, idx_node]}, val_node, env)
-       when elem(op_node, 0) == :id and hd(elem(op_node, 2)) in ["aref", "AREF", "_cl_aref_"] do
-    arr = eval(arr_node, env) |> Builtins.unwrap_mv_primary()
-    idx = eval(idx_node, env) |> Builtins.unwrap_mv_primary()
-    val = eval(val_node, env)
-    unwrapped = Builtins.unwrap_mv_primary(val)
-    Builtins.set_aref(arr, [idx], unwrapped)
-    val
   end
 
   defp eval_setf_pair({:list, _pos, [op_node, vec_node, idx_node]}, val_node, env)
@@ -4104,6 +4106,7 @@ defmodule ExLisp.Evaluator do
   defp eval_quote_node(%ExLisp.Ratio{} = val), do: val
   defp eval_quote_node(%ExLisp.Character{} = val), do: val
   defp eval_quote_node({:keyword, _pos, kw}), do: kw
+  defp eval_quote_node({:reader_macro, _pos, inner}), do: LispBeam.evaluate_ast(inner)
 
   defp eval_quote_node({:vector, _pos, elements}) do
     eval_quote_elements(elements) |> Builtins.vector()
