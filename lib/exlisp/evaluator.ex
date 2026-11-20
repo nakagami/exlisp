@@ -125,6 +125,9 @@ defmodule ExLisp.Evaluator do
           sym in [nil, :t, :T] ->
             if sym == nil, do: nil, else: :t
 
+          Env.has_symbol_macro?(sym) ->
+            eval(Env.get_symbol_macro(sym), env)
+
           keyword_symbol?(sym) ->
             sym
 
@@ -678,6 +681,31 @@ defmodule ExLisp.Evaluator do
             nil
         end
 
+      op when op in [:define_symbol_macro, :_cl_define_symbol_macro_, :"define-symbol-macro"] ->
+        case args do
+          [name_node, expansion] ->
+            symbol = LispBeam.extract_symbol_name(name_node)
+            Env.put_symbol_macro(symbol, expansion)
+
+          _ ->
+            nil
+        end
+
+      op when op in [
+        :define_compiler_macro,
+        :_cl_define_compiler_macro_,
+        :"define-compiler-macro"
+      ] ->
+        case args do
+          [name_node, params_node | body_nodes] ->
+            name = LispBeam.extract_symbol_name(name_node)
+            lambda_ast = ExLisp.Macro.build_macro_lambda(params_node, body_nodes)
+            Env.put_compiler_macro(name, eval(lambda_ast, env))
+
+          _ ->
+            nil
+        end
+
       op when op in [:lambda, :_cl_lambda_] ->
         case args do
           [params_node | body_nodes] ->
@@ -1043,6 +1071,12 @@ defmodule ExLisp.Evaluator do
           _ -> nil
         end
 
+      op when op in [:load_time_value, :_cl_load_time_value_, :"load-time-value"] ->
+        case args do
+          [form | _] -> eval(form, env) |> Builtins.unwrap_mv_primary()
+          _ -> nil
+        end
+
       op when op in [:ignore_errors, :_cl_ignore_errors_, :"ignore-errors"] ->
         try do
           eval_progn(args, env)
@@ -1204,9 +1238,7 @@ defmodule ExLisp.Evaluator do
         :defsetf,
         :_cl_defsetf_,
         :define_modify_macro,
-        :_cl_define_modify_macro_,
-        :define_compiler_macro,
-        :_cl_define_compiler_macro_
+        :_cl_define_modify_macro_
       ] ->
         case args do
           [name_node | _] -> LispBeam.extract_symbol_name(name_node)
@@ -1713,22 +1745,9 @@ defmodule ExLisp.Evaluator do
 
   defp eval_setq([var_node, val_node], env) do
     var_sym = LispBeam.extract_symbol_name(var_node)
-    val = eval(val_node, env) |> Builtins.unwrap_mv_primary()
 
-    case Map.get(env, var_sym) do
-      box when is_tuple(box) and elem(box, 0) == :box -> :erlang.put(elem(box, 1), val)
-      _ -> Env.set_var(var_sym, val)
-    end
-
-    val
-  end
-
-  defp eval_setq(args, env) do
-    pairs = Enum.chunk_every(args, 2)
-
-    Enum.reduce(pairs, nil, fn
-      [var_node, val_node], _acc ->
-        var_sym = LispBeam.extract_symbol_name(var_node)
+    case symbol_macro_expansion(var_sym, env) do
+      nil ->
         val = eval(val_node, env) |> Builtins.unwrap_mv_primary()
 
         case Map.get(env, var_sym) do
@@ -1737,6 +1756,33 @@ defmodule ExLisp.Evaluator do
         end
 
         val
+
+      expansion ->
+        eval_setf_pair(expansion, val_node, env)
+    end
+  end
+
+  defp eval_setq(args, env) do
+    pairs = Enum.chunk_every(args, 2)
+
+    Enum.reduce(pairs, nil, fn
+      [var_node, val_node], _acc ->
+        var_sym = LispBeam.extract_symbol_name(var_node)
+
+        case symbol_macro_expansion(var_sym, env) do
+          nil ->
+            val = eval(val_node, env) |> Builtins.unwrap_mv_primary()
+
+            case Map.get(env, var_sym) do
+              box when is_tuple(box) and elem(box, 0) == :box -> :erlang.put(elem(box, 1), val)
+              _ -> Env.set_var(var_sym, val)
+            end
+
+            val
+
+          expansion ->
+            eval_setf_pair(expansion, val_node, env)
+        end
 
       [var_node], _acc ->
         var_sym = LispBeam.extract_symbol_name(var_node)
@@ -1838,47 +1884,49 @@ defmodule ExLisp.Evaluator do
       {:id, _pos, _} ->
         var_sym = LispBeam.extract_symbol_name(place)
 
-        if Map.has_key?(env, {:symbol_macro, var_sym}) do
-          expansion = Map.get(env, {:symbol_macro, var_sym})
-          get_setf_expansion(expansion, env)
-        else
-          getter = fn -> eval(place, env) end
+        case symbol_macro_expansion(var_sym, env) do
+          expansion when expansion != nil ->
+            get_setf_expansion(expansion, env)
 
-          setter = fn unwrapped ->
-            case Map.get(env, var_sym) do
-              box when is_tuple(box) and elem(box, 0) == :box ->
-                :erlang.put(elem(box, 1), unwrapped)
+          nil ->
+            getter = fn -> eval(place, env) end
 
-              _ ->
-                Env.set_var(var_sym, unwrapped)
+            setter = fn unwrapped ->
+              case Map.get(env, var_sym) do
+                box when is_tuple(box) and elem(box, 0) == :box ->
+                  :erlang.put(elem(box, 1), unwrapped)
+
+                _ ->
+                  Env.set_var(var_sym, unwrapped)
+              end
+
+              unwrapped
             end
 
-            unwrapped
-          end
-
-          {getter, setter}
+            {getter, setter}
         end
 
       var_sym when is_atom(var_sym) ->
-        if Map.has_key?(env, {:symbol_macro, var_sym}) do
-          expansion = Map.get(env, {:symbol_macro, var_sym})
-          get_setf_expansion(expansion, env)
-        else
-          getter = fn -> eval(place, env) end
+        case symbol_macro_expansion(var_sym, env) do
+          expansion when expansion != nil ->
+            get_setf_expansion(expansion, env)
 
-          setter = fn unwrapped ->
-            case Map.get(env, var_sym) do
-              box when is_tuple(box) and elem(box, 0) == :box ->
-                :erlang.put(elem(box, 1), unwrapped)
+          nil ->
+            getter = fn -> eval(place, env) end
 
-              _ ->
-                Env.set_var(var_sym, unwrapped)
+            setter = fn unwrapped ->
+              case Map.get(env, var_sym) do
+                box when is_tuple(box) and elem(box, 0) == :box ->
+                  :erlang.put(elem(box, 1), unwrapped)
+
+                _ ->
+                  Env.set_var(var_sym, unwrapped)
+              end
+
+              unwrapped
             end
 
-            unwrapped
-          end
-
-          {getter, setter}
+            {getter, setter}
         end
 
       {:list, _pos, [{:id, _, [p]} | forms]} when p in ["progn", "PROGN"] and forms != [] ->
@@ -2210,42 +2258,44 @@ defmodule ExLisp.Evaluator do
   defp eval_setf_pair({:id, _pos, _} = place, val_node, env) do
     var_sym = LispBeam.extract_symbol_name(place)
 
-    if Map.has_key?(env, {:symbol_macro, var_sym}) do
-      expansion = Map.get(env, {:symbol_macro, var_sym})
-      eval_setf_pair(expansion, val_node, env)
-    else
-      val = eval(val_node, env)
-      unwrapped = Builtins.unwrap_mv_primary(val)
+    case symbol_macro_expansion(var_sym, env) do
+      expansion when expansion != nil ->
+        eval_setf_pair(expansion, val_node, env)
 
-      case Map.get(env, var_sym) do
-        box when is_tuple(box) and elem(box, 0) == :box ->
-          :erlang.put(elem(box, 1), unwrapped)
+      nil ->
+        val = eval(val_node, env)
+        unwrapped = Builtins.unwrap_mv_primary(val)
 
-        _ ->
-          Env.set_var(var_sym, unwrapped)
-      end
+        case Map.get(env, var_sym) do
+          box when is_tuple(box) and elem(box, 0) == :box ->
+            :erlang.put(elem(box, 1), unwrapped)
 
-      val
+          _ ->
+            Env.set_var(var_sym, unwrapped)
+        end
+
+        val
     end
   end
 
   defp eval_setf_pair(var_sym, val_node, env) when is_atom(var_sym) do
-    if Map.has_key?(env, {:symbol_macro, var_sym}) do
-      expansion = Map.get(env, {:symbol_macro, var_sym})
-      eval_setf_pair(expansion, val_node, env)
-    else
-      val = eval(val_node, env)
-      unwrapped = Builtins.unwrap_mv_primary(val)
+    case symbol_macro_expansion(var_sym, env) do
+      expansion when expansion != nil ->
+        eval_setf_pair(expansion, val_node, env)
 
-      case Map.get(env, var_sym) do
-        box when is_tuple(box) and elem(box, 0) == :box ->
-          :erlang.put(elem(box, 1), unwrapped)
+      nil ->
+        val = eval(val_node, env)
+        unwrapped = Builtins.unwrap_mv_primary(val)
 
-        _ ->
-          Env.set_var(var_sym, unwrapped)
-      end
+        case Map.get(env, var_sym) do
+          box when is_tuple(box) and elem(box, 0) == :box ->
+            :erlang.put(elem(box, 1), unwrapped)
 
-      val
+          _ ->
+            Env.set_var(var_sym, unwrapped)
+        end
+
+        val
     end
   end
 
@@ -2286,6 +2336,22 @@ defmodule ExLisp.Evaluator do
         unwrapped = Builtins.unwrap_mv_primary(val)
         setter.(unwrapped)
         val
+    end
+  end
+
+  defp symbol_macro_expansion(symbol, env) do
+    cond do
+      Map.has_key?(env, {:symbol_macro, symbol}) ->
+        Map.get(env, {:symbol_macro, symbol})
+
+      Map.has_key?(env, symbol) ->
+        nil
+
+      Env.has_symbol_macro?(symbol) ->
+        Env.get_symbol_macro(symbol)
+
+      true ->
+        nil
     end
   end
 
@@ -3417,6 +3483,7 @@ defmodule ExLisp.Evaluator do
   Creates a closure function wrapping parameter binding and body evaluation.
   """
   def create_closure(params_node, body_nodes, captured_env, name \\ nil) do
+    body_nodes = prepare_load_time_values(body_nodes, captured_env)
     has_return = name != nil and body_has_block_return?(body_nodes, name)
     tag = if has_return, do: {:block, name, make_ref()}, else: nil
     snapshotted_env = snapshot_env(captured_env)
@@ -3448,6 +3515,7 @@ defmodule ExLisp.Evaluator do
               {:block_return, ^tag, val} -> val
             end
           end
+
         else
           fn passed_args ->
             ref = make_ref()
@@ -3650,6 +3718,40 @@ defmodule ExLisp.Evaluator do
       end
     end
   end
+
+  @doc false
+  def prepare_load_time_values(nodes, env) when is_list(nodes) do
+    Enum.map(nodes, &prepare_load_time_value(&1, env))
+  end
+
+  @doc false
+  def prepare_load_time_value(
+         {:list, pos, [{:id, op_pos, [op]} | args]},
+         env
+       )
+       when op in ["load-time-value", "load_time_value", "LOAD-TIME-VALUE", "LOAD_TIME_VALUE"] do
+    case args do
+      [form | _] -> {:lit, eval(form, env) |> Builtins.unwrap_mv_primary()}
+      _ -> {:list, pos, [{:id, op_pos, [op]}]}
+    end
+  end
+
+  def prepare_load_time_value({:quoted, _, _} = quoted, _env), do: quoted
+
+  def prepare_load_time_value({:list, pos, elements}, env) do
+    {:list, pos, Enum.map(elements, &prepare_load_time_value(&1, env))}
+  end
+
+  def prepare_load_time_value({:dotted_list, pos, elements, tail}, env) do
+    {:dotted_list, pos, Enum.map(elements, &prepare_load_time_value(&1, env)),
+     prepare_load_time_value(tail, env)}
+  end
+
+  def prepare_load_time_value({:vector, pos, elements}, env) do
+    {:vector, pos, Enum.map(elements, &prepare_load_time_value(&1, env))}
+  end
+
+  def prepare_load_time_value(other, _env), do: other
 
   defp body_has_block_return?([], _block_name), do: false
 

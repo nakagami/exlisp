@@ -1137,6 +1137,110 @@ defmodule ExLisp.Builtins do
     [:_values_, [q, r]]
   end
 
+  def ffloor(x, d \\ 1), do: float_quotient_values(floor(x, d))
+  def fceiling(x, d \\ 1), do: float_quotient_values(ceiling(x, d))
+  def fround(x, d \\ 1), do: float_quotient_values(round(x, d))
+  def ftruncate(x, d \\ 1), do: float_quotient_values(truncate(x, d))
+
+  defp float_quotient_values([:_values_, [quotient, remainder]]) do
+    [:_values_, [quotient * 1.0, remainder]]
+  end
+
+  def decode_float(value) when is_float(value) do
+    if value == 0.0 do
+      [:_values_, [0.0, 0, if(negative_float?(value), do: -1.0, else: 1.0)]]
+    else
+      abs_value = Kernel.abs(value)
+      exponent = Kernel.trunc(:math.floor(:math.log2(abs_value))) + 1
+      significand = abs_value / :math.pow(2.0, exponent)
+      sign = if(value < 0.0, do: -1.0, else: 1.0)
+      [:_values_, [significand, exponent, sign]]
+    end
+  end
+
+  def decode_float(value), do: decode_float(value * 1.0)
+
+  def integer_decode_float(value) when is_float(value) do
+    if value == 0.0 do
+      [:_values_, [0, 0, if(value < 0.0, do: -1, else: 1)]]
+    else
+      <<sign::1, exponent_bits::11, fraction::52>> = <<value::float>>
+      sign = if(sign == 1, do: -1, else: 1)
+
+      {significand, exponent} =
+        if exponent_bits == 0 do
+          {fraction, -1074}
+        else
+          {(1 <<< 52) + fraction, exponent_bits - 1023 - 52}
+        end
+
+      [:_values_, [significand, exponent, sign]]
+    end
+  end
+
+  def integer_decode_float(value), do: integer_decode_float(value * 1.0)
+
+  def float_digits(value) when is_float(value), do: 53
+  def float_digits(_value), do: 53
+
+  def float_precision(value) when is_float(value) and value != 0.0, do: 53
+  def float_precision(_value), do: 0
+
+  def float_radix(_value), do: 2
+
+  def float_sign(value, other \\ 1.0)
+  def float_sign(value, other) when is_float(value) do
+    if negative_float?(value), do: -Kernel.abs(other * 1.0), else: Kernel.abs(other * 1.0)
+  end
+
+  def float_sign(value, other) when value < 0, do: -Kernel.abs(other * 1.0)
+  def float_sign(_value, other), do: Kernel.abs(other * 1.0)
+
+  def scale_float(value, integer) when is_number(value) and is_integer(integer) do
+    value * :math.pow(2.0, integer)
+  end
+
+  def rationalize(%ExLisp.Ratio{} = value), do: value
+  def rationalize(value) when is_integer(value), do: value
+
+  def rationalize(value) when is_float(value) do
+    decimal_rational(value)
+  end
+
+  defp decimal_rational(value) when value == 0.0, do: 0
+
+  defp decimal_rational(value) do
+    [coefficient, exponent] =
+      case String.split(Float.to_string(value), ~r/e/i) do
+        [base] -> [base, "0"]
+        [base, exp] -> [base, exp]
+      end
+
+    negative = String.starts_with?(coefficient, "-")
+    unsigned = String.trim_leading(coefficient, "-")
+
+    {digits, fraction_digits} =
+      case String.split(unsigned, ".", parts: 2) do
+        [whole] -> {whole, 0}
+        [whole, fraction] -> {whole <> fraction, byte_size(fraction)}
+      end
+
+    numerator = String.to_integer(digits)
+    scale = String.to_integer(exponent) - fraction_digits
+    sign = if negative, do: -1, else: 1
+
+    if scale >= 0 do
+      sign * numerator * Integer.pow(10, scale)
+    else
+      ExLisp.Ratio.new(sign * numerator, Integer.pow(10, -scale))
+    end
+  end
+
+  defp negative_float?(value) do
+    <<sign::1, _::bitstring>> = <<value::float>>
+    sign == 1
+  end
+
   def sqrt(x) when is_number(x), do: :math.sqrt(x)
   def exp(x) when is_number(x), do: :math.exp(x)
 
@@ -7927,6 +8031,16 @@ defmodule ExLisp.Builtins do
     inspect(ExLisp.to_repl_display(obj))
   end
 
+  def prin1_to_string(obj), do: write_to_string(obj)
+
+  def princ_to_string(obj) do
+    cond do
+      is_binary(obj) -> obj
+      match?(%ExLisp.Character{}, obj) -> to_string(obj)
+      true -> to_string(ExLisp.to_repl_display(obj))
+    end
+  end
+
   def eval(form) do
     ast = ExLisp.Macro.lisp_data_to_ast(form)
     LispBeam.evaluate_ast(ast)
@@ -8513,6 +8627,15 @@ defmodule ExLisp.Builtins do
     norm = normalize_sym_prop(sym)
     MapSet.member?(@special_operators, norm) |> lisp_bool()
   end
+
+  def compiler_macro_function(args) when is_list(args) do
+    case args do
+      [name] -> compiler_macro_function(name)
+      _ -> raise ArgumentError, "compiler-macro-function requires 1 argument"
+    end
+  end
+
+  def compiler_macro_function(name), do: ExLisp.Env.get_compiler_macro(name)
 
   def symbol_name(%ExLisp.Symbol{name: name}), do: name
 
@@ -9548,6 +9671,8 @@ defmodule ExLisp.Builtins do
     :defvar,
     :defparameter,
     :defconstant,
+    :define_symbol_macro,
+    :define_compiler_macro,
     :defstruct,
     :deftype,
     :define_modify_macro,
@@ -9591,6 +9716,13 @@ defmodule ExLisp.Builtins do
 
   def macroexpand_1(form, _env \\ nil) do
     case form do
+      symbol when is_atom(symbol) ->
+        if ExLisp.Env.has_symbol_macro?(symbol) do
+          ExLisp.Env.get_symbol_macro(symbol) |> ExLisp.Macro.ast_to_lisp_data()
+        else
+          form
+        end
+
       [op | args] when is_list(args) ->
         op_name =
           case op do
@@ -10761,6 +10893,27 @@ defmodule ExLisp.Builtins do
   end
 
   def file_write_date(filespec), do: ExLisp.Pathname.file_write_date(filespec)
+
+  def delete_file(args) when is_list(args) do
+    case args do
+      [filespec | _] -> ExLisp.Pathname.delete_file(filespec)
+      _ -> raise ArgumentError, "delete-file requires 1 argument"
+    end
+  end
+
+  def delete_file(filespec), do: ExLisp.Pathname.delete_file(filespec)
+
+  def rename_file(old, new), do: ExLisp.Pathname.rename_file(old, new)
+
+  def ensure_directories_exist(args) when is_list(args) do
+    case args do
+      [filespec | _] -> ExLisp.Pathname.ensure_directories_exist(filespec)
+      _ -> raise ArgumentError, "ensure-directories-exist requires 1 argument"
+    end
+  end
+
+  def ensure_directories_exist(filespec),
+    do: ExLisp.Pathname.ensure_directories_exist(filespec)
 
   def directory, do: ExLisp.Pathname.directory("*")
 

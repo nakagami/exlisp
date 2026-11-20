@@ -48,6 +48,7 @@ defmodule LispBeam do
   """
   def evaluate_ast(ast, _counter \\ nil) do
     ExLisp.Env.ensure_env()
+    ast = ExLisp.Evaluator.prepare_load_time_value(ast, %{})
 
     case try_direct_eval(ast) do
       {:ok, val} ->
@@ -620,6 +621,9 @@ defmodule LispBeam do
       MapSet.member?(local_env, var_atom) ->
         {:var, 1, erl_var_name(var_atom)}
 
+      ExLisp.Env.has_symbol_macro?(var_atom) ->
+        compile_expr(ExLisp.Env.get_symbol_macro(var_atom), local_env)
+
       var_atom == :_cl_1plus_ ->
         {:atom, 1, :"1+"}
 
@@ -671,6 +675,12 @@ defmodule LispBeam do
 
       :defmacro ->
         compile_defmacro(args, local_env)
+
+      :define_symbol_macro ->
+        compile_define_symbol_macro(args)
+
+      :define_compiler_macro ->
+        compile_define_compiler_macro(args)
 
       :macrolet ->
         compile_macrolet(args, local_env)
@@ -1226,6 +1236,16 @@ defmodule LispBeam do
           _ -> {:atom, 1, nil}
         end
 
+      name when name in [:load_time_value, :_cl_load_time_value_, :"load-time-value"] ->
+        case args do
+          [form | _] ->
+            value = ExLisp.Evaluator.eval(form)
+            compile_expr({:lit, value}, local_env)
+
+          _ ->
+            {:atom, 1, nil}
+        end
+
       name
       when name in [
              :defpackage,
@@ -1608,8 +1628,40 @@ defmodule LispBeam do
             {:call, 1, compiled_fn, compiled_args}
 
           _ ->
-            compile_regular_op(op, args, local_env)
+            compile_regular_op_with_compiler_macro(op, args, local_env)
         end
+    end
+  end
+
+  defp compile_regular_op_with_compiler_macro(op, args, local_env) do
+    name = extract_op_name(op)
+
+    shadowed? =
+      is_atom(name) and
+        (MapSet.member?(local_env, {:direct_fn, name}) or
+           MapSet.member?(local_env, {:closure_fn, name}))
+
+    if is_atom(name) and not shadowed? and ExLisp.Env.has_compiler_macro?(name) do
+      full_form = {:list, 1, [op | args]}
+      lisp_args = Enum.map(args, &ExLisp.Macro.ast_to_lisp_data/1)
+      lisp_whole = ExLisp.Macro.ast_to_lisp_data(full_form)
+
+      expanded =
+        case ExLisp.Env.get_compiler_macro(name) do
+          %ExLisp.Closure{fun: fun} -> fun.([lisp_args, lisp_whole])
+          fun when is_function(fun, 2) -> fun.(lisp_args, lisp_whole)
+          fun when is_function(fun, 1) -> fun.([lisp_args, lisp_whole])
+        end
+
+      expanded_ast = ExLisp.Macro.lisp_data_to_ast(expanded)
+
+      if expanded_ast == full_form do
+        compile_regular_op(op, args, local_env)
+      else
+        compile_expr(expanded_ast, local_env)
+      end
+    else
+      compile_regular_op(op, args, local_env)
     end
   end
 
@@ -3127,13 +3179,18 @@ defmodule LispBeam do
           var_name = extract_symbol_name(var_node)
           compiled_val = compile_expr(val_node, local_env)
 
-          if MapSet.member?(local_env, var_name) or
-               MapSet.member?(local_env, {:mutated, var_name}) do
-            {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Env}, {:atom, 1, :set_lexical_var}},
-             [{:atom, 1, var_name}, compiled_val]}
-          else
-            {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Env}, {:atom, 1, :set_var}},
-             [{:atom, 1, var_name}, compiled_val]}
+          cond do
+            MapSet.member?(local_env, var_name) or
+                MapSet.member?(local_env, {:mutated, var_name}) ->
+              {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Env}, {:atom, 1, :set_lexical_var}},
+               [{:atom, 1, var_name}, compiled_val]}
+
+            ExLisp.Env.has_symbol_macro?(var_name) ->
+              compile_single_setf(ExLisp.Env.get_symbol_macro(var_name), val_node, local_env)
+
+            true ->
+              {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Env}, {:atom, 1, :set_var}},
+               [{:atom, 1, var_name}, compiled_val]}
           end
 
         [var_node] ->
@@ -6421,6 +6478,24 @@ defmodule LispBeam do
     {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Env}, {:atom, 1, :put_macro}},
      [{:atom, 1, macro_name}, compiled_lambda]}
   end
+
+  def compile_define_symbol_macro([name_node, expansion]) do
+    name = extract_symbol_name(name_node)
+    ExLisp.Env.put_symbol_macro(name, expansion)
+    {:atom, 1, name}
+  end
+
+  def compile_define_symbol_macro(_), do: {:atom, 1, nil}
+
+  def compile_define_compiler_macro([name_node, params_node | body_nodes]) do
+    name = extract_symbol_name(name_node)
+    lambda_ast = ExLisp.Macro.build_macro_lambda(params_node, body_nodes)
+    macro_fun = evaluate_ast(lambda_ast)
+    ExLisp.Env.put_compiler_macro(name, macro_fun)
+    {:atom, 1, name}
+  end
+
+  def compile_define_compiler_macro(_), do: {:atom, 1, nil}
 
   def compile_macrolet([bindings_node | body_nodes], local_env) do
     macro_defs = extract_fn_bindings(bindings_node)

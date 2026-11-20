@@ -545,6 +545,60 @@ defmodule ExLisp.Pathname do
   end
 
   @doc """
+  Deletes the file named by `filespec`.
+  """
+  def delete_file(filespec) do
+    path = namestring(filespec)
+
+    case File.rm(path) do
+      :ok ->
+        :t
+
+      {:error, reason} ->
+        raise File.Error, reason: reason, action: "delete file", path: path
+    end
+  end
+
+  @doc """
+  Renames a file and returns its defaulted new name and both truenames.
+  """
+  def rename_file(filespec, new_name) do
+    old_pathname = truename(filespec)
+    defaulted_new = merge_pathnames(new_name, old_pathname, nil)
+    old_path = namestring(filespec)
+    new_path = namestring(defaulted_new)
+
+    case File.rename(old_path, new_path) do
+      :ok ->
+        [:_values_, [defaulted_new, old_pathname, truename(defaulted_new)]]
+
+      {:error, reason} ->
+        raise File.Error, reason: reason, action: "rename file", path: new_path
+    end
+  end
+
+  @doc """
+  Creates the directories needed by `pathspec` if they do not exist.
+  """
+  def ensure_directories_exist(pathspec) do
+    path = pathname(pathspec)
+    directory = directory_namestring(path)
+    existed = directory == "" or File.dir?(directory)
+
+    if directory != "" do
+      case File.mkdir_p(directory) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          raise File.Error, reason: reason, action: "make directory", path: directory
+      end
+    end
+
+    [:_values_, [path, ExLisp.Builtins.lisp_bool(not existed)]]
+  end
+
+  @doc """
   Returns the list of pathnames matching pathspec.
   """
   def directory(pathspec \\ "*") do

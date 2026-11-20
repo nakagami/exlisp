@@ -35,7 +35,10 @@ defmodule ExLisp.Compiler do
     output_dir = Keyword.get(opts, :output_dir, nil)
     write_beam = Keyword.get(opts, :write_beam, output_dir != nil)
 
-    asts = ExLisp.LispParser.parse_multiple!(code)
+    asts =
+      code
+      |> ExLisp.LispParser.parse_multiple!()
+      |> ExLisp.Evaluator.prepare_load_time_values(%{})
 
     {vars, funs, top_level_exprs} = analyze_definitions(asts)
 
@@ -109,6 +112,21 @@ defmodule ExLisp.Compiler do
                 lambda_ast = ExLisp.Macro.build_macro_lambda(params_node, body_nodes)
                 macro_fun = LispBeam.evaluate_ast(lambda_ast)
                 ExLisp.Env.put_macro(macro_name, macro_fun)
+              rescue
+                _ -> :ok
+              end
+
+              {vars_acc, funs_acc, [ast | exprs_acc]}
+
+            :define_compiler_macro ->
+              macro_name = LispBeam.extract_symbol_name(var_node)
+              params_node = Enum.at(rest, 0, [])
+              body_nodes = Enum.drop(rest, 1)
+
+              try do
+                lambda_ast = ExLisp.Macro.build_macro_lambda(params_node, body_nodes)
+                macro_fun = LispBeam.evaluate_ast(lambda_ast)
+                ExLisp.Env.put_compiler_macro(macro_name, macro_fun)
               rescue
                 _ -> :ok
               end

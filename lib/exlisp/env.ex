@@ -85,7 +85,14 @@ defmodule ExLisp.Env do
     ensure_env()
 
     for {{tag, _} = key, _} <- :persistent_term.get(),
-        tag in [:exlisp_var, :exlisp_fun, :exlisp_macro, :exlisp_fun_ast] do
+        tag in [
+          :exlisp_var,
+          :exlisp_fun,
+          :exlisp_macro,
+          :exlisp_fun_ast,
+          :exlisp_symbol_macro,
+          :exlisp_compiler_macro
+        ] do
       :persistent_term.erase(key)
     end
 
@@ -223,6 +230,38 @@ defmodule ExLisp.Env do
       :"sb-sys"
     ],
     :pi => :math.pi(),
+    :least_positive_single_float => 4.9e-45,
+    :least_positive_short_float => 4.9e-45,
+    :least_positive_normalized_single_float => 1.17549435e-38,
+    :least_positive_normalized_short_float => 1.17549435e-38,
+    :least_positive_double_float => 4.9e-324,
+    :least_positive_long_float => 4.9e-324,
+    :least_positive_normalized_double_float => 2.2250738585072014e-308,
+    :least_positive_normalized_long_float => 2.2250738585072014e-308,
+    :least_negative_single_float => -4.9e-45,
+    :least_negative_short_float => -4.9e-45,
+    :least_negative_normalized_single_float => -1.17549435e-38,
+    :least_negative_normalized_short_float => -1.17549435e-38,
+    :least_negative_double_float => -4.9e-324,
+    :least_negative_long_float => -4.9e-324,
+    :least_negative_normalized_double_float => -2.2250738585072014e-308,
+    :least_negative_normalized_long_float => -2.2250738585072014e-308,
+    :most_positive_single_float => 3.40282347e38,
+    :most_positive_short_float => 3.40282347e38,
+    :most_positive_double_float => 1.7976931348623157e308,
+    :most_positive_long_float => 1.7976931348623157e308,
+    :most_negative_single_float => -3.40282347e38,
+    :most_negative_short_float => -3.40282347e38,
+    :most_negative_double_float => -1.7976931348623157e308,
+    :most_negative_long_float => -1.7976931348623157e308,
+    :single_float_epsilon => 1.1920929e-7,
+    :short_float_epsilon => 1.1920929e-7,
+    :single_float_negative_epsilon => 5.96046448e-8,
+    :short_float_negative_epsilon => 5.96046448e-8,
+    :double_float_epsilon => 2.220446049250313e-16,
+    :long_float_epsilon => 2.220446049250313e-16,
+    :double_float_negative_epsilon => 1.1102230246251565e-16,
+    :long_float_negative_epsilon => 1.1102230246251565e-16,
     :most_positive_fixnum => 4_611_686_018_427_387_903,
     :"most-positive-fixnum" => 4_611_686_018_427_387_903,
     :most_negative_fixnum => -4_611_686_018_427_387_904,
@@ -838,6 +877,42 @@ defmodule ExLisp.Env do
     end
 
     :ok
+  end
+
+  @doc """
+  Defines or removes a global symbol macro.
+  """
+  def put_symbol_macro(name, expansion) do
+    normalized = normalize_name(name)
+    :persistent_term.put({:exlisp_symbol_macro, normalized}, expansion)
+    normalized
+  end
+
+  def get_symbol_macro(name) do
+    :persistent_term.get({:exlisp_symbol_macro, normalize_name(name)}, nil)
+  end
+
+  def has_symbol_macro?(name) do
+    :persistent_term.get({:exlisp_symbol_macro, normalize_name(name)}, :__not_found__) !=
+      :__not_found__
+  end
+
+  @doc """
+  Defines a compiler macro.
+  """
+  def put_compiler_macro(name, fun) do
+    normalized = normalize_name(name)
+    :persistent_term.put({:exlisp_compiler_macro, normalized}, fun)
+    normalized
+  end
+
+  def get_compiler_macro(name) do
+    :persistent_term.get({:exlisp_compiler_macro, normalize_name(name)}, nil)
+  end
+
+  def has_compiler_macro?(name) do
+    :persistent_term.get({:exlisp_compiler_macro, normalize_name(name)}, :__not_found__) !=
+      :__not_found__
   end
 
   @doc """
