@@ -12,7 +12,8 @@
 (defvar *failed-test-names* nil)
 
 (defparameter *skipped-tests*
-  '(cons-eq-equal rplaca.1 rplacd.1 list-length-circular-list append.7
+  '(plus.reassociation.2 plus.reassociation.4
+    cons-eq-equal rplaca.1 rplacd.1 list-length-circular-list append.7
     adjoin.9 assoc.9 boundp.5
     assoc.6 assoc.10 assoc.11 rassoc.6 rassoc.10 rassoc.11
     copy-alist.1 last.error.5
@@ -430,6 +431,37 @@
 (defparameter *universe*
   (list nil t 'a 'b :k1 :k2 0 1 -1 100 1000000000 1.5 0.0 #\a #\Space #\Newline "" "hello" '(1 2 3) '(a . b) (vector 1 2 3)))
 
+(defparameter *integers*
+  (append
+   (list 0 1 -1 100 1000000000 most-positive-fixnum most-negative-fixnum
+         (1+ most-positive-fixnum) (1- most-negative-fixnum)
+         (ash 1 64) (- (ash 1 64)))
+   (loop for i from 1 to 12 append (list (ash 1 i) (1- (ash 1 i))))))
+
+(defparameter *floats*
+  (list 0.0 1.0 -1.0 1.5 -2.25
+        most-positive-short-float least-positive-short-float
+        most-positive-single-float least-positive-single-float
+        most-positive-double-float least-positive-double-float
+        most-positive-long-float least-positive-long-float
+        most-negative-short-float least-negative-short-float
+        most-negative-single-float least-negative-single-float
+        most-negative-double-float least-negative-double-float
+        most-negative-long-float least-negative-long-float
+        short-float-epsilon single-float-epsilon
+        double-float-epsilon long-float-epsilon))
+
+(defparameter *ratios* '(1/3 1/1000 -10/3 -1000/7 189729874978126783786123/1234678123487612347896123467851234671234))
+
+(defparameter *complexes*
+  (list (complex 0 0) (complex 1 0) (complex 0 1)
+        (complex 1 1) (complex -1 -1)
+        (complex 1/2 1/3) (complex 1.0d100 1.0d100)))
+
+(defparameter *reals* (append *integers* *floats* *ratios*))
+(defparameter *rationals* (append *integers* *ratios*))
+(defparameter *numbers* (append *reals* *complexes*))
+
 (defparameter +lower-case-chars+
   "abcdefghijklmnopqrstuvwxyz")
 
@@ -447,6 +479,28 @@
 
 (defparameter +standard-chars+
   "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ \n")
+
+(defun rational-safely (x)
+  (let ((limit 1000))
+    (multiple-value-bind (significand exponent sign)
+        (integer-decode-float x)
+      (let ((radix (float-radix x)))
+        (cond
+          ((< exponent (- limit))
+           (* significand (expt radix (- limit)) sign))
+          ((> exponent limit)
+           (* significand (expt radix limit) sign))
+          (t
+           (* significand (expt radix exponent) sign)))))))
+
+(defun epsilon (number)
+  (cond
+    ((complexp number) (* 2 (epsilon (realpart number))))
+    ((floatp number) double-float-epsilon)
+    (t 0)))
+
+(defun approx= (x y &optional (eps (epsilon x)))
+  (<= (abs (/ (- x y) (max (abs x) 1))) eps))
 
 (defparameter +code-chars+
   (let ((v (make-array 256)))

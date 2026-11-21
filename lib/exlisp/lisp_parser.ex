@@ -546,6 +546,10 @@ defmodule ExLisp.LispParser do
                 _ ->
                   if has_exponent_suffix?(str) do
                     norm_str = Regex.replace(@exponent_regex, str, "\\1e\\2")
+                    norm_str =
+                      if String.contains?(norm_str, ".e"),
+                        do: String.replace(norm_str, ".e", ".0e"),
+                        else: norm_str
 
                     case Float.parse(norm_str) do
                       {float_val, ""} ->
@@ -913,10 +917,12 @@ defmodule ExLisp.LispParser do
   defp parse_expr([{:complex_lparen, line} | rest]) do
     case parse_list(rest, line, :rparen, []) do
       {:ok, {:list, l, [real, imag]}, rem} ->
-        {:ok, {:list, l, [{:id, l, ["complex"]}, real, imag]}, rem}
+        {:ok,
+         {:reader_macro, l, {:list, l, [{:id, l, ["complex"]}, real, imag]}}, rem}
 
       {:ok, {:list, l, elems}, rem} ->
-        {:ok, {:list, l, [{:id, l, ["complex"]} | elems]}, rem}
+        {:ok,
+         {:reader_macro, l, {:list, l, [{:id, l, ["complex"]} | elems]}}, rem}
 
       err ->
         err

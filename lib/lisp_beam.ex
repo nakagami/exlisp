@@ -4541,6 +4541,23 @@ defmodule LispBeam do
                 compile_setq([place, val_node], local_env)
             end
 
+          :mask_field ->
+            case place_args do
+              [bytespec_node, target_node] ->
+                deposit_call =
+                  {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :deposit_field}},
+                   [
+                     compile_expr(val_node, local_env),
+                     compile_expr(bytespec_node, local_env),
+                     compile_expr(target_node, local_env)
+                   ]}
+
+                compile_single_setf(target_node, deposit_call, local_env)
+
+              _ ->
+                compile_setq([place, val_node], local_env)
+            end
+
           name when name in [:fill_pointer, :_cl_fill_pointer_] ->
             case place_args do
               [arr_node | _] ->

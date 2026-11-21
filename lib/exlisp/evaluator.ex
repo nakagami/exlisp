@@ -2145,6 +2145,20 @@ defmodule ExLisp.Evaluator do
 
             {getter, setter}
 
+          op in [:mask_field, :_cl_mask_field_, :"mask-field"] ->
+            [bytespec_node, target_place | _] = place_args
+            bytespec = eval(bytespec_node, env) |> Builtins.unwrap_mv_primary()
+            {target_getter, target_setter} = get_setf_expansion(target_place, env)
+            getter = fn -> Builtins.mask_field(bytespec, target_getter.()) end
+
+            setter = fn unwrapped ->
+              cur = target_getter.()
+              target_setter.(Builtins.deposit_field(unwrapped, bytespec, cur))
+              unwrapped
+            end
+
+            {getter, setter}
+
           op in [:get, :_cl_get_] ->
             case place_args do
               [sym_node, ind_node, def_node | _] ->
@@ -2521,10 +2535,19 @@ defmodule ExLisp.Evaluator do
   defp eval_incf(args, env) do
     case args do
       [place_node] ->
-        eval_setf([place_node, {:list, 1, [{:id, 1, ["+"]}, place_node, {:lit, 1}]}], env)
+        {getter, setter} = get_setf_expansion(place_node, env)
+        old = getter.() |> Builtins.unwrap_mv_primary()
+        new = Builtins.add_two(old, 1)
+        setter.(new)
+        new
 
       [place_node, delta_node | _] ->
-        eval_setf([place_node, {:list, 1, [{:id, 1, ["+"]}, place_node, delta_node]}], env)
+        {getter, setter} = get_setf_expansion(place_node, env)
+        delta = eval(delta_node, env) |> Builtins.unwrap_mv_primary()
+        old = getter.() |> Builtins.unwrap_mv_primary()
+        new = Builtins.add_two(old, delta)
+        setter.(new)
+        new
 
       _ ->
         nil
@@ -2534,10 +2557,19 @@ defmodule ExLisp.Evaluator do
   defp eval_decf(args, env) do
     case args do
       [place_node] ->
-        eval_setf([place_node, {:list, 1, [{:id, 1, ["-"]}, place_node, {:lit, 1}]}], env)
+        {getter, setter} = get_setf_expansion(place_node, env)
+        old = getter.() |> Builtins.unwrap_mv_primary()
+        new = Builtins.sub_two(old, 1)
+        setter.(new)
+        new
 
       [place_node, delta_node | _] ->
-        eval_setf([place_node, {:list, 1, [{:id, 1, ["-"]}, place_node, delta_node]}], env)
+        {getter, setter} = get_setf_expansion(place_node, env)
+        delta = eval(delta_node, env) |> Builtins.unwrap_mv_primary()
+        old = getter.() |> Builtins.unwrap_mv_primary()
+        new = Builtins.sub_two(old, delta)
+        setter.(new)
+        new
 
       _ ->
         nil

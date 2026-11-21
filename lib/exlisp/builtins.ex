@@ -967,13 +967,18 @@ defmodule ExLisp.Builtins do
   def abs(%ExLisp.Ratio{numerator: n, denominator: d}),
     do: %ExLisp.Ratio{numerator: Kernel.abs(n), denominator: d}
 
-  def abs({:complex, r, i}), do: :math.sqrt(r * r + i * i)
+  def abs({:complex, r, i}), do: complex_magnitude(r, i)
   def abs([x]), do: abs(unwrap_mv_primary(x))
   def abs(x) when is_number(x), do: Kernel.abs(x)
 
   def signum({:complex, r, i}) do
-    mag = :math.sqrt(r * r + i * i)
-    if mag == 0, do: {:complex, 0, 0}, else: {:complex, r / mag, i / mag}
+    mag = complex_magnitude(r, i)
+
+    if mag == 0 do
+      {:complex, r, i}
+    else
+      {:complex, number_to_float(r) / mag, number_to_float(i) / mag}
+    end
   end
 
   def signum(%ExLisp.Ratio{numerator: n, denominator: _d}) do
@@ -1001,6 +1006,25 @@ defmodule ExLisp.Builtins do
       true -> 0.0
     end
   end
+
+  defp complex_magnitude(real, imag) do
+    real = Kernel.abs(number_to_float(real))
+    imag = Kernel.abs(number_to_float(imag))
+    scale = max(real, imag)
+
+    if scale == 0.0 do
+      0.0
+    else
+      real = real / scale
+      imag = imag / scale
+      scale * :math.sqrt(real * real + imag * imag)
+    end
+  end
+
+  defp complex_magnitude({:complex, real, imag}), do: complex_magnitude(real, imag)
+
+  defp number_to_float(%ExLisp.Ratio{} = value), do: ExLisp.Ratio.to_float(value)
+  defp number_to_float(value) when is_number(value), do: value * 1.0
 
   def min([first | rest]), do: Enum.reduce(rest, first, &min/2)
   def min([]), do: raise(ArgumentError, "min requires at least 1 argument")
@@ -1151,10 +1175,17 @@ defmodule ExLisp.Builtins do
     if value == 0.0 do
       [:_values_, [0.0, 0, if(negative_float?(value), do: -1.0, else: 1.0)]]
     else
-      abs_value = Kernel.abs(value)
-      exponent = Kernel.trunc(:math.floor(:math.log2(abs_value))) + 1
-      significand = abs_value / :math.pow(2.0, exponent)
-      sign = if(value < 0.0, do: -1.0, else: 1.0)
+      <<_sign_bit::1, exponent_bits::11, fraction::52>> = <<Kernel.abs(value)::float>>
+
+      {significand, exponent} =
+        if exponent_bits == 0 do
+          fraction_bits = fraction |> Integer.to_string(2) |> String.length()
+          {fraction / (1 <<< fraction_bits), fraction_bits - 1074}
+        else
+          {(1.0 + fraction / (1 <<< 52)) / 2.0, exponent_bits - 1022}
+        end
+
+      sign = if(negative_float?(value), do: -1.0, else: 1.0)
       [:_values_, [significand, exponent, sign]]
     end
   end
@@ -1205,7 +1236,8 @@ defmodule ExLisp.Builtins do
   def rationalize(value) when is_integer(value), do: value
 
   def rationalize(value) when is_float(value) do
-    decimal_rational(value)
+    simple = decimal_rational(value)
+    if float(simple, value) == value, do: simple, else: rational(value)
   end
 
   defp decimal_rational(value) when value == 0.0, do: 0
@@ -1242,8 +1274,24 @@ defmodule ExLisp.Builtins do
     sign == 1
   end
 
-  def sqrt(x) when is_number(x), do: :math.sqrt(x)
-  def exp(x) when is_number(x), do: :math.exp(x)
+  def sqrt({:complex, _, _} = value) do
+    real = number_to_float(realpart(value))
+    imag = number_to_float(imagpart(value))
+    magnitude = complex_magnitude(value)
+    root_real = :math.sqrt(max(0.0, (magnitude + real) / 2.0))
+    root_imag = if imag < 0.0, do: -:math.sqrt(max(0.0, (magnitude - real) / 2.0)), else: :math.sqrt(max(0.0, (magnitude - real) / 2.0))
+    {:complex, root_real, root_imag}
+  end
+
+  def sqrt(%ExLisp.Ratio{} = x), do: :math.sqrt(ExLisp.Ratio.to_float(x))
+  def sqrt(x) when is_number(x) and x >= 0, do: :math.sqrt(x * 1.0)
+  def sqrt(x) when is_number(x), do: {:complex, 0.0, :math.sqrt(-x * 1.0)}
+  def exp({:complex, real, imag}) do
+    scale = :math.exp(number_to_float(real))
+    {:complex, scale * :math.cos(number_to_float(imag)), scale * :math.sin(number_to_float(imag))}
+  end
+  def exp(%ExLisp.Ratio{} = x), do: :math.exp(ExLisp.Ratio.to_float(x))
+  def exp(x) when is_number(x), do: :math.exp(x * 1.0)
 
   def expt(%ExLisp.Ratio{numerator: n, denominator: d}, power)
       when is_integer(power) and power >= 0 do
@@ -1263,6 +1311,38 @@ defmodule ExLisp.Builtins do
     Integer.pow(base, power)
   end
 
+  def expt({:complex, _, _} = base, power) when is_integer(power) do
+    cond do
+      power == 0 ->
+        if is_float(realpart(base)) or is_float(imagpart(base)),
+          do: {:complex, 1.0, 0.0},
+          else: 1
+
+      power == 1 ->
+        base
+
+      power < 0 ->
+        divide_two(1, expt(base, -power)) |> canonical_complex_power()
+
+      true ->
+        complex_integer_power(base, power) |> canonical_complex_power()
+    end
+  end
+
+  def expt(_base, power) when is_float(power) and power == 0.0, do: 1.0
+
+  def expt(base, %ExLisp.Ratio{} = power) when is_number(base) do
+    exp(mul_two(power, log(base)))
+  end
+
+  def expt(base, power) when is_number(base) and is_float(power) do
+    if base < 0 do
+      exp(mul_two(power, log({:complex, base * 1.0, 0.0})))
+    else
+      :math.pow(base * 1.0, power)
+    end
+  end
+
   def expt(base, power) when is_number(base) and is_number(power) do
     :math.pow(base, power)
   end
@@ -1271,46 +1351,125 @@ defmodule ExLisp.Builtins do
     :math.pow(ExLisp.Ratio.to_float(base), power)
   end
 
+  def expt(base, power) do
+    exp(mul_two(power, log(base)))
+  end
+
+  defp complex_integer_power(_base, 0), do: 1
+  defp complex_integer_power(base, 1), do: base
+
+  defp complex_integer_power(base, power) do
+    half = complex_integer_power(base, div(power, 2))
+    squared = mul_two(half, half)
+    if rem(power, 2) == 0, do: squared, else: mul_two(squared, base)
+  end
+
+  defp canonical_complex_power({:complex, real, 0}), do: real
+  defp canonical_complex_power(value), do: value
+
   def log(x, base \\ nil) do
-    val = if is_struct(x, ExLisp.Ratio), do: ExLisp.Ratio.to_float(x), else: x
+    val =
+      case x do
+        %ExLisp.Ratio{} -> ExLisp.Ratio.to_float(x)
+        {:complex, _, _} -> x
+        _ -> x
+      end
+
+    result =
+      case val do
+        {:complex, _, _} -> {:complex, :math.log(complex_magnitude(val)), phase(val)}
+        v when is_number(v) and v < 0 -> {:complex, :math.log(-v * 1.0), :math.pi()}
+        _ -> :math.log(val * 1.0)
+      end
 
     if base == nil do
-      :math.log(val)
+      result
     else
-      base_val = if is_struct(base, ExLisp.Ratio), do: ExLisp.Ratio.to_float(base), else: base
-      :math.log(val) / :math.log(base_val)
+      divide_two(result, log(base))
     end
   end
 
+  def sin({:complex, real, imag}) do
+    real = number_to_float(real)
+    imag = number_to_float(imag)
+    {:complex, :math.sin(real) * :math.cosh(imag), :math.cos(real) * :math.sinh(imag)}
+  end
   def sin(x) when is_number(x), do: :math.sin(x)
+  def sin(%ExLisp.Ratio{} = x), do: :math.sin(ExLisp.Ratio.to_float(x))
+  def cos({:complex, real, imag}) do
+    real = number_to_float(real)
+    imag = number_to_float(imag)
+    {:complex, :math.cos(real) * :math.cosh(imag), -:math.sin(real) * :math.sinh(imag)}
+  end
   def cos(x) when is_number(x), do: :math.cos(x)
+  def cos(%ExLisp.Ratio{} = x), do: :math.cos(ExLisp.Ratio.to_float(x))
+  def tan({:complex, _, _} = value), do: divide_two(sin(value), cos(value))
   def tan(x) when is_number(x), do: :math.tan(x)
-  def asin(x) when is_number(x), do: :math.asin(x)
-  def acos(x) when is_number(x), do: :math.acos(x)
+  def tan(%ExLisp.Ratio{} = x), do: :math.tan(ExLisp.Ratio.to_float(x))
+  def asin({:complex, _, _} = value), do: mul_two({:complex, 0.0, -1.0}, log(add_two(mul_two({:complex, 0.0, 1.0}, value), sqrt(sub_two(1, mul_two(value, value))))))
+  def asin(x) when is_number(x) and x >= -1 and x <= 1, do: :math.asin(x)
+  def asin(x) when is_number(x), do: asin({:complex, x * 1.0, 0.0})
+  def asin(%ExLisp.Ratio{} = x), do: asin(ExLisp.Ratio.to_float(x))
+  def acos({:complex, _, _} = value), do: mul_two({:complex, 0.0, -1.0}, log(add_two(value, mul_two({:complex, 0.0, 1.0}, sqrt(sub_two(1, mul_two(value, value)))))))
+  def acos(x) when is_number(x) and x >= -1 and x <= 1, do: :math.acos(x)
+  def acos(x) when is_number(x), do: acos({:complex, x * 1.0, 0.0})
+  def acos(%ExLisp.Ratio{} = x), do: acos(ExLisp.Ratio.to_float(x))
+  def atan({:complex, _, _} = value) do
+    mul_two(
+      {:complex, 0.0, 0.5},
+      sub_two(
+        log(sub_two(1, mul_two({:complex, 0.0, 1.0}, value))),
+        log(add_two(1, mul_two({:complex, 0.0, 1.0}, value)))
+      )
+    )
+  end
   def atan(x) when is_number(x), do: :math.atan(x)
+  def atan(%ExLisp.Ratio{} = x), do: :math.atan(ExLisp.Ratio.to_float(x))
   def atan([y, x]), do: atan(unwrap_mv_primary(y), unwrap_mv_primary(x))
   def atan([y]), do: atan(unwrap_mv_primary(y))
   def atan(y, x) when is_number(y) and is_number(x), do: :math.atan2(y, x)
 
+  def sinh({:complex, real, imag}) do
+    real = number_to_float(real)
+    imag = number_to_float(imag)
+    {:complex, :math.sinh(real) * :math.cos(imag), :math.cosh(real) * :math.sin(imag)}
+  end
   def sinh(x) when is_number(x), do: :math.sinh(x)
+  def sinh(%ExLisp.Ratio{} = x), do: :math.sinh(ExLisp.Ratio.to_float(x))
+  def cosh({:complex, real, imag}) do
+    real = number_to_float(real)
+    imag = number_to_float(imag)
+    {:complex, :math.cosh(real) * :math.cos(imag), :math.sinh(real) * :math.sin(imag)}
+  end
   def cosh(x) when is_number(x), do: :math.cosh(x)
+  def cosh(%ExLisp.Ratio{} = x), do: :math.cosh(ExLisp.Ratio.to_float(x))
+  def tanh({:complex, _, _} = value), do: divide_two(sinh(value), cosh(value))
   def tanh(x) when is_number(x), do: :math.tanh(x)
+  def tanh(%ExLisp.Ratio{} = x), do: :math.tanh(ExLisp.Ratio.to_float(x))
+  def asinh({:complex, _, _} = value), do: log(add_two(value, sqrt(add_two(mul_two(value, value), 1))))
   def asinh(x) when is_number(x), do: :math.asinh(x)
-  def acosh(x) when is_number(x), do: :math.acosh(x)
-  def atanh(x) when is_number(x), do: :math.atanh(x)
+  def asinh(%ExLisp.Ratio{} = x), do: :math.asinh(ExLisp.Ratio.to_float(x))
+  def acosh({:complex, _, _} = value), do: log(add_two(value, mul_two(sqrt(sub_two(value, 1)), sqrt(add_two(value, 1)))))
+  def acosh(x) when is_number(x) and x >= 1, do: :math.acosh(x)
+  def acosh(x) when is_number(x), do: acosh({:complex, x * 1.0, 0.0})
+  def acosh(%ExLisp.Ratio{} = x), do: acosh(ExLisp.Ratio.to_float(x))
+  def atanh({:complex, _, _} = value), do: mul_two(0.5, sub_two(log(add_two(1, value)), log(sub_two(1, value))))
+  def atanh(x) when is_number(x) and x > -1 and x < 1, do: :math.atanh(x)
+  def atanh(x) when is_number(x), do: atanh({:complex, x * 1.0, 0.0})
+  def atanh(%ExLisp.Ratio{} = x), do: atanh(ExLisp.Ratio.to_float(x))
 
   def cis(x) when is_number(x), do: {:complex, :math.cos(x), :math.sin(x)}
   def cis([x]), do: cis(unwrap_mv_primary(x))
 
-  def conjugate({:complex, r, i}), do: {:complex, r, -i}
+  def conjugate({:complex, r, i}), do: {:complex, r, negate_num(i)}
   def conjugate(x) when is_number(x), do: x
   def conjugate(%ExLisp.Ratio{} = r), do: r
   def conjugate([x]), do: conjugate(unwrap_mv_primary(x))
 
-  def phase({:complex, r, i}), do: :math.atan2(i, r)
+  def phase({:complex, r, i}), do: :math.atan2(number_to_float(i), number_to_float(r))
 
   def phase(x) when is_number(x) do
-    if x < 0, do: :math.pi(), else: 0.0
+    if x < 0 or (x == 0.0 and is_float(x) and negative_float?(x)), do: :math.pi(), else: 0.0
   end
 
   def phase(%ExLisp.Ratio{numerator: n}) do
@@ -1339,7 +1498,16 @@ defmodule ExLisp.Builtins do
     end)
   end
 
-  def complex([real, imag]), do: {:complex, unwrap_mv_primary(real), unwrap_mv_primary(imag)}
+  def complex([real, imag]) do
+    real = unwrap_mv_primary(real)
+    imag = unwrap_mv_primary(imag)
+
+    if is_float(real) or is_float(imag) do
+      {:complex, number_to_float(real), number_to_float(imag)}
+    else
+      {:complex, real, imag}
+    end
+  end
 
   def complex([real]) do
     real_val = unwrap_mv_primary(real)
@@ -1360,7 +1528,7 @@ defmodule ExLisp.Builtins do
   def realpart(_), do: 0
 
   def imagpart({:complex, _r, i}), do: i
-  def imagpart(r) when is_float(r), do: 0.0
+  def imagpart(r) when is_float(r), do: if(negative_float?(r), do: -0.0, else: 0.0)
   def imagpart([x]), do: imagpart(x)
   def imagpart(_), do: 0
 
@@ -1383,6 +1551,20 @@ defmodule ExLisp.Builtins do
       a > b -> :gt
       true -> :eq
     end
+  end
+
+  def compare_nums(a, b) when is_float(a) and is_integer(b) do
+    {an, ad} = Float.ratio(a)
+    left = an
+    right = b * ad
+    if left < right, do: :lt, else: if(left > right, do: :gt, else: :eq)
+  end
+
+  def compare_nums(a, b) when is_integer(a) and is_float(b) do
+    {bn, bd} = Float.ratio(b)
+    left = a * bd
+    right = bn
+    if left < right, do: :lt, else: if(left > right, do: :gt, else: :eq)
   end
 
   def compare_nums(a, b) when is_number(a) and is_number(b) do
@@ -1430,21 +1612,25 @@ defmodule ExLisp.Builtins do
   end
 
   def compare_nums(%ExLisp.Ratio{} = a, b) when is_float(b) do
-    af = ExLisp.Ratio.to_float(a)
+    {bn, bd} = Float.ratio(b)
+    left = a.numerator * bd
+    right = bn * a.denominator
 
     cond do
-      af < b -> :lt
-      af > b -> :gt
+      left < right -> :lt
+      left > right -> :gt
       true -> :eq
     end
   end
 
   def compare_nums(a, %ExLisp.Ratio{} = b) when is_float(a) do
-    bf = ExLisp.Ratio.to_float(b)
+    {an, ad} = Float.ratio(a)
+    left = an * b.denominator
+    right = b.numerator * ad
 
     cond do
-      a < bf -> :lt
-      a > bf -> :gt
+      left < right -> :lt
+      left > right -> :gt
       true -> :eq
     end
   end
@@ -1822,6 +2008,7 @@ defmodule ExLisp.Builtins do
   end
 
   def numberp(%ExLisp.Ratio{}), do: :t
+  def numberp({:complex, _, _}), do: :t
   def numberp(x), do: is_number(x) |> lisp_bool()
 
   def rationalp(%ExLisp.Ratio{}), do: :t
@@ -1938,6 +2125,11 @@ defmodule ExLisp.Builtins do
   def not_fn(x), do: !truthy?(x) |> lisp_bool()
 
   def zerop([:_values_ | _] = v), do: zerop(unwrap_mv_primary(v))
+  def zerop({:complex, real, imag}) do
+    if compare_nums(real, 0) == :eq and compare_nums(imag, 0) == :eq, do: :t, else: nil
+  end
+
+  def zerop(%ExLisp.Ratio{numerator: 0}), do: :t
   def zerop(%ExLisp.Ratio{}), do: nil
   def zerop(x) when is_number(x), do: (x == 0) |> lisp_bool()
 
@@ -9303,17 +9495,98 @@ defmodule ExLisp.Builtins do
     end
   end
 
-  def random(limit, _state) when is_integer(limit) and limit > 0 do
-    :rand.uniform(limit) - 1
+  def random(limit, state) when is_integer(limit) and limit > 0,
+    do: random_from_state(limit, state, &:rand.uniform_s/2)
+
+  def random(limit, state) when is_float(limit) and limit > 0.0,
+    do: random_from_state(limit, state, fn _, seed -> :rand.uniform_s(seed) end)
+
+  def make_random_state(args \\ nil)
+
+  def make_random_state([]), do: clone_random_state(nil)
+  def make_random_state([state]), do: clone_random_state(state)
+  def make_random_state(state), do: clone_random_state(state)
+
+  defp clone_random_state(:t) do
+    unique = System.unique_integer([:positive, :monotonic])
+    seed_s = :rand.seed_s(:exsss, {unique, unique >>> 16, System.system_time()})
+    build_random_state(seed_s)
   end
 
-  def random(limit, _state) when is_float(limit) and limit > 0.0 do
-    :rand.uniform() * limit
+  defp clone_random_state({:random_state, tid}) do
+    seed_s = lookup_random_seed(tid)
+    build_random_state(seed_s)
   end
 
-  def make_random_state(_state \\ nil) do
-    :":*random_state*:"
+  defp clone_random_state(_) do
+    build_random_state(global_random_seed())
   end
+
+  defp global_random_seed() do
+    tid = ensure_global_random_table()
+
+    case :ets.lookup(tid, :seed) do
+      [{:seed, seed_s}] ->
+        seed_s
+
+      [] ->
+        seed_s = :rand.seed_s(:exsss)
+        :ets.insert(tid, {:seed, seed_s})
+        seed_s
+    end
+  end
+
+  defp ensure_global_random_table() do
+    case :ets.whereis(:exlisp_global_random_state) do
+      :undefined ->
+        try do
+          :ets.new(:exlisp_global_random_state, [:named_table, :public, :set])
+        rescue
+          ArgumentError -> :exlisp_global_random_state
+        end
+
+      tid ->
+        tid
+    end
+  end
+
+  defp build_random_state(seed_s) do
+    tid = :ets.new(:lisp_random_state, [:set, :public])
+    :ets.insert(tid, {:seed, seed_s})
+    {:random_state, tid}
+  end
+
+  defp lookup_random_seed(tid) do
+    case :ets.lookup(tid, :seed) do
+      [{:seed, seed_s}] -> seed_s
+      [] -> global_random_seed()
+    end
+  end
+
+  defp random_from_state(limit, {:random_state, tid}, uniform_fun) do
+    seed_s = lookup_random_seed(tid)
+    {value, next_seed} = uniform_fun.(limit, seed_s)
+    :ets.insert(tid, {:seed, next_seed})
+    normalize_random_value(value, limit)
+  end
+
+  defp random_from_state(limit, _global, _uniform_fun) do
+    tid = ensure_global_random_table()
+    seed_s = global_random_seed()
+
+    {value, next_seed} =
+      if is_integer(limit) do
+        :rand.uniform_s(limit, seed_s)
+      else
+        :rand.uniform_s(seed_s)
+      end
+
+    :ets.insert(tid, {:seed, next_seed})
+    normalize_random_value(value, limit)
+  end
+
+  defp normalize_random_value(value, limit) when is_integer(limit), do: value - 1
+  defp normalize_random_value(value, limit) when is_float(limit), do: value * limit
 
   def make_string(args) when is_list(args) do
     case args do
@@ -11966,6 +12239,7 @@ defmodule ExLisp.Builtins do
   end
 
   def random_state_p({:random_state, _}), do: :t
+  def random_state_p(:":*random_state*:"), do: :t
   def random_state_p(_), do: nil
 
   def get_setf_expansion(place, _environment \\ nil) do

@@ -141,6 +141,8 @@ defmodule ExLisp.Type do
     type_spec
   end
 
+  def expand_type(nil, _depth), do: nil
+
   def expand_type(name, depth) when is_atom(name) or is_binary(name) do
     norm = normalize_type_name(name)
     ensure_tables()
@@ -430,8 +432,7 @@ defmodule ExLisp.Type do
 
   defp do_typep(val, [:rational | rest]) do
     if is_integer(val) or match?(%ExLisp.Ratio{}, val) do
-      num_val = if is_integer(val), do: val, else: val.numerator / val.denominator
-      check_range(num_val, rest)
+      check_range(val, rest)
     else
       false
     end
@@ -445,15 +446,25 @@ defmodule ExLisp.Type do
     end
   end
 
+  defp do_typep(val, [:complex | rest]) do
+    case val do
+      {:complex, real, imag} ->
+        case rest do
+          [part_type | _] ->
+            do_typep(real, expand_type(part_type)) and do_typep(imag, expand_type(part_type))
+
+          [] ->
+            true
+        end
+
+      _ ->
+        false
+    end
+  end
+
   defp do_typep(val, [:real | rest]) do
     if is_number(val) or match?(%ExLisp.Ratio{}, val) do
-      num_val =
-        cond do
-          is_number(val) -> val
-          match?(%ExLisp.Ratio{}, val) -> val.numerator / val.denominator
-          true -> val
-        end
-      check_range(num_val, rest)
+      check_range(val, rest)
     else
       false
     end
@@ -624,23 +635,30 @@ defmodule ExLisp.Type do
 
   defp simple_array_type_check(_), do: true
 
-  defp check_range(num, []) when is_number(num), do: true
-  defp check_range(num, [low]) when is_number(num), do: check_bound_low(num, low)
-  defp check_range(num, [low, high | _]) when is_number(num) do
+  defp numeric_value?(num), do: is_number(num) or match?(%ExLisp.Ratio{}, num)
+
+  defp check_range(num, []) do
+    numeric_value?(num)
+  end
+
+  defp check_range(num, [low]) do
+    numeric_value?(num) and check_bound_low(num, low)
+  end
+
+  defp check_range(num, [low, high | _]) do
+    numeric_value?(num) and
     check_bound_low(num, low) and check_bound_high(num, high)
   end
 
   defp check_bound_low(_num, :*), do: true
   defp check_bound_low(_num, :_), do: true
-  defp check_bound_low(num, [l]) when is_number(l), do: num > l
-  defp check_bound_low(num, l) when is_number(l), do: num >= l
-  defp check_bound_low(_num, _), do: true
+  defp check_bound_low(num, [l]), do: ExLisp.Builtins.compare_nums(num, l) == :gt
+  defp check_bound_low(num, l), do: ExLisp.Builtins.compare_nums(num, l) in [:gt, :eq]
 
   defp check_bound_high(_num, :*), do: true
   defp check_bound_high(_num, :_), do: true
-  defp check_bound_high(num, [h]) when is_number(h), do: num < h
-  defp check_bound_high(num, h) when is_number(h), do: num <= h
-  defp check_bound_high(_num, _), do: true
+  defp check_bound_high(num, [h]), do: ExLisp.Builtins.compare_nums(num, h) == :lt
+  defp check_bound_high(num, h), do: ExLisp.Builtins.compare_nums(num, h) in [:lt, :eq]
 
   defp check_vector_elem_and_size(val, elem_t, size) do
     size_ok =
@@ -734,6 +752,9 @@ defmodule ExLisp.Type do
     t2_norm = normalize_type_for_sub(t2)
 
     cond do
+      is_nil(t1) or is_nil(t1_norm) ->
+        true
+
       t1_norm == t2_norm ->
         true
 
@@ -742,6 +763,12 @@ defmodule ExLisp.Type do
         true
 
       t2_norm in [:t, :common, :*] ->
+        true
+
+      t1_norm in [:t, :common, :*] and complementary_union?(t2_norm) ->
+        true
+
+      (is_nil(t2_norm) or t2_norm in [:nil, :null]) and contradictory_intersection?(t1_norm) ->
         true
 
       t1_norm in [:nil, :null, nil] and t2_norm in [:list, :sequence, :symbol, :atom, :t, :common] ->
@@ -948,6 +975,18 @@ defmodule ExLisp.Type do
           t2_norm in [:float, :real, :number] ->
         true
 
+      t1_norm == :short_float and t2_norm == :single_float ->
+        true
+
+      t1_norm == :single_float and t2_norm == :short_float ->
+        true
+
+      t1_norm == :long_float and t2_norm == :double_float ->
+        true
+
+      t1_norm == :double_float and t2_norm == :long_float ->
+        true
+
       t1_norm == :float and t2_norm in [:real, :number] ->
         true
 
@@ -988,13 +1027,29 @@ defmodule ExLisp.Type do
           t2_norm in [:array] ->
         true
 
+      is_list(t1_norm) and hd(t1_norm) == :complex and t2_norm == :complex ->
+        true
+
+      match?([:not, _], t1_norm) and match?([:not, _], t2_norm) ->
+        [:not, not_sub1] = t1_norm
+        [:not, not_sub2] = t2_norm
+        is_subtype_internal?(not_sub2, not_sub1)
+
       match?([:and | _], t1_norm) ->
         [:and | sub_types] = t1_norm
+        Enum.any?(sub_types, &is_subtype_internal?(&1, t2_norm))
+
+      match?([:or | _], t1_norm) ->
+        [:or | sub_types] = t1_norm
         Enum.all?(sub_types, &is_subtype_internal?(&1, t2_norm))
 
+      match?([:and | _], t2_norm) ->
+        [:and | super_types] = t2_norm
+        Enum.all?(super_types, &is_subtype_internal?(t1_norm, &1))
+
       match?([:or | _], t2_norm) ->
-        [:or | sup_types] = t2_norm
-        Enum.any?(sup_types, &is_subtype_internal?(t1_norm, &1))
+        [:or | super_types] = t2_norm
+        Enum.any?(super_types, &is_subtype_internal?(t1_norm, &1))
 
       # Compound type vs Compound type
       match?([_ | _], t1_norm) and match?([_ | _], t2_norm) ->
@@ -1010,6 +1065,9 @@ defmodule ExLisp.Type do
 
   defp normalize_type_for_sub(t) do
     case t do
+      [:not, :t] -> nil
+      [:not, nil] -> :t
+      [:not, [:not, inner]] -> normalize_type_for_sub(inner)
       %{name: name} -> normalize_type_name(name)
       atom when is_atom(atom) -> normalize_type_name(atom)
       str when is_binary(str) -> normalize_type_name(str)
@@ -1022,6 +1080,42 @@ defmodule ExLisp.Type do
         other
     end
   end
+
+  defp contradictory_intersection?([:and | members]) do
+    Enum.any?(members, fn member ->
+      case member do
+        [:not, negated] ->
+          Enum.any?(members, fn other ->
+            other != member and
+              (other == negated or
+                 is_subtype_internal?(other, negated) or is_subtype_internal?(negated, other))
+          end)
+
+        _ ->
+          false
+      end
+    end)
+  end
+
+  defp contradictory_intersection?(_), do: false
+
+  defp complementary_union?([:or | members]) do
+    Enum.any?(members, fn member ->
+      case member do
+        [:not, negated] ->
+          Enum.any?(members, fn other ->
+            other != member and
+              (other == negated or
+                 is_subtype_internal?(other, negated) or is_subtype_internal?(negated, other))
+          end)
+
+        _ ->
+          false
+      end
+    end)
+  end
+
+  defp complementary_union?(_), do: false
 
   defp elem_match?(spec_elem, target_elem) do
     spec_elem in [:*, :_, :t] or spec_elem == target_elem or
@@ -1047,6 +1141,13 @@ defmodule ExLisp.Type do
 
   defp check_compound_subtype([head1 | args1], [head2 | args2]) do
     cond do
+      head1 == :complex and head2 == :complex ->
+        case {args1, args2} do
+          {[part1], [part2]} -> is_subtype_internal?(part1, part2)
+          {_, []} -> true
+          _ -> false
+        end
+
       head1 in [:simple_array, :array] and head2 == :array ->
         case {args1, args2} do
           {[e1, d1 | _], [e2, d2 | _]} -> elem_match?(e2, e1) and dims_subtype?(d1, d2)
@@ -1132,9 +1233,11 @@ defmodule ExLisp.Type do
     norm = normalize_type_for_sub(expanded)
 
     cond do
+      norm in [:nil, :null] -> [:not, :t]
       norm in [:short_float, :single_float] -> :single_float
       norm in [:double_float, :long_float] -> :double_float
-      norm in [:rational, :integer, :ratio] -> :rational
+      norm in [:rational, :integer, :ratio, :fixnum, :bignum] -> :rational
+      match?([t | _] when t in [:integer, :rational, :unsigned_byte, :signed_byte, :mod], norm) -> :rational
       true -> :real
     end
   end
