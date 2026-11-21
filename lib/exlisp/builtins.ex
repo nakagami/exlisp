@@ -3703,11 +3703,13 @@ defmodule ExLisp.Builtins do
   defp do_mapcar1([], _fn_val, acc), do: :lists.reverse(acc)
 
   defp do_mapcar1([h | t], fn_val, acc) when is_function(fn_val, 1) do
-    do_mapcar1(t, fn_val, [fn_val.(h) | acc])
+    value = fn_val.(h) |> unwrap_mv_primary()
+    do_mapcar1(t, fn_val, [value | acc])
   end
 
   defp do_mapcar1([h | t], fn_val, acc) do
-    do_mapcar1(t, fn_val, [invoke_fn(fn_val, [h]) | acc])
+    value = invoke_fn(fn_val, [h]) |> unwrap_mv_primary()
+    do_mapcar1(t, fn_val, [value | acc])
   end
 
   defp do_mapcar_n(lists, fn_val, acc) do
@@ -3716,7 +3718,7 @@ defmodule ExLisp.Builtins do
     else
       heads = Enum.map(lists, fn [h | _] -> h end)
       tails = Enum.map(lists, fn [_ | t] -> t end)
-      res = invoke_fn(fn_val, heads)
+      res = invoke_fn(fn_val, heads) |> unwrap_mv_primary()
       do_mapcar_n(tails, fn_val, [res | acc])
     end
   end
@@ -8484,15 +8486,111 @@ defmodule ExLisp.Builtins do
 
   def read_from_string(args) when is_list(args) do
     case args do
-      [str | _rest] when is_binary(str) ->
+      [string | rest] ->
+        {eof_error_p, eof_value, keyword_args} =
+          case rest do
+            [eof_error_p, eof_value | keyword_args] -> {eof_error_p, eof_value, keyword_args}
+            [eof_error_p | keyword_args] -> {eof_error_p, nil, keyword_args}
+            [] -> {:t, nil, []}
+          end
+
+        options = parse_lisp_keywords(keyword_args, [:start, :end, :preserve_whitespace])
+        start = Keyword.get(options, :start, 0) || 0
+        end_pos = Keyword.get(options, :end)
+        preserve_whitespace = Keyword.get(options, :preserve_whitespace, nil) not in [nil, false]
+        original = to_string_val(string)
+
+        str =
+          if is_integer(end_pos) do
+            String.slice(original, start, max(end_pos - start, 0))
+          else
+            String.slice(original, start..-1//1)
+          end
+
+        read_suppressed =
+          try do
+            ExLisp.Env.get_var(:"*read_suppress*") not in [nil, false]
+          rescue
+            _ -> false
+          end
+
+        if read_suppressed do
+          values(nil, start + String.length(str))
+        else
+        readtable =
+          try do
+            ExLisp.Env.get_var(:"*readtable*")
+          rescue
+            _ -> ExLisp.Readtable.current_readtable()
+          end
+
+        str = ExLisp.Readtable.normalize_reader_syntax(str, readtable)
+
         chars = String.to_charlist(str)
 
-        case scan_first_expr(chars, 0, [], false, false, 0, []) do
-          {:ok, expr_str, consumed_count} ->
-            values(parse_read_expr(expr_str), consumed_count)
+        custom_macro_result =
+          case chars do
+            [char | rest] ->
+              case ExLisp.Readtable.custom_macro_character(char, readtable) do
+                {:dispatch, _function, _non_terminating} ->
+                  ExLisp.Condition.error(:reader_error, "Invalid dispatch macro expression")
 
-          :eof ->
-            values(nil, 0)
+                {function, _non_terminating} ->
+                  stream = ExLisp.Stream.make_string_input_stream(rest |> List.to_string())
+                  value = invoke_fn(function, [stream, ExLisp.Character.new(char)])
+                  values(value, 1)
+
+                nil ->
+                  nil
+              end
+
+            [] ->
+              nil
+          end
+
+        if custom_macro_result != nil do
+          custom_macro_result
+        else
+          terminating_macro_index =
+            chars
+            |> Enum.with_index()
+            |> Enum.find_value(fn {char, index} ->
+              case ExLisp.Readtable.custom_macro_character(char, readtable) do
+                {_, false} -> index
+                {:dispatch, _, false} -> index
+                _ -> nil
+              end
+            end)
+
+          source =
+            if terminating_macro_index && terminating_macro_index > 0 do
+              Enum.take(chars, terminating_macro_index) |> List.to_string()
+            else
+              str
+            end
+
+          source_chars = String.to_charlist(source)
+
+          case scan_first_expr(source_chars, 0, [], false, false, 0, []) do
+            {:ok, expr_str, consumed_count} ->
+              consumed_count =
+                if not preserve_whitespace and
+                     Enum.at(source_chars, consumed_count) in [?\s, ?\t, ?\n, ?\r] do
+                  consumed_count + 1
+                else
+                  consumed_count
+                end
+
+              values(parse_read_expr(expr_str), start + consumed_count)
+
+            :eof ->
+              if eof_error_p in [:t, true] do
+                ExLisp.Condition.error(:end_of_file, "Unexpected end of input")
+              else
+                values(eof_value, start)
+              end
+          end
+        end
         end
 
       _ ->
@@ -8501,13 +8599,16 @@ defmodule ExLisp.Builtins do
   end
 
   def read_from_string(str) when is_binary(str), do: read_from_string([str])
+  def read_from_string({:array, _, _} = str), do: read_from_string([str])
 
   def read(args \\ []) do
     args_list = if is_list(args), do: args, else: [args]
 
     case args_list do
       [] ->
-        case read_one_s_expr(:stdio) do
+        stream = ExLisp.Stream.standard_input_stream()
+
+        case read_one_s_expr(stream) do
           {:ok, val} -> val
           :eof -> raise "End of file on standard input"
         end
@@ -8536,7 +8637,9 @@ defmodule ExLisp.Builtins do
         else
           device =
             case source do
-              %ExLisp.Stream{device: pid} when is_pid(pid) -> pid
+              nil -> ExLisp.Stream.standard_input_stream()
+              :t -> ExLisp.Stream.terminal_io_stream()
+              %ExLisp.Stream{} = stream -> stream
               pid when is_pid(pid) -> pid
               _ -> :stdio
             end
@@ -8548,6 +8651,69 @@ defmodule ExLisp.Builtins do
             :eof ->
               if eof_error_p, do: raise("End of file on stream"), else: eof_val
           end
+        end
+    end
+  end
+
+  defp read_one_s_expr(%ExLisp.Stream{id: id, device: pid})
+       when is_pid(pid) do
+    key = {:exlisp_stream_unread, id}
+    unread = Process.get(key, [])
+
+    case try_string_io_contents(pid) do
+      {:ok, {in_str, _out_str}} ->
+        combined = List.to_string(unread) <> in_str
+
+        case scan_first_expr(String.to_charlist(combined), 0, [], false, false, 0, []) do
+          {:ok, expr_str, consumed_count} ->
+            consumed_count =
+              if not Process.get(:exlisp_preserve_whitespace, false) and
+                   Enum.at(String.to_charlist(combined), consumed_count) in [?\s, ?\t, ?\n, ?\r] do
+                consumed_count + 1
+              else
+                consumed_count
+              end
+
+            unread_count = min(consumed_count, length(unread))
+            remaining_unread = Enum.drop(unread, unread_count)
+            Process.put(key, remaining_unread)
+            device_count = consumed_count - unread_count
+            if device_count > 0, do: _ = IO.read(pid, device_count)
+            {:ok, parse_read_expr(expr_str)}
+
+          :eof ->
+            :eof
+        end
+
+      _ ->
+        read_from_io_device(pid)
+    end
+  end
+
+  defp read_one_s_expr(%ExLisp.Stream{type: type, extra: extra})
+       when type in [:two_way, :echo] do
+    read_one_s_expr(Map.fetch!(extra, :input))
+  end
+
+  defp read_one_s_expr(%ExLisp.Stream{
+         id: id,
+         type: :concatenated,
+         extra: %{streams: initial_streams}
+       } = stream) do
+    streams = Process.get({:exlisp_concatenated_streams, id}, initial_streams)
+
+    case streams do
+      [] ->
+        :eof
+
+      [head | tail] ->
+        case read_one_s_expr(head) do
+          :eof ->
+            Process.put({:exlisp_concatenated_streams, id}, tail)
+            read_one_s_expr(%{stream | extra: %{streams: tail}})
+
+          result ->
+            result
         end
     end
   end
@@ -8669,6 +8835,11 @@ defmodule ExLisp.Builtins do
     scan_first_expr(rest, consumed + 1, stack, true, false, 0, [c | current])
   end
 
+  # Outside strings, a single escape keeps the following delimiter in the token.
+  defp scan_first_expr([?\\, c | rest], consumed, stack, false, false, 0, current) do
+    scan_first_expr(rest, consumed + 2, stack, false, false, 0, [c, ?\\ | current])
+  end
+
   # String start
   defp scan_first_expr([?\" | rest], consumed, stack, false, false, 0, current) do
     scan_first_expr(rest, consumed + 1, stack, true, false, 0, [?\" | current])
@@ -8676,7 +8847,7 @@ defmodule ExLisp.Builtins do
 
   # Opening bracket
   defp scan_first_expr([open | rest], consumed, stack, false, false, 0, current)
-       when open in [?(, ?[, ?{] do
+       when open in [?(, ?[, ?{] and current == [] do
     close =
       case open do
         ?( -> ?)
@@ -8709,7 +8880,8 @@ defmodule ExLisp.Builtins do
 
   # Delimiter when stack is empty and we already have token characters
   defp scan_first_expr([delim | _rest], consumed, [], false, false, 0, current)
-       when delim in [?\s, ?\t, ?\n, ?\r, ?;, ?(, ?)] and current != [] do
+       when delim in [?\s, ?\t, ?\n, ?\r, ?;, ?(, ?), ?[, ?], ?{, ?}] and
+              current != [] do
     {:ok, current |> Enum.reverse() |> List.to_string(), consumed}
   end
 
@@ -8727,9 +8899,16 @@ defmodule ExLisp.Builtins do
   end
 
   defp parse_read_expr(str) do
-    case ExLisp.LispParser.parse(str) do
-      {:ok, ast} -> ast_to_lisp_val(ast)
-      _ -> str
+    Process.put(:exlisp_reader_mode, true)
+
+    try do
+      case ExLisp.LispParser.parse(str) do
+        {:ok, ast} -> ast_to_lisp_val(ast)
+        {:error, reason} ->
+          ExLisp.Condition.error(:reader_error, reason)
+      end
+    after
+      Process.delete(:exlisp_reader_mode)
     end
   end
 
@@ -8751,14 +8930,22 @@ defmodule ExLisp.Builtins do
         v
 
       {:id, _, [name]} ->
-        case String.downcase(name) do
-          "nil" -> nil
-          "t" -> :t
-          _ -> String.downcase(name) |> String.to_atom()
+        preserve_case = ExLisp.Readtable.readtable_case() == :preserve
+
+        cond do
+          not preserve_case and String.downcase(name) == "nil" ->
+            nil
+
+          not preserve_case and String.downcase(name) == "t" ->
+            :t
+
+          true ->
+            ExLisp.Package.intern(name)
+            |> unwrap_mv_primary()
         end
 
       {:list, _, [{:id, _, [op]} | _]} = reader_macro
-      when op in ["make_array", "make_array_from_contents"] ->
+      when op in ["function", "make_array", "make_array_from_contents"] ->
         LispBeam.evaluate_ast(reader_macro)
 
       {:list, _, items} ->
@@ -9103,7 +9290,7 @@ defmodule ExLisp.Builtins do
           rest
 
         "|" <> rest ->
-          String.trim_trailing(rest, "|")
+          if String.length(rest) > 0, do: String.trim_trailing(rest, "|"), else: "|"
 
         other ->
           String.upcase(other)
@@ -11011,6 +11198,8 @@ defmodule ExLisp.Builtins do
 
   def copy_readtable(args \\ [])
 
+  def copy_readtable(nil), do: ExLisp.Readtable.copy_readtable(nil, nil)
+
   def copy_readtable(args) when is_list(args) do
     case args do
       [from, to | _] -> ExLisp.Readtable.copy_readtable(from, to)
@@ -11018,6 +11207,9 @@ defmodule ExLisp.Builtins do
       _ -> ExLisp.Readtable.copy_readtable(nil, nil)
     end
   end
+
+  def copy_readtable({:readtable, _} = readtable),
+    do: ExLisp.Readtable.copy_readtable(readtable, nil)
 
   def copy_readtable(from, to), do: ExLisp.Readtable.copy_readtable(from, to)
 

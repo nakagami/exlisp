@@ -4558,6 +4558,27 @@ defmodule LispBeam do
                 compile_setq([place, val_node], local_env)
             end
 
+          name when name in [:readtable_case, :_cl_readtable_case_] ->
+            case place_args do
+              [readtable_node] ->
+                {:call, 1,
+                 {:remote, 1, {:atom, 1, ExLisp.Readtable}, {:atom, 1, :set_readtable_case}},
+                 [compile_expr(readtable_node, local_env), compile_expr(val_node, local_env)]}
+
+              [] ->
+                {:call, 1,
+                 {:remote, 1, {:atom, 1, ExLisp.Readtable}, {:atom, 1, :set_readtable_case}},
+                 [
+                   {:call, 1,
+                    {:remote, 1, {:atom, 1, ExLisp.Readtable}, {:atom, 1, :current_readtable}},
+                    []},
+                   compile_expr(val_node, local_env)
+                 ]}
+
+              _ ->
+                compile_setq([place, val_node], local_env)
+            end
+
           name when name in [:fill_pointer, :_cl_fill_pointer_] ->
             case place_args do
               [arr_node | _] ->

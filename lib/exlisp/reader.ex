@@ -18,7 +18,7 @@ defmodule ExLisp.Reader do
   """
   def read_delimited_list(char, stream \\ nil, recursive_p \\ nil) do
     delimiter = normalize_delimiter(char)
-    resolved = if is_nil(stream), do: :standard_io, else: stream
+    resolved = stream
 
     do_read_delimited(resolved, delimiter, recursive_p, [])
   end
@@ -32,7 +32,13 @@ defmodule ExLisp.Reader do
         eof_value \\ nil,
         _recursive_p \\ nil
       ) do
-    ExLisp.Builtins.read([stream, eof_error_p, eof_value])
+    Process.put(:exlisp_preserve_whitespace, true)
+
+    try do
+      ExLisp.Builtins.read([stream, eof_error_p, eof_value])
+    after
+      Process.delete(:exlisp_preserve_whitespace)
+    end
   end
 
   defp do_read_delimited(stream, delimiter, recursive_p, acc) do
@@ -44,6 +50,14 @@ defmodule ExLisp.Reader do
       ^delimiter ->
         ExLisp.Stream.read_char(stream, nil, nil, recursive_p)
         Enum.reverse(acc)
+
+      %ExLisp.Character{code: whitespace} when whitespace in [?\s, ?\t, ?\n, ?\r] ->
+        ExLisp.Stream.read_char(stream, nil, nil, recursive_p)
+        do_read_delimited(stream, delimiter, recursive_p, acc)
+
+      whitespace when whitespace in [?\s, ?\t, ?\n, ?\r] ->
+        ExLisp.Stream.read_char(stream, nil, nil, recursive_p)
+        do_read_delimited(stream, delimiter, recursive_p, acc)
 
       :eof ->
         raise RuntimeError, "Unterminated delimited read"

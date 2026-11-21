@@ -28,6 +28,8 @@ defmodule ExLisp.Condition do
     {:parse_error, [:error]},
     {:package_error, [:error]},
     {:stream_error, [:error]},
+    {:end_of_file, [:stream_error]},
+    {:reader_error, [:stream_error]},
     {:file_error, [:error]},
     {:storage_condition, [:serious_condition]},
     {:warning, [:condition]},

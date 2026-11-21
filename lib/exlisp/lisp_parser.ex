@@ -1,4 +1,6 @@
 defmodule ExLisp.LispParser do
+  @escaped_marker 0xE000
+
   @moduledoc """
   Custom S-expression parser for ExLisp.
   Performs lexical analysis and parsing (S-expression generation) of Lisp
@@ -183,7 +185,13 @@ defmodule ExLisp.LispParser do
   # Keyword pipe-escaped symbol (:|...|)
   defp tokenize_chars([?:, ?| | rest], line, acc) do
     {sym_str, rem} = read_pipe_symbol_chars(rest, [])
-    atom = String.to_atom(":|#{sym_str}|")
+    atom =
+      if sym_str == String.upcase(sym_str) do
+        sym_str |> String.downcase() |> String.to_atom()
+      else
+        String.to_atom(":|#{sym_str}|")
+      end
+
     ExLisp.Env.register_keyword(atom)
     tokenize_chars(rem, line, [{:keyword, line, atom} | acc])
   end
@@ -191,7 +199,13 @@ defmodule ExLisp.LispParser do
   # Pipe-escaped symbol (|...|)
   defp tokenize_chars([?| | rest], line, acc) do
     {sym_str, rem} = read_pipe_symbol_chars(rest, [])
-    sym_atom = String.to_atom("|#{sym_str}|")
+    sym_atom =
+      if sym_str == String.upcase(sym_str) do
+        sym_str |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
+      else
+        String.to_atom("|#{sym_str}|")
+      end
+
     tokenize_chars(rem, line, [{:symbol, line, sym_atom} | acc])
   end
 
@@ -392,6 +406,10 @@ defmodule ExLisp.LispParser do
     tokenize_chars(rest, line, [{:char, line, c} | acc])
   end
 
+  defp read_char_literal([?\\ | rest], line, acc) do
+    tokenize_chars(rest, line, [{:char, line, ?\\} | acc])
+  end
+
   defp read_char_literal(chars, line, acc) do
     {name_chars, rest} = read_token_chars(chars, [])
     name = List.to_string(name_chars)
@@ -492,7 +510,7 @@ defmodule ExLisp.LispParser do
   defp read_token_chars([], acc), do: {Enum.reverse(acc), []}
 
   defp read_token_chars([?\\, c | rest], acc) do
-    read_token_chars(rest, [c | acc])
+    read_token_chars(rest, [c, @escaped_marker | acc])
   end
 
   defp read_token_chars([c | _] = chars, acc)
@@ -604,6 +622,10 @@ defmodule ExLisp.LispParser do
 
   # Parse keyword / identifier / symbol
   defp parse_symbol_or_keyword(str, line) do
+    if Process.get(:exlisp_reader_mode, false) and
+         ExLisp.Readtable.readtable_case() != :upcase do
+      parse_preserved_symbol_or_keyword(str, line)
+    else
     case str do
       "nil" ->
         {nil, line}
@@ -648,10 +670,58 @@ defmodule ExLisp.LispParser do
 
           # 5. Regular symbol
           true ->
-            normalized = normalize_symbol_name(str)
+            normalized =
+              if Process.get(:exlisp_reader_mode, false),
+                do: normalize_reader_symbol_name(str),
+                else: normalize_symbol_name(str)
+
             {:symbol, line, normalized}
         end
     end
+    end
+  end
+
+  defp parse_preserved_symbol_or_keyword(str, line) do
+    cond do
+      is_remote_call?(str) ->
+        {:id, line, split_remote_parts(str)}
+
+      String.starts_with?(str, ":") ->
+        keyword_name = String.slice(str, 1..-1//1)
+        atom = String.to_atom(keyword_name)
+        ExLisp.Env.register_keyword(atom)
+        {:keyword, line, atom}
+
+      true ->
+        {:symbol, line, normalize_reader_symbol_name(str)}
+    end
+  end
+
+  defp normalize_reader_symbol_name(str) do
+    case ExLisp.Readtable.readtable_case() do
+      :preserve -> normalize_escaped_case(str, & &1)
+      :downcase -> normalize_escaped_case(str, &String.downcase/1)
+      :invert -> normalize_escaped_case(str, &ExLisp.Readtable.invert_case/1)
+      _ -> normalize_escaped_case(str, &String.upcase/1)
+    end
+  end
+
+  defp normalize_escaped_case(str, transform) do
+    normalize_escaped_chunks(String.to_charlist(str), [], [], transform)
+  end
+
+  defp normalize_escaped_chunks([], current, output, transform) do
+    transformed = transform.(List.to_string(current)) |> String.to_charlist()
+    List.to_string(output ++ transformed)
+  end
+
+  defp normalize_escaped_chunks([@escaped_marker, char | rest], current, output, transform) do
+    transformed = transform.(List.to_string(current)) |> String.to_charlist()
+    normalize_escaped_chunks(rest, [], output ++ transformed ++ [char], transform)
+  end
+
+  defp normalize_escaped_chunks([char | rest], current, output, transform) do
+    normalize_escaped_chunks(rest, current ++ [char], output, transform)
   end
 
   defp is_remote_call?(str) do
@@ -746,6 +816,9 @@ defmodule ExLisp.LispParser do
   Converts to lower case and replaces hyphens `-` with underscores `_` for general symbols.
   """
   def normalize_symbol_name(str) do
+    if String.contains?(str, <<@escaped_marker::utf8>>) do
+      normalize_escaped_case(str, &String.upcase/1)
+    else
     down = String.downcase(str)
 
     cond do
@@ -765,6 +838,7 @@ defmodule ExLisp.LispParser do
 
       true ->
         String.replace(down, "-", "_")
+    end
     end
   end
 

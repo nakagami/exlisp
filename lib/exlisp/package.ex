@@ -36,7 +36,14 @@ defmodule ExLisp.Package do
 
   def current_package do
     ensure_tables()
-    Process.get(:exlisp_current_package, "COMMON-LISP-USER")
+    try do
+      case ExLisp.Env.get_var(:"*package*") do
+        %__MODULE__{name: name} -> name
+        package -> package
+      end
+    rescue
+      _ -> Process.get(:exlisp_current_package, "COMMON-LISP-USER")
+    end
   end
 
   def set_current_package(pkg_designator) do
@@ -1692,7 +1699,7 @@ defmodule ExLisp.Package do
     pkg =
       if is_nil(pkg_desig), do: find_package!(current_package()), else: find_package!(pkg_desig)
 
-    name = symbol_to_str(name_desig)
+    name = reader_symbol_to_str(name_desig)
 
     case find_symbol_in_pkg(name, pkg) do
       {:found, sym, status} ->
@@ -1715,7 +1722,7 @@ defmodule ExLisp.Package do
     pkg =
       if is_nil(pkg_desig), do: find_package!(current_package()), else: find_package!(pkg_desig)
 
-    name = symbol_to_str(name_desig)
+    name = reader_symbol_to_str(name_desig)
 
     case find_symbol_in_pkg(name, pkg) do
       {:found, sym, status} ->
@@ -1917,10 +1924,18 @@ defmodule ExLisp.Package do
     end
   end
 
+  defp reader_symbol_to_str(symbol) do
+    if is_binary(symbol), do: symbol, else: symbol_to_str(symbol)
+  end
+
   defp str_to_symbol(str) do
-    str
-    |> String.downcase()
-    |> String.replace("-", "_")
-    |> String.to_atom()
+    normalized = str |> String.downcase() |> String.replace("-", "_")
+
+    if str == String.upcase(str) and
+         Regex.match?(~r/^[A-Z0-9+*\/:=<>?!$%&-]+$/, str) do
+      String.to_atom(normalized)
+    else
+      String.to_atom("|#{str}|")
+    end
   end
 end

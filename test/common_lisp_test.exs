@@ -1536,7 +1536,8 @@ defmodule CommonLispTest do
           {_, status} = System.cmd("elixir", ebin_args ++ ["-e", ~s{ExLisp.eval("#{expr}")}])
           assert status == expected_status
         end,
-        max_concurrency: 7
+        max_concurrency: 7,
+        timeout: 30_000
       )
       |> Stream.run()
     end

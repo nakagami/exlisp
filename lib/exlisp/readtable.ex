@@ -128,6 +128,15 @@ defmodule ExLisp.Readtable do
     [{:macros, mac}] = :ets.lookup(tid, :macros)
 
     case Map.get(mac, char_code) do
+      {:syntax_macro, _source_char, _syntax_type, {func, non_term}} ->
+        [:_values_, [func, if(non_term, do: :t, else: nil)]]
+
+      {:syntax_macro, _source_char, _syntax_type, nil} ->
+        [:_values_, [nil, nil]]
+
+      {:dispatch, func, non_term} ->
+        [:_values_, [func, if(non_term, do: :t, else: nil)]]
+
       {func, non_term} ->
         [:_values_, [func, if(non_term, do: :t, else: nil)]]
 
@@ -145,6 +154,69 @@ defmodule ExLisp.Readtable do
     end
   end
 
+  def custom_macro_character(char, readtable \\ nil) do
+    {:readtable, tid} = resolve_rt(readtable)
+    char_code = to_char_code(char)
+    [{:macros, macros}] = :ets.lookup(tid, :macros)
+    case Map.get(macros, char_code) do
+      {:syntax_macro, _, _, _} -> nil
+      other -> other
+    end
+  end
+
+  def syntax_type(char, readtable \\ nil) do
+    {:readtable, tid} = resolve_rt(readtable)
+    [{:syntax, syntax}] = :ets.lookup(tid, :syntax)
+    Map.get(syntax, to_char_code(char), :constituent)
+  end
+
+  def normalize_reader_syntax(string, readtable \\ nil) do
+    {:readtable, tid} = resolve_rt(readtable)
+    [{:syntax, syntax}] = :ets.lookup(tid, :syntax)
+    [{:macros, macros}] = :ets.lookup(tid, :macros)
+
+    string
+    |> String.to_charlist()
+    |> Enum.flat_map(fn char ->
+      if invalid_constituent_char?(char) and Map.get(syntax, char, :constituent) == :constituent do
+        ExLisp.Condition.error(:reader_error, "Invalid constituent character")
+      end
+
+      case Map.get(macros, char) do
+        {:syntax_macro, _source_char, :constituent, _macro_info} ->
+          if static_reader_constituent?(char), do: [char], else: [?\\, char]
+
+        {:syntax_macro, source_char, _syntax_type, _macro_info} ->
+          [source_char]
+
+        {_function, _non_terminating} ->
+          [char]
+
+        {:dispatch, _, _} ->
+          [char]
+
+        nil ->
+          case Map.get(syntax, char, :constituent) do
+            :constituent ->
+              if static_reader_constituent?(char), do: [char], else: [?\\, char]
+
+            :whitespace ->
+              [char]
+
+            :single_escape ->
+              [?\\]
+
+            :multiple_escape ->
+              [?|]
+
+            _ ->
+              [char]
+          end
+      end
+    end)
+    |> List.to_string()
+  end
+
   def make_dispatch_macro_character(char, non_terminating_p \\ nil, readtable \\ nil) do
     {:readtable, tid} = resolve_rt(readtable)
     char_code = to_char_code(char)
@@ -160,7 +232,7 @@ defmodule ExLisp.Readtable do
         Map.put(syn, char_code, :terminating_macro)
       end
 
-    new_mac = Map.put(mac, char_code, {fn _s, _c -> nil end, non_term})
+    new_mac = Map.put(mac, char_code, {:dispatch, fn _s, _c -> nil end, non_term})
 
     :ets.insert(tid, {:syntax, new_syn})
     :ets.insert(tid, {:macros, new_mac})
@@ -183,6 +255,12 @@ defmodule ExLisp.Readtable do
     disp_code = to_char_code(disp_char)
     sub_code = to_char_code(sub_char) |> char_upcase()
 
+    [{:macros, macros}] = :ets.lookup(tid, :macros)
+
+    unless disp_code == ?# or match?({:dispatch, _, _}, Map.get(macros, disp_code)) do
+      ExLisp.Condition.error(:reader_error, "Character is not a dispatch macro character")
+    end
+
     [{:dispatch_macros, disp}] = :ets.lookup(tid, :dispatch_macros)
     Map.get(disp, {disp_code, sub_code}, nil)
   end
@@ -200,7 +278,7 @@ defmodule ExLisp.Readtable do
     macro_info =
       case Map.get(src_mac, from_code) do
         nil ->
-          if from_code in [?(, ?), ?', ?;, ?\", ?`, ?,] do
+          if from_code in [?(, ?), ?', ?;, ?\", ?`, ?,, ?#] do
             {fn _s, _c -> nil end, false}
           else
             nil
@@ -214,11 +292,7 @@ defmodule ExLisp.Readtable do
 
     new_dest_syn = Map.put(dest_syn, to_code, syntax)
     new_dest_mac =
-      if macro_info do
-        Map.put(dest_mac, to_code, macro_info)
-      else
-        Map.delete(dest_mac, to_code)
-      end
+      Map.put(dest_mac, to_code, {:syntax_macro, from_code, syntax, macro_info})
 
     :ets.insert(dest_tid, {:syntax, new_dest_syn})
     :ets.insert(dest_tid, {:macros, new_dest_mac})
@@ -240,7 +314,17 @@ defmodule ExLisp.Readtable do
 
   # --- Helper functions ---
 
-  defp resolve_rt(nil), do: current_readtable()
+  defp resolve_rt(nil) do
+    try do
+      case ExLisp.Env.get_var(:"*readtable*") do
+        {:readtable, _} = readtable -> readtable
+        _ -> current_readtable()
+      end
+    rescue
+      _ -> current_readtable()
+    end
+  end
+
   defp resolve_rt({:readtable, _} = rt), do: rt
   defp resolve_rt(_), do: current_readtable()
 
@@ -257,6 +341,33 @@ defmodule ExLisp.Readtable do
   defp char_upcase(c) when c >= ?a and c <= ?z, do: c - 32
   defp char_upcase(c), do: c
 
+  defp static_reader_constituent?(char) do
+    not (char in [
+           ?\s,
+           ?\t,
+           ?\n,
+           ?\r,
+           12,
+           ?\\,
+           ?|,
+           ?(,
+           ?),
+           ?[,
+           ?],
+           ?{,
+           ?},
+           ?',
+           ?;,
+           ?",
+           ?`,
+           ?,,
+           ?#
+         ])
+  end
+
+  defp invalid_constituent_char?(char),
+    do: char in [?\b, ?\t, ?\n, 10, 12, ?\r, ?\s, 127]
+
   defp normalize_case(k) when is_atom(k) do
     k_str = k |> Atom.to_string() |> String.trim_leading(":") |> String.downcase()
     case k_str do
@@ -268,5 +379,16 @@ defmodule ExLisp.Readtable do
     end
   end
   defp normalize_case(_), do: :upcase
+
+  def invert_case(string) do
+    has_upper = string |> String.graphemes() |> Enum.any?(&(&1 != String.downcase(&1)))
+    has_lower = string |> String.graphemes() |> Enum.any?(&(&1 != String.upcase(&1)))
+
+    cond do
+      has_upper and not has_lower -> String.downcase(string)
+      has_lower and not has_upper -> String.upcase(string)
+      true -> string
+    end
+  end
 end
 

@@ -242,6 +242,66 @@ suites = [
   {"SVREF", "arrays/svref.lsp"},
   {"UPGRADED-ARRAY-ELEMENT-TYPE", "arrays/upgraded-array-element-type.lsp"},
   {"VECTOR", "arrays/vector.lsp"},
+  {"COPY-READTABLE", "reader/copy-readtable.lsp"},
+  {"DISPATCH-MACRO-CHARACTERS", "reader/dispatch-macro-characters.lsp"},
+  {"GET-MACRO-CHARACTER", "reader/get-macro-character.lsp"},
+  {"READ-DELIMITED-LIST", "reader/read-delimited-list.lsp"},
+  {"READ-FROM-STRING", "reader/read-from-string.lsp"},
+  {"READ-PRESERVING-WHITESPACE", "reader/read-preserving-whitespace.lsp"},
+  {"READ-SUPPRESS", "reader/read-suppress.lsp"},
+  {"READ", "reader/read.lsp"},
+  {"READTABLE-CASE", "reader/readtable-case.lsp"},
+  {"READTABLEP", "reader/readtablep.lsp"},
+  {"SET-MACRO-CHARACTER", "reader/set-macro-character.lsp"},
+  {"BROADCAST-STREAM-STREAMS", "streams/broadcast-stream-streams.lsp"},
+  {"CLEAR-INPUT", "streams/clear-input.lsp"},
+  {"CLEAR-OUTPUT", "streams/clear-output.lsp"},
+  {"CONCATENATED-STREAM-STREAMS", "streams/concatenated-stream-streams.lsp"},
+  {"ECHO-STREAM-INPUT-STREAM", "streams/echo-stream-input-stream.lsp"},
+  {"ECHO-STREAM-OUTPUT-STREAM", "streams/echo-stream-output-stream.lsp"},
+  {"FILE-LENGTH", "streams/file-length.lsp"},
+  {"FILE-POSITION", "streams/file-position.lsp"},
+  {"FILE-STRING-LENGTH", "streams/file-string-length.lsp"},
+  {"FINISH-OUTPUT", "streams/finish-output.lsp"},
+  {"FORCE-OUTPUT", "streams/force-output.lsp"},
+  {"FRESH-LINE", "streams/fresh-line.lsp"},
+  {"GET-OUTPUT-STREAM-STRING", "streams/get-output-stream-string.lsp"},
+  {"INPUT-STREAM-P", "streams/input-stream-p.lsp"},
+  {"INTERACTIVE-STREAM-P", "streams/interactive-stream-p.lsp"},
+  {"LISTEN", "streams/listen.lsp"},
+  {"MAKE-BROADCAST-STREAM", "streams/make-broadcast-stream.lsp"},
+  {"MAKE-CONCATENATED-STREAM", "streams/make-concatenated-stream.lsp"},
+  {"MAKE-ECHO-STREAM", "streams/make-echo-stream.lsp"},
+  {"MAKE-STRING-INPUT-STREAM", "streams/make-string-input-stream.lsp"},
+  {"MAKE-STRING-OUTPUT-STREAM", "streams/make-string-output-stream.lsp"},
+  {"MAKE-SYNONYM-STREAM", "streams/make-synonym-stream.lsp"},
+  {"MAKE-TWO-WAY-STREAM", "streams/make-two-way-stream.lsp"},
+  {"OPEN-STREAM-P", "streams/open-stream-p.lsp"},
+  {"OPEN", "streams/open.lsp"},
+  {"OUTPUT-STREAM-P", "streams/output-stream-p.lsp"},
+  {"PEEK-CHAR", "streams/peek-char.lsp"},
+  {"READ-BYTE", "streams/read-byte.lsp"},
+  {"READ-CHAR-NO-HANG", "streams/read-char-no-hang.lsp"},
+  {"READ-CHAR", "streams/read-char.lsp"},
+  {"READ-LINE", "streams/read-line.lsp"},
+  {"READ-SEQUENCE", "streams/read-sequence.lsp"},
+  {"STREAM-ELEMENT-TYPE", "streams/stream-element-type.lsp"},
+  {"STREAM-ERROR-STREAM", "streams/stream-error-stream.lsp"},
+  {"STREAM-EXTERNAL-FORMAT", "streams/stream-external-format.lsp"},
+  {"STREAMP", "streams/streamp.lsp"},
+  {"SYNONYM-STREAM-SYMBOL", "streams/synonym-stream-symbol.lsp"},
+  {"TERPRI", "streams/terpri.lsp"},
+  {"TWO-WAY-STREAM-INPUT-STREAM", "streams/two-way-stream-input-stream.lsp"},
+  {"TWO-WAY-STREAM-OUTPUT-STREAM", "streams/two-way-stream-output-stream.lsp"},
+  {"UNREAD-CHAR", "streams/unread-char.lsp"},
+  {"WITH-INPUT-FROM-STRING", "streams/with-input-from-string.lsp"},
+  {"WITH-OPEN-FILE", "streams/with-open-file.lsp"},
+  {"WITH-OPEN-STREAM", "streams/with-open-stream.lsp"},
+  {"WITH-OUTPUT-TO-STRING", "streams/with-output-to-string.lsp"},
+  {"WRITE-CHAR", "streams/write-char.lsp"},
+  {"WRITE-LINE", "streams/write-line.lsp"},
+  {"WRITE-SEQUENCE", "streams/write-sequence.lsp"},
+  {"WRITE-STRING", "streams/write-string.lsp"},
   {"LOOP", "iteration/loop.lsp"},
   {"LOOP6", "iteration/loop6.lsp"},
   {"LOOP7", "iteration/loop7.lsp"},
@@ -368,6 +428,7 @@ aux_files = [
   Path.join(ansi_test_dir, "auxiliary/numbers-aux.lsp"),
   Path.join(ansi_test_dir, "auxiliary/times-aux.lsp"),
   Path.join(ansi_test_dir, "auxiliary/gcd-aux.lsp"),
+  Path.join(ansi_test_dir, "auxiliary/reader-aux.lsp"),
   Path.join(ansi_test_dir, "auxiliary/floor-aux.lsp"),
   Path.join(ansi_test_dir, "auxiliary/ceiling-aux.lsp"),
   Path.join(ansi_test_dir, "auxiliary/truncate-aux.lsp"),
@@ -433,12 +494,14 @@ target_suites =
     suites
   end
 
+File.mkdir_p!(Path.join(ansi_test_dir, "sandbox/scratch"))
+
 total_failed =
   Enum.reduce(target_suites, 0, fn {name, rel_path}, acc ->
     full_path = if Path.type(rel_path) == :absolute, do: rel_path, else: Path.join(ansi_test_dir, rel_path)
     IO.puts("Loading #{name} (#{full_path})...")
     ExLisp.eval("(reset-test-stats)")
-    ExLisp.load_file(full_path)
+    File.cd!(Path.join(ansi_test_dir, "sandbox"), fn -> ExLisp.load_file(full_path) end)
     ExLisp.eval("(print-test-summary \"#{name}\")")
     failed = ExLisp.eval("*test-failed-count*")
     acc + (if is_integer(failed), do: failed, else: 0)

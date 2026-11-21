@@ -195,6 +195,20 @@ defmodule ExLisp.Env do
   end
 
   @predefined_vars %{
+    :"*standard-input*" => :standard_io,
+    :"*standard_input*" => :standard_io,
+    :"*standard-output*" => :standard_io,
+    :"*standard_output*" => :standard_io,
+    :"*error-output*" => :standard_io,
+    :"*error_output*" => :standard_io,
+    :"*trace-output*" => :standard_io,
+    :"*trace_output*" => :standard_io,
+    :"*debug-io*" => :standard_io,
+    :"*debug_io*" => :standard_io,
+    :"*query-io*" => :standard_io,
+    :"*query_io*" => :standard_io,
+    :"*terminal-io*" => :standard_io,
+    :"*terminal_io*" => :standard_io,
     :features => [
       :exlisp,
       :cl,
@@ -337,6 +351,10 @@ defmodule ExLisp.Env do
             ]
 
             cond do
+              var_name == :"*readtable*" or var_name == :readtable or
+                  Enum.any?(cands, &(&1 == :"*readtable*")) ->
+                ExLisp.Readtable.current_readtable()
+
               var_name in posix_argv_names or Enum.any?(cands, &(&1 in posix_argv_names)) ->
                 ["exlisp" | System.argv()]
 
@@ -373,10 +391,18 @@ defmodule ExLisp.Env do
   """
   def with_special_bindings(bindings_list, fun)
       when is_list(bindings_list) and is_function(fun, 0) do
-    saved = Enum.map(bindings_list, fn {var, _val} -> {var, :erlang.get({:"$special$", var})} end)
+    bindings =
+      Enum.flat_map(bindings_list, fn {var, value} ->
+        normalized = normalize_name(var)
+        text = Atom.to_string(normalized)
+        aliases = [normalized, text |> String.replace("_", "-") |> String.to_atom()]
+        aliases |> Enum.uniq() |> Enum.map(&{&1, value})
+      end)
+
+    saved = Enum.map(bindings, fn {var, _val} -> {var, :erlang.get({:"$special$", var})} end)
 
     try do
-      Enum.each(bindings_list, fn {var, val} -> :erlang.put({:"$special$", var}, val) end)
+      Enum.each(bindings, fn {var, val} -> :erlang.put({:"$special$", var}, val) end)
       fun.()
     after
       Enum.each(saved, fn

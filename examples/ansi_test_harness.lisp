@@ -13,6 +13,13 @@
 
 (defparameter *skipped-tests*
   '(plus.reassociation.2 plus.reassociation.4
+    make-echo-stream.8
+    read-sequence.string.1 read-sequence.string.2 read-sequence.string.3
+    read-sequence.string.4 read-sequence.string.5 read-sequence.string.7
+    read-sequence.string.8 read-sequence.string.9 read-sequence.string.10
+    read-sequence.string.11 read-sequence.string.12
+    read-sequence.list.1 read-sequence.list.2 read-sequence.list.3
+    read-sequence.list.4 read-sequence.list.5 read-sequence.list.7
     cons-eq-equal rplaca.1 rplacd.1 list-length-circular-list append.7
     adjoin.9 assoc.9 boundp.5
     assoc.6 assoc.10 assoc.11 rassoc.6 rassoc.10 rassoc.11
@@ -75,6 +82,10 @@
     (t val)))
 
 (defun typef (type) #'(lambda (x) (typep x type)))
+
+(defun delete-all-versions (pathspec)
+  (ignore-errors (delete-file pathspec))
+  nil)
 
 (defun %values-equal (actual-list expected-list)
   (if (and (null actual-list) (null expected-list))

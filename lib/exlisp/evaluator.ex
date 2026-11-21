@@ -1725,7 +1725,7 @@ defmodule ExLisp.Evaluator do
     bindings = LispBeam.extract_bindings(bindings_node)
 
     {special_bindings, lexical_bindings} =
-      Enum.split_with(bindings, fn {var, _} -> var in specials end)
+      Enum.split_with(bindings, fn {var, _} -> var in specials or special_earmuff?(var) end)
 
     evaluated_lexical =
       Enum.map(lexical_bindings, fn {var, init_node} ->
@@ -1772,7 +1772,7 @@ defmodule ExLisp.Evaluator do
   defp do_eval_let_star([{var, init_node} | rest], actual_body, env, specials) do
     val = eval(init_node, env) |> Builtins.unwrap_mv_primary()
 
-    if var in specials do
+    if var in specials or special_earmuff?(var) do
       new_env = Map.delete(env, var)
       Env.with_special_bindings([{var, val}], fn ->
         do_eval_let_star(rest, actual_body, new_env, specials)
@@ -1784,6 +1784,13 @@ defmodule ExLisp.Evaluator do
       do_eval_let_star(rest, actual_body, new_env, specials)
     end
   end
+
+  defp special_earmuff?(var) when is_atom(var) do
+    name = Atom.to_string(var)
+    String.starts_with?(name, "*") and String.ends_with?(name, "*")
+  end
+
+  defp special_earmuff?(_), do: false
 
   # --- Setq / Setf / Mutators ---
 
@@ -2154,6 +2161,22 @@ defmodule ExLisp.Evaluator do
             setter = fn unwrapped ->
               cur = target_getter.()
               target_setter.(Builtins.deposit_field(unwrapped, bytespec, cur))
+              unwrapped
+            end
+
+            {getter, setter}
+
+          op in [:readtable_case, :_cl_readtable_case_, :"readtable-case"] ->
+            readtable =
+              case place_args do
+                [node | _] -> eval(node, env) |> Builtins.unwrap_mv_primary()
+                [] -> ExLisp.Readtable.current_readtable()
+              end
+
+            getter = fn -> ExLisp.Readtable.readtable_case(readtable) end
+
+            setter = fn unwrapped ->
+              ExLisp.Readtable.set_readtable_case(readtable, unwrapped)
               unwrapped
             end
 
@@ -3124,17 +3147,34 @@ defmodule ExLisp.Evaluator do
   defp eval_with_open_file(args, env) do
     case args do
       [{:list, _, [stream_var_node, filespec_node | options]} | body_nodes] ->
+        {_declarations, actual_body} = LispBeam.split_declarations(body_nodes)
         stream_var = LispBeam.extract_symbol_name(stream_var_node)
         filespec = eval(filespec_node, env) |> Builtins.unwrap_mv_primary()
         opt_args = Enum.map(options, &(eval(&1, env) |> Builtins.unwrap_mv_primary()))
         stream = Builtins.open(filespec, opt_args)
         ref = make_ref()
         :erlang.put(ref, stream)
+        normalized_stream_var = ExLisp.Env.normalize_name(stream_var)
+        stream_binding_key = {:exlisp_special_stream, normalized_stream_var}
+        previous_stream_binding = Process.get(stream_binding_key)
+        Process.put(stream_binding_key, stream)
 
         try do
-          call_env = Map.put(env, stream_var, {:box, ref})
-          eval_progn(body_nodes, call_env)
+          if special_earmuff?(stream_var) do
+            Env.with_special_bindings([{stream_var, stream}], fn ->
+              eval_progn(actual_body, Map.delete(env, stream_var))
+            end)
+          else
+            call_env = Map.put(env, stream_var, {:box, ref})
+            eval_progn(actual_body, call_env)
+          end
         after
+          if previous_stream_binding do
+            Process.put(stream_binding_key, previous_stream_binding)
+          else
+            Process.delete(stream_binding_key)
+          end
+
           Builtins.close(stream)
         end
 
@@ -3146,15 +3186,43 @@ defmodule ExLisp.Evaluator do
   defp eval_with_open_stream(args, env) do
     case args do
       [{:list, _, [var_node, stream_node]} | body_nodes] ->
+        {_declarations, actual_body} = LispBeam.split_declarations(body_nodes)
         var_sym = LispBeam.extract_symbol_name(var_node)
         stream = eval(stream_node, env) |> Builtins.unwrap_mv_primary()
         ref = make_ref()
         :erlang.put(ref, stream)
+        previous_terminal_io = Process.get(:exlisp_terminal_io_stream)
+        normalized_stream_var = ExLisp.Env.normalize_name(var_sym)
+        stream_binding_key = {:exlisp_special_stream, normalized_stream_var}
+        previous_stream_binding = Process.get(stream_binding_key)
+        Process.put(stream_binding_key, stream)
+
+        if special_earmuff?(var_sym) and String.contains?(Atom.to_string(var_sym), "terminal_io") do
+          Process.put(:exlisp_terminal_io_stream, stream)
+        end
 
         try do
-          call_env = Map.put(env, var_sym, {:box, ref})
-          eval_progn(body_nodes, call_env)
+          if special_earmuff?(var_sym) do
+            Env.with_special_bindings([{var_sym, stream}], fn ->
+              eval_progn(actual_body, Map.delete(env, var_sym))
+            end)
+          else
+            call_env = Map.put(env, var_sym, {:box, ref})
+            eval_progn(actual_body, call_env)
+          end
         after
+          if previous_terminal_io do
+            Process.put(:exlisp_terminal_io_stream, previous_terminal_io)
+          else
+            Process.delete(:exlisp_terminal_io_stream)
+          end
+
+          if previous_stream_binding do
+            Process.put(stream_binding_key, previous_stream_binding)
+          else
+            Process.delete(stream_binding_key)
+          end
+
           Builtins.close(stream)
         end
 
@@ -3165,17 +3233,80 @@ defmodule ExLisp.Evaluator do
 
   defp eval_with_input_from_string(args, env) do
     case args do
-      [{:list, _, [var_node, string_node | _opts]} | body_nodes] ->
+      [{:list, _, [var_node, string_node | option_nodes]} | body_nodes] ->
         var_sym = LispBeam.extract_symbol_name(var_node)
         str_val = eval(string_node, env) |> Builtins.unwrap_mv_primary()
-        stream = Builtins.make_string_input_stream(str_val)
+        {_option_decls, actual_body} = LispBeam.split_declarations(body_nodes)
+
+        option_pairs =
+          option_nodes
+          |> Enum.chunk_every(2)
+          |> Enum.reduce([], fn
+            [key_node, value_node], acc ->
+              key = LispBeam.extract_symbol_name(key_node)
+              [{key, eval(value_node, env) |> Builtins.unwrap_mv_primary()} | acc]
+
+            _, acc ->
+              acc
+          end)
+          |> Enum.reverse()
+
+        options = Map.new(option_pairs)
+        start_idx = Map.get(options, :start, 0) || 0
+        end_idx = Map.get(options, :end)
+        index_present = Map.has_key?(options, :index)
+        stream = Builtins.make_string_input_stream(str_val, start_idx, end_idx)
         ref = make_ref()
         :erlang.put(ref, stream)
+        previous_standard_input = Process.get(:exlisp_standard_input_stream)
+        Process.put(:exlisp_standard_input_stream, stream)
+        stream_binding_key = {:exlisp_special_stream, ExLisp.Env.normalize_name(var_sym)}
+        previous_stream_binding = Process.get(stream_binding_key)
+        Process.put(stream_binding_key, stream)
 
         try do
-          call_env = Map.put(env, var_sym, {:box, ref})
-          eval_progn(body_nodes, call_env)
+          result =
+            if special_earmuff?(var_sym) do
+              Env.with_special_bindings([{var_sym, stream}], fn ->
+                eval_progn(actual_body, Map.delete(env, var_sym))
+              end)
+            else
+              call_env = Map.put(env, var_sym, {:box, ref})
+              eval_progn(actual_body, call_env)
+            end
+
+          if index_present do
+            index_ast =
+              option_nodes
+              |> Enum.chunk_every(2)
+              |> Enum.find_value(fn
+                [key_node, value_node] ->
+                  if LispBeam.extract_symbol_name(key_node) == :index, do: value_node
+
+                _ ->
+                  nil
+              end)
+
+            if index_ast do
+              {_getter, setter} = get_setf_expansion(index_ast, env)
+              setter.(ExLisp.Stream.file_position(stream))
+            end
+          end
+
+          result
         after
+          if previous_standard_input do
+            Process.put(:exlisp_standard_input_stream, previous_standard_input)
+          else
+            Process.delete(:exlisp_standard_input_stream)
+          end
+
+          if previous_stream_binding do
+            Process.put(stream_binding_key, previous_stream_binding)
+          else
+            Process.delete(stream_binding_key)
+          end
+
           Builtins.close(stream)
         end
 
@@ -3186,17 +3317,67 @@ defmodule ExLisp.Evaluator do
 
   defp eval_with_output_to_string(args, env) do
     case args do
-      [{:list, _, [var_node | _opts]} | body_nodes] ->
+      [{:list, _, [var_node | stream_options]} | body_nodes] ->
         var_sym = LispBeam.extract_symbol_name(var_node)
+        {_option_decls, actual_body} = LispBeam.split_declarations(body_nodes)
+
+        target =
+          case stream_options do
+            [target_node | _] ->
+              eval(target_node, env) |> Builtins.unwrap_mv_primary()
+
+            [] ->
+              nil
+          end
+
+        stream_options
+        |> Enum.drop(1)
+        |> Enum.chunk_every(2)
+        |> Enum.each(fn
+          [_key_node, value_node] -> eval(value_node, env) |> Builtins.unwrap_mv_primary()
+          _ -> :ok
+        end)
+
         stream = Builtins.make_string_output_stream()
         ref = make_ref()
         :erlang.put(ref, stream)
+        stream_binding_key = {:exlisp_special_stream, ExLisp.Env.normalize_name(var_sym)}
+        previous_stream_binding = Process.get(stream_binding_key)
+        Process.put(stream_binding_key, stream)
 
         try do
-          call_env = Map.put(env, var_sym, {:box, ref})
-          eval_progn(body_nodes, call_env)
-          Builtins.get_output_stream_string(stream)
+          result =
+            if special_earmuff?(var_sym) do
+              Env.with_special_bindings([{var_sym, stream}], fn ->
+                eval_progn(actual_body, Map.delete(env, var_sym))
+              end)
+            else
+              call_env = Map.put(env, var_sym, {:box, ref})
+              eval_progn(actual_body, call_env)
+            end
+
+          output = Builtins.get_output_stream_string(stream)
+
+          if is_nil(target) do
+            output
+          else
+            String.to_charlist(output)
+            |> Enum.each(fn code ->
+              case Builtins.vector_push(ExLisp.Character.new(code), target) do
+                nil -> raise ArgumentError, "Output string has no remaining capacity"
+                _ -> :ok
+              end
+            end)
+
+            result
+          end
         after
+          if previous_stream_binding do
+            Process.put(stream_binding_key, previous_stream_binding)
+          else
+            Process.delete(stream_binding_key)
+          end
+
           Builtins.close(stream)
         end
 

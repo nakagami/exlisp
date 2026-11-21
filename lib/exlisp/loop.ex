@@ -1546,13 +1546,23 @@ defmodule ExLisp.Loop do
               )
           end
 
-        case type do
-          :when ->
-            {:list, {1, 1}, [symbol_node(:if), test_expr, then_branch, else_branch]}
+        it = symbol_node(:it)
 
-          :unless ->
-            {:list, {1, 1}, [symbol_node(:if), test_expr, else_branch, then_branch]}
-        end
+        branch =
+          case type do
+            :when ->
+              {:list, {1, 1}, [symbol_node(:if), it, then_branch, else_branch]}
+
+            :unless ->
+              {:list, {1, 1}, [symbol_node(:if), it, else_branch, then_branch]}
+          end
+
+        {:list, {1, 1},
+         [
+           symbol_node(:let),
+           {:list, {1, 1}, [{:list, {1, 1}, [it, test_expr]}]},
+           branch
+         ]}
     end
   end
 
