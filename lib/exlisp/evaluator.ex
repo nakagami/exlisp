@@ -3701,9 +3701,41 @@ defmodule ExLisp.Evaluator do
     name
   end
 
-  defp eval_defgeneric([name_node, params_node | options], _env) do
+  defp eval_defgeneric([name_node, params_node | options], env) do
     name = LispBeam.extract_symbol_name(name_node)
-    ExLisp.CLOS.register_generic(name, params_node, options)
+
+    {method_options, generic_options} =
+      Enum.split_with(options, fn
+        {:list, _, [{:id, _, [option]} | _]} -> String.downcase(option) == "method"
+        _ -> false
+      end)
+
+    normalized_options =
+      Enum.flat_map(generic_options, fn
+        {:list, _, [key_node, value_node | _]} ->
+          key = LispBeam.extract_symbol_name(key_node)
+          value = LispBeam.extract_symbol_name(value_node)
+
+          if Atom.to_string(key) |> String.ends_with?("method_combination") do
+            [{:method_combination, value}]
+          else
+            []
+          end
+
+        _ ->
+          []
+      end)
+
+    ExLisp.CLOS.register_generic(name, params_node, normalized_options)
+
+    Enum.each(method_options, fn
+      {:list, _, [_method_node | rest]} ->
+        eval_defmethod([name_node | rest], env)
+
+      _ ->
+        :ok
+    end)
+
     name
   end
 
@@ -3743,7 +3775,7 @@ defmodule ExLisp.Evaluator do
     end
 
     ExLisp.CLOS.register_method(method_name, qualifier, raw_specializers, method_fun)
-    method_name
+    ExLisp.CLOS.generic_function_methods(method_name) |> List.first()
   end
 
   defp extract_qualifier_and_rest(args) do
@@ -3774,7 +3806,7 @@ defmodule ExLisp.Evaluator do
 
       {:id, _, [str_id]} ->
         str = str_id |> String.trim_leading(":") |> String.downcase()
-        if str in ["before", "after", "around"], do: {:ok, String.to_atom(str)}, else: :error
+        {:ok, String.to_atom(str)}
 
       _ ->
         :error

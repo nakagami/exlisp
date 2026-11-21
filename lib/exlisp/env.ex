@@ -362,6 +362,9 @@ defmodule ExLisp.Env do
               var_name in posix_argv_names or Enum.any?(cands, &(&1 in posix_argv_names)) ->
                 ["exlisp" | System.argv()]
 
+              var_name in [:"*random-state*", :"*random_state*"] ->
+                ExLisp.Builtins.make_random_state()
+
               Map.has_key?(@predefined_vars, var_name) ->
                 Map.fetch!(@predefined_vars, var_name)
 

@@ -36,7 +36,7 @@ defmodule ExLisp.Type do
     norm_name = normalize_type_name(name)
 
     expander_fun = fn args ->
-      eval_deftype_expansion(lambda_list, body_forms, args)
+      eval_deftype_expansion(norm_name, lambda_list, body_forms, args)
     end
 
     :ets.insert(@deftype_table, {norm_name, {lambda_list, expander_fun}})
@@ -57,7 +57,7 @@ defmodule ExLisp.Type do
     norm_name
   end
 
-  defp eval_deftype_expansion(lambda_list, body_forms, args) do
+  defp eval_deftype_expansion(name, lambda_list, body_forms, args) do
     # Bind arguments to parameters and evaluate the body forms (last form is returned)
     param_names =
       Enum.map(lambda_list, fn
@@ -75,12 +75,20 @@ defmodule ExLisp.Type do
         {:list, 1, [{:id, 1, [Atom.to_string(var)]}, {:lit, val}]}
       end)
 
-    wrapped_ast =
+    wrapped_body =
       {:list, 1,
        [
          {:id, 1, ["let*"]},
          {:list, 1, let_bindings}
          | body_forms
+       ]}
+
+    wrapped_ast =
+      {:list, 1,
+       [
+         {:id, 1, ["block"]},
+         {:id, 1, [Atom.to_string(name)]},
+         wrapped_body
        ]}
 
     case LispBeam.evaluate_ast(wrapped_ast) do
@@ -93,6 +101,10 @@ defmodule ExLisp.Type do
 
   defp bind_deftype_params([:"&optional" | rest_params], args) do
     bind_optional_params(rest_params, args)
+  end
+
+  defp bind_deftype_params([:"&key" | rest_params], args) do
+    bind_keyword_params(rest_params, args)
   end
 
   defp bind_deftype_params([:"&rest", rest_var | _], args) do
@@ -122,10 +134,60 @@ defmodule ExLisp.Type do
 
   defp bind_optional_params([p | rest_params], []) do
     case p do
-      [var, default | _] -> [{normalize_param_name(var), default} | bind_optional_params(rest_params, [])]
+      [var, default | _] ->
+        [
+          {normalize_param_name(var), eval_deftype_default(default)}
+          | bind_optional_params(rest_params, [])
+        ]
+
       var -> [{normalize_param_name(var), :*} | bind_optional_params(rest_params, [])]
     end
   end
+
+  defp bind_keyword_params([], _args), do: []
+  defp bind_keyword_params([:"&allow-other-keys" | _], _args), do: []
+
+  defp bind_keyword_params([p | rest], args) do
+    {var, keyword, default} =
+      case p do
+        [var_spec, default | _] ->
+          var = normalize_param_name(var_spec)
+          {var, var, eval_deftype_default(default)}
+
+        var_spec ->
+          var = normalize_param_name(var_spec)
+          {var, var, :*}
+      end
+
+    value =
+      args
+      |> Enum.chunk_every(2)
+      |> Enum.find_value(fn
+        [key, val] ->
+          if normalize_param_name(key) == keyword, do: {:found, val}
+
+        _ ->
+          nil
+      end)
+      |> case do
+        {:found, val} -> val
+        nil -> default
+      end
+
+    [{var, value} | bind_keyword_params(rest, args)]
+  end
+
+  defp eval_deftype_default(default) when is_list(default) do
+    default
+    |> ExLisp.Macro.lisp_data_to_ast()
+    |> ExLisp.Evaluator.eval()
+  end
+
+  defp eval_deftype_default(default) when is_atom(default) do
+    if default in [nil, :t, :*], do: default, else: ExLisp.Env.get_var(default)
+  end
+
+  defp eval_deftype_default(default), do: default
 
   defp normalize_param_name(a) when is_atom(a), do: a
   defp normalize_param_name(%ExLisp.Symbol{name: n}), do: String.to_atom(String.downcase(n))
@@ -387,9 +449,7 @@ defmodule ExLisp.Type do
   end
 
   defp do_typep(val, :function) do
-    is_function(val) or match?(%ExLisp.Closure{}, val) or
-      (is_atom(val) and val not in [nil, :t, :nil, :false, :true] and
-         (BuiltinFunction.builtin?(val) or ExLisp.Env.has_fun?(val)))
+    is_function(val) or match?(%ExLisp.Closure{}, val)
   end
 
   defp do_typep(val, type) when type in [:generic_function, :standard_generic_function] do

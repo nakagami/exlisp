@@ -514,6 +514,8 @@ defmodule BuiltinFunction do
     :_cl_find_class_ => {:find_class, :find_class},
     :class_name => {:class_name, :class_name},
     :_cl_class_name_ => {:class_name, :class_name},
+    :class_precedence_list => {:class_precedence_list, :class_precedence_list},
+    :_cl_class_precedence_list_ => {:class_precedence_list, :class_precedence_list},
     :subclassp => {:subclassp, :subclassp},
     :_cl_subclassp_ => {:subclassp, :subclassp},
     :call_next_method => {:call_next_method, :call_next_method},

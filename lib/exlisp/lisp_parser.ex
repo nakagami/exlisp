@@ -131,7 +131,7 @@ defmodule ExLisp.LispParser do
 
   # Pathname literal (#P"..." / #p"...")
   defp tokenize_chars([?#, p, ?\" | rest], line, acc) when p in [?p, ?P] do
-    read_string(rest, line, [], acc)
+    read_pathname(rest, line, [], acc)
   end
 
   # Complex number literal (#c(...) / #C(...))
@@ -395,6 +395,20 @@ defmodule ExLisp.LispParser do
   defp read_string([c | rest], line, curr, acc) do
     read_string(rest, line, [c | curr], acc)
   end
+
+  defp read_pathname([], line, _curr, _acc), do: {:error, "unclosed pathname at line #{line}"}
+  defp read_pathname([?\\, ?\" | rest], line, curr, acc),
+    do: read_pathname(rest, line, [?\" | curr], acc)
+  defp read_pathname([?\\, c | rest], line, curr, acc),
+    do: read_pathname(rest, line, [c | curr], acc)
+
+  defp read_pathname([?\" | rest], line, curr, acc) do
+    value = curr |> Enum.reverse() |> List.to_string()
+    tokenize_chars(rest, line, [{:pathname, line, value} | acc])
+  end
+
+  defp read_pathname([c | rest], line, curr, acc),
+    do: read_pathname(rest, line, [c | curr], acc)
 
   # Read character literal (#\...)
   defp read_char_literal([], line, _acc) do
@@ -920,6 +934,8 @@ defmodule ExLisp.LispParser do
   defp parse_expr([{:float, _line, val} | rest]), do: {:ok, {:lit, val}, rest}
   defp parse_expr([{:ratio, _line, val} | rest]), do: {:ok, {:lit, val}, rest}
   defp parse_expr([{:string, _line, val} | rest]), do: {:ok, {:lit, val}, rest}
+  defp parse_expr([{:pathname, _line, val} | rest]),
+    do: {:ok, {:lit, ExLisp.Pathname.pathname(val)}, rest}
   defp parse_expr([{:char, _line, val} | rest]) do
     char_val = if match?(%ExLisp.Character{}, val), do: val, else: ExLisp.Character.new(val)
     {:ok, {:lit, char_val}, rest}

@@ -47,14 +47,36 @@ defmodule ExLisp.CLOS do
     {:keyword, [:symbol], [:keyword, :symbol, :t]},
     {:string, [:vector], [:string, :vector, :array, :t]},
     {:character, [:t], [:character, :t]},
-    {:list, [:t], [:list, :t]},
-    {:cons, [:list], [:cons, :list, :t]},
-    {:null, [:symbol, :list], [:null, :symbol, :list, :t]},
+    {:list, [:sequence], [:list, :sequence, :t]},
+    {:cons, [:list], [:cons, :list, :sequence, :t]},
+    {:null, [:symbol, :list], [:null, :symbol, :list, :sequence, :t]},
     {:hash_table, [:t], [:hash_table, :t]},
     {:function, [:t], [:function, :t]},
+    {:sequence, [:t], [:sequence, :t]},
     {:bit_vector, [:vector], [:bit_vector, :vector, :array, :t]},
     {:vector, [:array], [:vector, :array, :t]},
-    {:array, [:t], [:array, :t]}
+    {:array, [:t], [:array, :t]},
+    {:package, [:t], [:package, :t]},
+    {:pathname, [:t], [:pathname, :t]},
+    {:logical_pathname, [:pathname], [:logical_pathname, :pathname, :t]},
+    {:random_state, [:t], [:random_state, :t]},
+    {:readtable, [:t], [:readtable, :t]},
+    {:stream, [:t], [:stream, :t]},
+    {:broadcast_stream, [:stream], [:broadcast_stream, :stream, :t]},
+    {:concatenated_stream, [:stream], [:concatenated_stream, :stream, :t]},
+    {:echo_stream, [:stream], [:echo_stream, :stream, :t]},
+    {:file_stream, [:stream], [:file_stream, :stream, :t]},
+    {:string_stream, [:stream], [:string_stream, :stream, :t]},
+    {:synonym_stream, [:stream], [:synonym_stream, :stream, :t]},
+    {:two_way_stream, [:stream], [:two_way_stream, :stream, :t]},
+    {:class, [:standard_object], [:class, :standard_object, :t]},
+    {:built_in_class, [:class], [:built_in_class, :class, :standard_object, :t]},
+    {:standard_class, [:class], [:standard_class, :class, :standard_object, :t]},
+    {:generic_function, [:function], [:generic_function, :function, :t]},
+    {:standard_generic_function, [:generic_function],
+     [:standard_generic_function, :generic_function, :function, :t]},
+    {:standard_method, [:method], [:standard_method, :method, :t]},
+    {:method, [:standard_object], [:method, :standard_object, :t]}
   ]
 
   def init_built_in_classes do
@@ -1029,6 +1051,64 @@ defmodule ExLisp.CLOS do
 
   def class_of({:instance, _class_name, _tid} = instance), do: instance_class(instance)
   def class_of({:struct, struct_name, _tid}), do: struct_name
+  def class_of(%ExLisp.Character{}), do: :character
+  def class_of(%ExLisp.Package{}), do: :package
+  def class_of(%ExLisp.Pathname{}), do: :pathname
+
+  def class_of(%ExLisp.Stream{type: type}) do
+    case type do
+      :broadcast -> :broadcast_stream
+      :concatenated -> :concatenated_stream
+      :echo -> :echo_stream
+      :file -> :file_stream
+      type when type in [:string_input, :string_output] -> :string_stream
+      :synonym -> :synonym_stream
+      :two_way -> :two_way_stream
+      _ -> :stream
+    end
+  end
+
+  def class_of(%ExLisp.Closure{name: name}) do
+    if generic_function_p(name) == :t, do: :standard_generic_function, else: :function
+  end
+
+  def class_of(%{generic: generic, qualifier: _qualifier, specializers: _specializers}),
+    do: if(find_generic(generic), do: :standard_method, else: :t)
+
+  def class_of(%{name: name, cpl: _cpl}) do
+    if name in [
+         :t,
+         :standard_object,
+         :structure_object,
+         :number,
+         :integer,
+         :fixnum,
+         :bignum,
+         :float,
+         :ratio,
+         :symbol,
+         :keyword,
+         :string,
+         :character,
+         :list,
+         :cons,
+         :null,
+         :hash_table,
+         :function,
+         :bit_vector,
+         :vector,
+         :array,
+         :sequence,
+         :package,
+         :pathname,
+         :random_state,
+         :readtable,
+         :stream
+       ],
+       do: :built_in_class,
+       else: :standard_class
+  end
+
   def class_of(val) when is_integer(val), do: :integer
   def class_of(val) when is_float(val), do: :float
   def class_of(%ExLisp.Ratio{}), do: :ratio
@@ -1037,12 +1117,18 @@ defmodule ExLisp.CLOS do
   def class_of(val) when is_atom(val) do
     cond do
       val in [nil, nil, []] -> :null
+      BuiltinFunction.builtin?(val) or ExLisp.Env.has_fun?(val) -> :function
       ExLisp.Env.keyword?(val) -> :keyword
       true -> :symbol
     end
   end
 
   def class_of(val) when is_list(val), do: :cons
+  def class_of({:array, _, _}), do: :array
+  def class_of({:bit_vector, _}), do: :bit_vector
+  def class_of({:hash_table, _, _}), do: :hash_table
+  def class_of({:random_state, _}), do: :random_state
+  def class_of({:readtable, _}), do: :readtable
   def class_of(val) when is_map(val), do: :hash_table
   def class_of(val) when is_function(val), do: :function
   def class_of(_), do: :t
@@ -1189,6 +1275,20 @@ defmodule ExLisp.CLOS do
             "No applicable method for #{inspect(gen_name)} with arguments #{inspect(args)}"
     end
 
+    if method_combination_type(generic_function_method_combination(gen_name)) == :list do
+      selected =
+            case Enum.filter(applicable, &(&1.qualifier == :list)) do
+              [] -> Enum.filter(applicable, &(&1.qualifier == :primary))
+              methods -> methods
+            end
+
+      Enum.map(selected, &invoke_method(&1, args, []))
+    else
+      apply_standard_method_combination(gen_name, applicable, args)
+    end
+  end
+
+  defp apply_standard_method_combination(gen_name, applicable, args) do
     # Group sorted applicable methods by qualifier
     around_methods = Enum.filter(applicable, &(&1.qualifier == :around))
     before_methods = Enum.filter(applicable, &(&1.qualifier == :before))
@@ -1619,7 +1719,25 @@ defmodule ExLisp.CLOS do
   defp normalize_name({:keyword, _pos, val}), do: normalize_name(val)
   defp normalize_name({:atom, _pos, val}), do: normalize_name(val)
 
-  defp normalize_name(name), do: ExLisp.Symbol.normalize_name(name)
+  defp normalize_name(name) do
+    normalized = ExLisp.Symbol.normalize_name(name)
+
+    case Atom.to_string(normalized) |> String.split(".", parts: 2) do
+      [package, local] ->
+        package = String.upcase(package) |> String.replace("_", "-")
+
+        case ExLisp.Package.find_symbol(String.upcase(local) |> String.replace("_", "-"), package) do
+          [:_values_, [resolved | _]] when not is_nil(resolved) ->
+            ExLisp.Symbol.normalize_name(ExLisp.Builtins.symbol_name(resolved))
+
+          _ ->
+            normalized
+        end
+
+      _ ->
+        normalized
+    end
+  end
 
   defp normalize_slot_name({:id, _pos, parts}) when is_list(parts) do
     Enum.join(parts, ".") |> normalize_slot_name()

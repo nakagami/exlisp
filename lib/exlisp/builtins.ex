@@ -1831,6 +1831,7 @@ defmodule ExLisp.Builtins do
   def eq({:__keyword__, x}, {:__keyword__, y}), do: eq(x, y)
   def eq({:__keyword__, x}, y), do: eq(x, y)
   def eq(x, {:__keyword__, y}), do: eq(x, y)
+  def eq(x, y) when is_binary(x) and is_binary(y), do: :erts_debug.same(x, y) |> lisp_bool()
   def eq(%ExLisp.Package{id: xid, name: x}, %ExLisp.Package{id: yid, name: y}),
     do: ((xid != nil and xid == yid) or x == y) |> lisp_bool()
   def eq(x, y) when is_atom(x) and is_atom(y), do: (x === y) |> lisp_bool()
@@ -1838,6 +1839,7 @@ defmodule ExLisp.Builtins do
   def eqt(x, y), do: eq(x, y)
 
   def eql(x, y) when x in [nil, [], nil] and y in [nil, [], nil], do: :t
+  def eql(x, y) when is_binary(x) and is_binary(y), do: :erts_debug.same(x, y) |> lisp_bool()
   def eql(%ExLisp.Package{id: xid, name: x}, %ExLisp.Package{id: yid, name: y}),
     do: ((xid != nil and xid == yid) or x == y) |> lisp_bool()
   def eql(x, y) when is_atom(x) and is_atom(y), do: (x === y) |> lisp_bool()
@@ -2229,6 +2231,9 @@ defmodule ExLisp.Builtins do
         |> String.downcase()
         |> String.replace("-", "_")
         |> String.to_atom()
+
+      is_map(spec) and is_atom(spec[:name]) ->
+        normalize_type_spec(spec.name)
 
       true ->
         spec
@@ -3917,6 +3922,7 @@ defmodule ExLisp.Builtins do
       c -> char_code(c)
     end)
     |> List.to_string()
+    |> :binary.copy()
   end
 
   def coerce_list_to_type(list, type_spec) do
@@ -4020,6 +4026,8 @@ defmodule ExLisp.Builtins do
               c -> char_code(c)
             end)
             |> List.to_string()
+            |> :binary.copy()
+            |> :binary.copy()
 
           is_bit_vector_type?(norm) ->
             make_array([Kernel.length(list), :initial_contents, list, :element_type, :bit])
@@ -7960,7 +7968,7 @@ defmodule ExLisp.Builtins do
             object
 
           is_atom(object) ->
-            str = Atom.to_string(object)
+            str = symbol_name(object)
 
             if Kernel.byte_size(str) == 1,
               do: ExLisp.Character.new(:binary.first(str)),
@@ -7986,11 +7994,14 @@ defmodule ExLisp.Builtins do
       # Coerce to complex
       norm in [:complex] or (is_list(norm) and hd(norm) == :complex) ->
         cond do
-          is_number(object) ->
-            {:complex, object, 0}
+          is_float(object) ->
+            {:complex, object, 0.0}
+
+          is_integer(object) ->
+            object
 
           match?(%ExLisp.Ratio{}, object) ->
-            {:complex, object, 0}
+            object
 
           match?({:complex, _, _}, object) ->
             object
@@ -8006,16 +8017,16 @@ defmodule ExLisp.Builtins do
             object
 
           is_atom(object) ->
-            fun = ExLisp.Env.get_fun(object)
+            symbol_function(object)
 
-            if fun != nil do
-              fun
-            else
-              raise ArgumentError, "Undefined function: #{inspect(object)}"
+          is_list(object) ->
+            case hd(object) |> to_string() |> String.split(".") |> List.last() do
+              operator when operator in ["lambda", "_cl_lambda_"] ->
+                ExLisp.Evaluator.eval(ExLisp.Macro.lisp_data_to_ast(object), %{})
+
+              _ ->
+                raise ArgumentError, "Cannot coerce #{inspect(object)} to function"
             end
-
-          is_list(object) and hd(object) in [:lambda, :_cl_lambda_] ->
-            LispBeam.evaluate_ast({:list, 1, [{:id, 1, ["function"]}, object]})
 
           true ->
             raise ArgumentError, "Cannot coerce #{inspect(object)} to function"
@@ -8395,12 +8406,21 @@ defmodule ExLisp.Builtins do
 
   def slot_exists_p(instance, slot_name), do: ExLisp.CLOS.slot_exists_p(instance, slot_name)
 
-  def class_of(obj), do: ExLisp.CLOS.class_of(obj)
+  def class_of(obj) do
+    case ExLisp.CLOS.class_of(obj) do
+      class_name when is_atom(class_name) or is_binary(class_name) ->
+        ExLisp.CLOS.find_class(class_name) || class_name
+
+      other ->
+        other
+    end
+  end
 
   def find_class(name), do: ExLisp.CLOS.find_class(name)
   def find_class(name, errorp), do: ExLisp.CLOS.find_class(name, errorp)
 
   def class_name(class_or_name), do: ExLisp.CLOS.class_name(class_or_name)
+  def class_precedence_list(class_or_name), do: ExLisp.CLOS.class_precedence_list(class_or_name)
 
   def subclassp(sub, super), do: ExLisp.CLOS.subclassp(sub, super)
 
