@@ -707,7 +707,13 @@ defmodule ExLisp.LispParser do
   end
 
   defp normalize_escaped_case(str, transform) do
-    normalize_escaped_chunks(String.to_charlist(str), [], [], transform)
+    normalized = normalize_escaped_chunks(String.to_charlist(str), [], [], transform)
+
+    if String.contains?(str, <<@escaped_marker::utf8>>) do
+      "|#{normalized}|"
+    else
+      normalized
+    end
   end
 
   defp normalize_escaped_chunks([], current, output, transform) do

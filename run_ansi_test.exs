@@ -242,6 +242,37 @@ suites = [
   {"SVREF", "arrays/svref.lsp"},
   {"UPGRADED-ARRAY-ELEMENT-TYPE", "arrays/upgraded-array-element-type.lsp"},
   {"VECTOR", "arrays/vector.lsp"},
+  {"DEFPACKAGE", "packages/defpackage.lsp"},
+  {"DELETE-PACKAGE", "packages/delete-package.lsp"},
+  {"DO-ALL-SYMBOLS", "packages/do-all-symbols.lsp"},
+  {"DO-EXTERNAL-SYMBOLS", "packages/do-external-symbols.lsp"},
+  {"DO-SYMBOLS", "packages/do-symbols.lsp"},
+  {"EXPORT", "packages/export.lsp"},
+  {"FIND-ALL-SYMBOLS", "packages/find-all-symbols.lsp"},
+  {"FIND-PACKAGE", "packages/find-package.lsp"},
+  {"FIND-SYMBOL", "packages/find-symbol.lsp"},
+  {"IMPORT", "packages/import.lsp"},
+  {"IN-PACKAGE", "packages/in-package.lsp"},
+  {"INTERN", "packages/intern.lsp"},
+  {"KEYWORD", "packages/keyword.lsp"},
+  {"LIST-ALL-PACKAGES", "packages/list-all-packages.lsp"},
+  {"MAKE-PACKAGE", "packages/make-package.lsp"},
+  {"PACKAGE-ERROR", "packages/package-error.lsp"},
+  {"PACKAGE-ERROR-PACKAGE", "packages/package-error-package.lsp"},
+  {"PACKAGE-NAME", "packages/package-name.lsp"},
+  {"PACKAGE-NICKNAMES", "packages/package-nicknames.lsp"},
+  {"PACKAGEP", "packages/packagep.lsp"},
+  {"PACKAGE-SHADOWING-SYMBOLS", "packages/package-shadowing-symbols.lsp"},
+  {"PACKAGE-USED-BY-LIST", "packages/package-used-by-list.lsp"},
+  {"PACKAGE-USE-LIST", "packages/package-use-list.lsp"},
+  {"RENAME-PACKAGE", "packages/rename-package.lsp"},
+  {"SHADOWING-IMPORT", "packages/shadowing-import.lsp"},
+  {"SHADOW", "packages/shadow.lsp"},
+  {"UNEXPORT", "packages/unexport.lsp"},
+  {"UNINTERN", "packages/unintern.lsp"},
+  {"UNUSE-PACKAGE", "packages/unuse-package.lsp"},
+  {"USE-PACKAGE", "packages/use-package.lsp"},
+  {"WITH-PACKAGE-ITERATOR", "packages/with-package-iterator.lsp"},
   {"COPY-READTABLE", "reader/copy-readtable.lsp"},
   {"DISPATCH-MACRO-CHARACTERS", "reader/dispatch-macro-characters.lsp"},
   {"GET-MACRO-CHARACTER", "reader/get-macro-character.lsp"},
@@ -425,6 +456,8 @@ aux_files = [
   Path.join(ansi_test_dir, "auxiliary/search-aux.lsp"),
   Path.join(ansi_test_dir, "auxiliary/sort-aux.lsp"),
   Path.join(ansi_test_dir, "auxiliary/subseq-aux.lsp"),
+  Path.join(ansi_test_dir, "auxiliary/package-aux.lsp"),
+  Path.join(ansi_test_dir, "auxiliary/packages00-aux.lsp"),
   Path.join(ansi_test_dir, "auxiliary/numbers-aux.lsp"),
   Path.join(ansi_test_dir, "auxiliary/times-aux.lsp"),
   Path.join(ansi_test_dir, "auxiliary/gcd-aux.lsp"),
@@ -442,6 +475,7 @@ aux_files = [
 ]
 
 ExLisp.load_file(Path.expand("examples/ansi_test_harness.lisp", __DIR__))
+ExLisp.eval("(in-package \"CL-TEST\")")
 
 Enum.each(aux_files, fn f ->
   if File.exists?(f) do
@@ -451,6 +485,42 @@ Enum.each(aux_files, fn f ->
       _ -> :ok
     end
   end
+end)
+
+ExLisp.Env.put_fun(:safely_delete_package, fn package ->
+  if found = ExLisp.Package.find_package(package) do
+    Enum.each(found.used_by_list, fn using_name ->
+      ExLisp.Package.unuse_package(found, using_name)
+    end)
+
+    ExLisp.Package.delete_package(package)
+  end
+end)
+ExLisp.Env.put_fun(:delete_package, &ExLisp.Package.delete_package/1)
+ExLisp.Env.put_fun(:package_name, &ExLisp.Package.package_name/1)
+ExLisp.Env.put_fun(:unexport, fn symbols, package ->
+  ExLisp.Package.unexport(symbols, package)
+end)
+ExLisp.Env.put_fun(
+  :unintern,
+  ExLisp.Closure.new(fn
+    [symbol] -> ExLisp.Package.unintern(symbol)
+    [symbol, package] -> ExLisp.Package.unintern(symbol, package)
+  end, :unintern)
+)
+ExLisp.Env.put_var(:"regression-test.*compile-tests*", nil)
+ExLisp.Env.put_var(:"regression-test.*compile_tests*", nil)
+ExLisp.Env.put_fun(:has_non_abort_restart, fn condition ->
+  result =
+    if Enum.any?(ExLisp.Condition.compute_restarts(condition), fn restart ->
+         ExLisp.Builtins.restart_name(restart) != :abort
+       end) do
+      :success
+    else
+      :fail
+    end
+
+  throw({:lisp_throw, :handled, result})
 end)
 
 functions_to_compile = [

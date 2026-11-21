@@ -6992,11 +6992,7 @@ defmodule LispBeam do
   def extract_symbol_name(nil), do: nil
 
   def extract_symbol_name({:id, _pos, [name]}) when is_binary(name) do
-    if String.starts_with?(name, "|") or String.starts_with?(name, ":|") do
-      String.to_atom(name)
-    else
-      String.downcase(name) |> String.to_atom()
-    end
+    extract_symbol_name(String.to_atom(name))
   end
 
   def extract_symbol_name({:id, _pos, parts}) when is_list(parts) do
@@ -7007,7 +7003,8 @@ defmodule LispBeam do
       [sym] when is_atom(sym) ->
         str = Atom.to_string(sym)
 
-        if String.starts_with?(str, "|") or String.starts_with?(str, ":|") do
+        if String.starts_with?(str, "|") or String.starts_with?(str, ":|") or
+             String.starts_with?(str, "#:") do
           sym
         else
           str |> String.downcase() |> String.to_atom()
@@ -7021,7 +7018,8 @@ defmodule LispBeam do
   def extract_symbol_name({:lit, atom}) when is_atom(atom) do
     str = Atom.to_string(atom)
 
-    if String.starts_with?(str, "|") or String.starts_with?(str, ":|") do
+    if String.starts_with?(str, "|") or String.starts_with?(str, ":|") or
+         String.starts_with?(str, "#:") do
       atom
     else
       str |> String.downcase() |> String.to_atom()
@@ -7035,18 +7033,30 @@ defmodule LispBeam do
   def extract_symbol_name(atom) when is_atom(atom) do
     str = Atom.to_string(atom)
 
-    if String.starts_with?(str, "|") or String.starts_with?(str, ":|") do
-      atom
+    if String.contains?(str, ".") and current_package_qualified?(str) do
+      [_package, name] = String.split(str, ".", parts: 2)
+      extract_symbol_name(name)
     else
-      str |> String.downcase() |> String.to_atom()
+      if String.starts_with?(str, "|") or String.starts_with?(str, ":|") or
+           String.starts_with?(str, "#:") do
+        atom
+      else
+        str |> String.downcase() |> String.to_atom()
+      end
     end
   end
 
   def extract_symbol_name(name) when is_binary(name) do
-    if String.starts_with?(name, "|") or String.starts_with?(name, ":|") do
-      String.to_atom(name)
+    if String.contains?(name, ".") and current_package_qualified?(name) do
+      [_package, symbol] = String.split(name, ".", parts: 2)
+      extract_symbol_name(symbol)
     else
-      String.downcase(name) |> String.to_atom()
+      if String.starts_with?(name, "|") or String.starts_with?(name, ":|") or
+           String.starts_with?(name, "#:") do
+        String.to_atom(name)
+      else
+        String.downcase(name) |> String.to_atom()
+      end
     end
   end
 
@@ -7061,6 +7071,22 @@ defmodule LispBeam do
   end
 
   def extract_symbol_name(other), do: other
+
+  defp current_package_qualified?(qualified) do
+    case String.split(qualified, ".", parts: 2) do
+      [package, _name] ->
+        case ExLisp.Package.find_package(String.upcase(package) |> String.replace("_", "-")) do
+          %ExLisp.Package{name: name} ->
+            name == ExLisp.Package.current_package()
+
+          nil ->
+            false
+        end
+
+      _ ->
+        false
+    end
+  end
 
   defp eval_when_executes?({:list, _pos, situations}) do
     Enum.any?(situations, &(extract_symbol_name(&1) == :execute))

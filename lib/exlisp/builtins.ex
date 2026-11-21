@@ -1831,11 +1831,15 @@ defmodule ExLisp.Builtins do
   def eq({:__keyword__, x}, {:__keyword__, y}), do: eq(x, y)
   def eq({:__keyword__, x}, y), do: eq(x, y)
   def eq(x, {:__keyword__, y}), do: eq(x, y)
+  def eq(%ExLisp.Package{id: xid, name: x}, %ExLisp.Package{id: yid, name: y}),
+    do: ((xid != nil and xid == yid) or x == y) |> lisp_bool()
   def eq(x, y) when is_atom(x) and is_atom(y), do: (x === y) |> lisp_bool()
   def eq(x, y), do: (x === y) |> lisp_bool()
   def eqt(x, y), do: eq(x, y)
 
   def eql(x, y) when x in [nil, [], nil] and y in [nil, [], nil], do: :t
+  def eql(%ExLisp.Package{id: xid, name: x}, %ExLisp.Package{id: yid, name: y}),
+    do: ((xid != nil and xid == yid) or x == y) |> lisp_bool()
   def eql(x, y) when is_atom(x) and is_atom(y), do: (x === y) |> lisp_bool()
 
   def eql(x, y) when is_number(x) and is_number(y) do
@@ -1852,6 +1856,8 @@ defmodule ExLisp.Builtins do
   def eqlt(x, y), do: eql(x, y)
 
   def equal([:vector | elems1], [:vector | elems2]), do: equal(elems1, elems2)
+  def equal(%ExLisp.Package{id: xid, name: x}, %ExLisp.Package{id: yid, name: y}),
+    do: ((xid != nil and xid == yid) or x == y) |> lisp_bool()
 
   def equal([:vector | elems], {:array, [_], _} = y) do
     equal(elems, seq_to_list(y))
@@ -1870,6 +1876,17 @@ defmodule ExLisp.Builtins do
   end
 
   def equal(x, y) when x in [nil, [], nil] and y in [nil, [], nil], do: :t
+  def equal(x, y) when is_atom(x) and is_atom(y) do
+    x_str = Atom.to_string(x)
+    y_str = Atom.to_string(y)
+
+    if String.contains?(x_str, ".") != String.contains?(y_str, ".") and
+         symbol_name(x) == symbol_name(y) do
+      :t
+    else
+      (x == y) |> lisp_bool()
+    end
+  end
 
   def equal(x, {:array, [_], _} = y) when is_binary(x) do
     (x == to_string_val(y)) |> lisp_bool()
@@ -1905,6 +1922,9 @@ defmodule ExLisp.Builtins do
   def equalp(%ExLisp.Character{code: c1}, %ExLisp.Character{code: c2}) do
     char_equal(c1, c2)
   end
+
+  def equalp(%ExLisp.Package{id: xid, name: x}, %ExLisp.Package{id: yid, name: y}),
+    do: ((xid != nil and xid == yid) or x == y) |> lisp_bool()
 
   def equalp(x, y) when x in [nil, [], nil] and y in [nil, [], nil], do: :t
 
@@ -9258,6 +9278,20 @@ defmodule ExLisp.Builtins do
 
     str = String.trim_leading(str, ":")
 
+    str =
+      case String.split(str, ".", parts: 2) do
+        [package, name] ->
+          package = package |> String.upcase() |> String.replace("_", "-")
+
+          if ExLisp.Package.find_package(package) do
+            name
+          else
+            str
+          end
+
+        [name] -> name
+      end
+
     cleaned =
       case str do
         "#:UNINTERNED_" <> rest ->
@@ -9293,7 +9327,7 @@ defmodule ExLisp.Builtins do
           if String.length(rest) > 0, do: String.trim_trailing(rest, "|"), else: "|"
 
         other ->
-          String.upcase(other)
+          other |> String.upcase() |> String.replace("_", "-")
       end
 
     cleaned
@@ -10732,6 +10766,8 @@ defmodule ExLisp.Builtins do
       _ -> nil
     end
   end
+
+  def documentation(%ExLisp.Package{}, _doc_type), do: nil
 
   def documentation(x, doc_type) do
     key = ExLisp.Env.normalize_name(x)

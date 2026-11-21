@@ -32,7 +32,8 @@ defmodule ExLisp.Evaluator do
   def eval(%ExLisp.Ratio{} = val, _env), do: val
   def eval(%ExLisp.Character{} = val, _env), do: val
   def eval({:reader_macro, _pos, inner}, env), do: eval(inner, env)
-  def eval({:keyword, _pos, kw}, _env), do: kw
+  def eval({:keyword, _pos, kw}, _env),
+    do: ExLisp.Package.remember_symbol_package(kw, "KEYWORD")
   def eval(nil, _env), do: nil
   def eval(:t, _env), do: :t
   def eval(:T, _env), do: :t
@@ -160,7 +161,7 @@ defmodule ExLisp.Evaluator do
   # --- Compound form evaluation ---
 
   defp eval_compound(op_node, args, full_form, env) do
-    op = LispBeam.extract_op_name(op_node)
+    op = normalize_qualified_op(LispBeam.extract_op_name(op_node))
 
     case op do
       # Direct fast paths for builtins (when not shadowed by flet/labels)
@@ -1256,7 +1257,7 @@ defmodule ExLisp.Evaluator do
       op when op in [:in_package, :_cl_in_package_] ->
         case args do
           [pkg_node | _] ->
-            pkg_name = LispBeam.extract_symbol_name(pkg_node)
+            pkg_name = defpackage_designator(pkg_node)
             ExLisp.Package.set_current_package(pkg_name)
 
           _ ->
@@ -1300,72 +1301,20 @@ defmodule ExLisp.Evaluator do
       op when op in [:defpackage, :_cl_defpackage_] ->
         case args do
           [pkg_node | opt_nodes] ->
-            pkg_name =
-              case LispBeam.extract_symbol_name(pkg_node) do
-                a when is_atom(a) -> Atom.to_string(a)
-                s when is_binary(s) -> s
-                _ -> ""
-              end
-              |> ExLisp.Package.clean_uninterned()
-              |> String.trim_leading(":")
+            pkg_name = defpackage_designator(pkg_node)
 
             opts_ast =
               Enum.map(opt_nodes, fn
                 {:list, _, opt_elems} ->
-                  Enum.map(opt_elems, fn
-                    {:keyword, _, kw} ->
-                      kw
-
-                    node ->
-                      case LispBeam.extract_symbol_name(node) do
-                        a when is_atom(a) ->
-                          Atom.to_string(a) |> ExLisp.Package.clean_uninterned()
-
-                        s when is_binary(s) ->
-                          s |> ExLisp.Package.clean_uninterned()
-
-                        _ ->
-                          ""
-                      end
-                  end)
+                  Enum.map(opt_elems, &defpackage_designator/1)
                   |> Enum.reject(&(&1 == ""))
 
                 {:quoted, _, opt_elems} ->
-                  Enum.map(opt_elems, fn
-                    {:keyword, _, kw} ->
-                      kw
-
-                    node ->
-                      case LispBeam.extract_symbol_name(node) do
-                        a when is_atom(a) ->
-                          Atom.to_string(a) |> ExLisp.Package.clean_uninterned()
-
-                        s when is_binary(s) ->
-                          s |> ExLisp.Package.clean_uninterned()
-
-                        _ ->
-                          ""
-                      end
-                  end)
+                  Enum.map(opt_elems, &defpackage_designator/1)
                   |> Enum.reject(&(&1 == ""))
 
                 {:dotted_list, _, opt_elems, _tail} ->
-                  Enum.map(opt_elems, fn
-                    {:keyword, _, kw} ->
-                      kw
-
-                    node ->
-                      case LispBeam.extract_symbol_name(node) do
-                        a when is_atom(a) ->
-                          Atom.to_string(a) |> ExLisp.Package.clean_uninterned()
-
-                        s when is_binary(s) ->
-                          s |> ExLisp.Package.clean_uninterned()
-
-                        _ ->
-                          ""
-                      end
-                  end)
+                  Enum.map(opt_elems, &defpackage_designator/1)
                   |> Enum.reject(&(&1 == ""))
 
                 other ->
@@ -1432,6 +1381,23 @@ defmodule ExLisp.Evaluator do
         end
     end
   end
+
+  defp normalize_qualified_op(op) when is_atom(op) do
+    case String.split(Atom.to_string(op), ".", parts: 2) do
+      [package, name] ->
+        if ExLisp.Package.find_package(String.upcase(package) |> String.replace("_", "-")) &&
+             :persistent_term.get({:exlisp_fun, op}, :__not_found__) == :__not_found__ do
+          String.to_atom(name)
+        else
+          op
+        end
+
+      _ ->
+        op
+    end
+  end
+
+  defp normalize_qualified_op(op), do: op
 
   # --- Macro expansion helper ---
 
@@ -1513,15 +1479,21 @@ defmodule ExLisp.Evaluator do
                 Builtins.dispatch_builtin(canonical, args)
 
               :error ->
-                if Env.has_fun?(op) do
-                  fun_val = Env.get_fun(op)
-                  Builtins.invoke_fn(fun_val, args)
-                else
-                  if op == nil do
-                    raise RuntimeError, "Invalid function: nil"
-                  else
-                    Builtins.invoke_fn(op, args)
-                  end
+                case inherited_builtin_name(op) do
+                  {:ok, inherited} ->
+                    Builtins.dispatch_builtin(inherited, args)
+
+                  :error ->
+                    if Env.has_fun?(op) do
+                      fun_val = Env.get_fun(op)
+                      Builtins.invoke_fn(fun_val, args)
+                    else
+                      if op == nil do
+                        raise RuntimeError, "Invalid function: nil"
+                      else
+                        Builtins.invoke_fn(op, args)
+                      end
+                    end
                 end
             end
 
@@ -1530,6 +1502,22 @@ defmodule ExLisp.Evaluator do
         end
     end
   end
+
+  defp inherited_builtin_name(op) when is_atom(op) do
+    case String.split(Atom.to_string(op), ".", parts: 2) do
+      [package, name] ->
+        if ExLisp.Package.find_package(String.upcase(package) |> String.replace("_", "-")) do
+          BuiltinFunction.canonical_name(name)
+        else
+          :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp inherited_builtin_name(_), do: :error
 
   # --- Progn / Sequence evaluation ---
 
@@ -3757,12 +3745,23 @@ defmodule ExLisp.Evaluator do
 
   defp eval_with_hash_table_iterator(_, _env), do: nil
 
+  defp defpackage_designator({:lit, value}), do: value
+  defp defpackage_designator({:lit, _pos, value}), do: value
+  defp defpackage_designator({:atom, _pos, value}), do: value
+  defp defpackage_designator({:keyword, _pos, value}), do: value
+  defp defpackage_designator(node), do: LispBeam.extract_symbol_name(node)
+
   defp eval_with_package_iterator([binding_node | body], env) do
     case binding_node do
       {:list, _, [name_node, packages_node | type_nodes]} ->
         name = LispBeam.extract_symbol_name(name_node)
         packages = eval(packages_node, env) |> Builtins.unwrap_mv_primary()
-        types = if type_nodes == [], do: [:internal, :external, :inherited], else: Enum.map(type_nodes, &eval(&1, env))
+
+        if type_nodes == [] do
+          ExLisp.Condition.error(:program_error, "WITH-PACKAGE-ITERATOR requires symbol types")
+        end
+
+        types = Enum.map(type_nodes, &eval(&1, env))
         iterator = ExLisp.Package.package_iterator(packages, types)
         eval_progn(body, Map.put(env, {:fun, name}, iterator))
 
@@ -3777,15 +3776,20 @@ defmodule ExLisp.Evaluator do
     case symbol_iteration_bindings(binding_node) do
       {var, package_node, result_node} ->
         package = eval(package_node, env) |> Builtins.unwrap_mv_primary()
+        {declarations, actual_body} = LispBeam.split_declarations(body)
+        special_vars = declared_special_vars(declarations)
+        iteration_env = Map.drop(env, special_vars)
 
         entries =
           ExLisp.Package.package_iterator(
             package,
-            if(type == :present, do: [:internal, :external], else: [:external])
+            if(type == :present,
+              do: [:internal, :external, :inherited],
+              else: [:external]
+            )
           )
 
-        iterate_symbols(entries, var, body, env)
-        eval(result_node, env)
+        evaluate_symbol_iteration(entries, var, actual_body, result_node, iteration_env)
 
       :error ->
         nil
@@ -3795,11 +3799,13 @@ defmodule ExLisp.Evaluator do
   defp eval_do_symbols(_, _, _), do: nil
 
   defp eval_do_all_symbols([binding_node | body], env) do
-    case symbol_iteration_bindings(binding_node) do
-      {var, nil, result_node} ->
+    case all_symbol_iteration_bindings(binding_node) do
+      {var, result_node} ->
+        {declarations, actual_body} = LispBeam.split_declarations(body)
+        special_vars = declared_special_vars(declarations)
+        iteration_env = Map.drop(env, special_vars)
         iterator = ExLisp.Package.package_iterator(ExLisp.Package.list_all_packages(), [:internal, :external])
-        iterate_symbols(iterator, var, body, env)
-        eval(result_node, env)
+        evaluate_symbol_iteration(iterator, var, actual_body, result_node, iteration_env)
 
       _ ->
         nil
@@ -3819,15 +3825,55 @@ defmodule ExLisp.Evaluator do
 
   defp symbol_iteration_bindings(_), do: :error
 
+  defp all_symbol_iteration_bindings({:list, _, [variable]}) do
+    {LispBeam.extract_symbol_name(variable), {:lit, nil}}
+  end
+
+  defp all_symbol_iteration_bindings({:list, _, [variable, result]}) do
+    {LispBeam.extract_symbol_name(variable), result}
+  end
+
+  defp all_symbol_iteration_bindings(_), do: :error
+
   defp iterate_symbols(iterator, variable, body, env) do
     case iterator.() do
       [:_values_, [more, symbol | _]] when more in [:t, true] ->
-        eval_progn(body, bind_lexical(env, variable, symbol))
+        eval_tagbody(body, bind_lexical(env, variable, symbol))
         iterate_symbols(iterator, variable, body, env)
 
       _ ->
         nil
     end
+  end
+
+  defp evaluate_symbol_iteration(iterator, variable, body, result_node, env) do
+    tag = {:block, nil, make_ref()}
+    loop_env = Map.put(env, {:block, nil}, tag)
+
+    try do
+      iterate_symbols(iterator, variable, body, loop_env)
+      eval(result_node, bind_lexical(loop_env, variable, nil))
+    catch
+      {:block_return, ^tag, val} -> val
+    end
+  end
+
+  defp declared_special_vars(declarations) do
+    declarations
+    |> Enum.flat_map(fn
+      {:list, _, [{:id, _, [op]} | declaration_nodes]} when op in ["declare", "DECLARE"] ->
+        declaration_nodes
+
+      _ ->
+        []
+    end)
+    |> Enum.flat_map(fn
+      {:list, _, [{:id, _, [op]} | vars]} when op in ["special", "SPECIAL"] ->
+        Enum.map(vars, &LispBeam.extract_symbol_name/1)
+
+      _ ->
+        []
+    end)
   end
 
   defp slot_bindings({:list, _, elements}), do: Enum.map(elements, &parse_slot_binding/1)
@@ -4298,7 +4344,9 @@ defmodule ExLisp.Evaluator do
   # --- Quote helpers ---
 
   defp eval_quote_node({:id, _pos, parts}) do
-    Enum.join(parts, ".") |> LispBeam.normalize_quote_symbol()
+    Enum.join(parts, ".")
+    |> LispBeam.normalize_quote_symbol()
+    |> ExLisp.Package.register_read_symbol()
   end
 
   defp eval_quote_node({:lit, val}), do: val

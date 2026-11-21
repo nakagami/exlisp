@@ -9,13 +9,16 @@ defmodule ExLisp.Package do
   - package-qualified symbols (pkg:sym, pkg::sym, :keyword)
   """
 
-  defstruct name: "",
+  defstruct id: nil,
+            name: "",
             nicknames: [],
             use_list: [],
             used_by_list: [],
             internal_symbols: MapSet.new(),
             external_symbols: MapSet.new(),
-            shadowing_symbols: MapSet.new()
+            shadowing_symbols: MapSet.new(),
+            symbol_packages: %{},
+            symbol_values: %{}
 
   @table :lisp_packages_table
 
@@ -36,10 +39,13 @@ defmodule ExLisp.Package do
 
   def current_package do
     ensure_tables()
+
     try do
-      case ExLisp.Env.get_var(:"*package*") do
+      package = ExLisp.Env.get_var(:"*package*")
+
+      case find_package(package) do
         %__MODULE__{name: name} -> name
-        package -> package
+        nil -> Process.get(:exlisp_current_package, "COMMON-LISP-USER")
       end
     rescue
       _ -> Process.get(:exlisp_current_package, "COMMON-LISP-USER")
@@ -48,8 +54,24 @@ defmodule ExLisp.Package do
 
   def set_current_package(pkg_designator) do
     ensure_tables()
-    pkg = find_package!(pkg_designator)
-    Process.put(:exlisp_current_package, pkg.name)
+    pkg =
+      case find_package(pkg_designator) do
+        nil ->
+          ExLisp.Condition.error(:package_error, package: pkg_designator)
+          nil
+
+        found ->
+          found
+      end
+    special_key = {:"$special$", ExLisp.Env.normalize_name(:"*package*")}
+
+    if :erlang.get(special_key) != :undefined do
+      :erlang.put(special_key, pkg)
+    else
+      Process.put(:exlisp_current_package, pkg.name)
+      ExLisp.Env.put_var(:"*package*", pkg)
+    end
+
     pkg
   end
 
@@ -1054,38 +1076,31 @@ defmodule ExLisp.Package do
     ensure_tables()
 
     case pkg_designator do
-      %ExLisp.Package{} = p ->
+      %ExLisp.Package{id: id} = p ->
         case :ets.lookup(@table, p.name) do
           [{_key, %ExLisp.Package{} = stored}] -> stored
-          _ -> p
-        end
-
-      name when is_atom(name) or is_binary(name) ->
-        str =
-          name |> to_string() |> clean_uninterned() |> String.trim_leading(":") |> String.upcase()
-
-        str_hyphen = String.replace(str, "_", "-")
-        str_under = String.replace(str, "-", "_")
-
-        case :ets.lookup(@table, str) do
-          [{_key, %ExLisp.Package{} = pkg}] ->
-            pkg
-
           _ ->
-            case :ets.lookup(@table, str_hyphen) do
-              [{_key, %ExLisp.Package{} = pkg}] ->
-                pkg
-
-              _ ->
-                case :ets.lookup(@table, str_under) do
-                  [{_key, %ExLisp.Package{} = pkg}] -> pkg
-                  _ -> nil
-                end
+            if id do
+              :ets.tab2list(@table)
+              |> Enum.map(&elem(&1, 1))
+              |> Enum.uniq_by(& &1.name)
+              |> Enum.find(&(&1.id == id))
+            else
+              nil
             end
         end
 
-      _ ->
-        nil
+      name ->
+        str = package_designator_string(name)
+
+        [str, String.replace(str, "_", "-"), String.replace(str, "-", "_")]
+        |> Enum.uniq()
+        |> Enum.find_value(fn variant ->
+          case :ets.lookup(@table, variant) do
+            [{_key, %ExLisp.Package{} = pkg}] -> pkg
+            _ -> nil
+          end
+        end)
     end
   end
 
@@ -1110,14 +1125,28 @@ defmodule ExLisp.Package do
   def package_name(pkg_designator) do
     case find_package(pkg_designator) do
       %ExLisp.Package{name: n} -> n
-      _ -> nil
+
+      nil when is_struct(pkg_designator, ExLisp.Package) ->
+        nil
+
+      _ ->
+        ExLisp.Condition.error(:package_error, package: pkg_designator)
     end
   end
 
   def package_nicknames(pkg_designator) do
+    if is_number(pkg_designator) and not is_struct(pkg_designator, ExLisp.Character) do
+      ExLisp.Condition.error(:type_error, "")
+    end
+
     case find_package(pkg_designator) do
       %ExLisp.Package{nicknames: n} -> n
-      _ -> []
+
+      nil when is_struct(pkg_designator, ExLisp.Package) ->
+        []
+
+      _ ->
+        ExLisp.Condition.error(:package_error, package: pkg_designator)
     end
   end
 
@@ -1144,9 +1173,7 @@ defmodule ExLisp.Package do
   def package_shadowing_symbols(pkg_designator) do
     case find_package(pkg_designator) do
       %ExLisp.Package{shadowing_symbols: s} ->
-        Enum.map(s, fn name ->
-          String.downcase(name) |> String.replace("-", "_") |> String.to_atom()
-        end)
+        Enum.map(s, &str_to_symbol/1)
 
       _ ->
         []
@@ -1157,14 +1184,14 @@ defmodule ExLisp.Package do
     pkg = find_package!(pkg_desig)
 
     MapSet.union(pkg.internal_symbols, pkg.external_symbols)
-    |> Enum.map(&str_to_symbol/1)
+    |> Enum.map(&symbol_in_package(&1, pkg))
   end
 
   def external_symbols_list(pkg_desig) do
     pkg = find_package!(pkg_desig)
 
     pkg.external_symbols
-    |> Enum.map(&str_to_symbol/1)
+    |> Enum.map(&symbol_in_package(&1, pkg))
   end
 
   def all_symbols_list(pkg_desig) do
@@ -1181,7 +1208,7 @@ defmodule ExLisp.Package do
 
     MapSet.union(pkg.internal_symbols, pkg.external_symbols)
     |> MapSet.union(MapSet.new(used_externals))
-    |> Enum.map(&str_to_symbol/1)
+    |> Enum.map(&symbol_in_package(&1, pkg))
   end
 
   @doc """
@@ -1329,11 +1356,28 @@ defmodule ExLisp.Package do
   end
 
   defp symbols_for_type(package, :internal) do
-    Enum.map(package.internal_symbols, &{str_to_symbol(&1), :internal, package})
+    if package.name == "KEYWORD" do
+      []
+    else
+      package.internal_symbols
+      |> MapSet.difference(package.external_symbols)
+      |> Enum.map(&{symbol_in_package(&1, package), :internal, package})
+    end
   end
 
   defp symbols_for_type(package, :external) do
-    Enum.map(package.external_symbols, &{str_to_symbol(&1), :external, package})
+    symbols =
+      if package.name == "KEYWORD" do
+        MapSet.union(package.external_symbols, package.internal_symbols)
+      else
+        package.external_symbols
+      end
+
+    if package.name == "KEYWORD" do
+      Enum.each(symbols, &ExLisp.Env.register_keyword(str_to_symbol(&1)))
+    end
+
+    Enum.map(symbols, &{symbol_in_package(&1, package), :external, package})
   end
 
   defp symbols_for_type(package, :inherited) do
@@ -1343,13 +1387,18 @@ defmodule ExLisp.Package do
     package.use_list
     |> Enum.flat_map(fn used_name ->
       case find_package(used_name) do
-        nil -> []
-        used -> Enum.map(used.external_symbols, &{&1, :inherited, package})
+        nil ->
+          []
+
+        used ->
+          Enum.map(used.external_symbols, &{&1, used, package})
       end
     end)
-    |> Enum.reject(fn {name, _status, _package} -> MapSet.member?(present, name) end)
+    |> Enum.reject(fn {name, _source, _package} -> MapSet.member?(present, name) end)
     |> Enum.uniq_by(&elem(&1, 0))
-    |> Enum.map(fn {name, status, pkg} -> {str_to_symbol(name), status, pkg} end)
+    |> Enum.map(fn {name, source, pkg} ->
+      {symbol_in_package(name, source), :inherited, pkg}
+    end)
   end
 
   def list_all_packages do
@@ -1365,13 +1414,7 @@ defmodule ExLisp.Package do
   def make_package(name_designator, options \\ []) do
     ensure_tables()
 
-    name =
-      name_designator
-      |> to_string()
-      |> clean_uninterned()
-      |> String.trim_leading(":")
-      |> String.upcase()
-      |> String.replace("_", "-")
+    name = package_designator_string(name_designator)
 
     if find_package(name) do
       raise RuntimeError, "Package #{name} already exists"
@@ -1379,30 +1422,21 @@ defmodule ExLisp.Package do
 
     nicks =
       case Keyword.get(options, :nicknames, []) do
+        nil ->
+          []
+
         list when is_list(list) ->
-          Enum.map(
-            list,
-            &(&1
-              |> to_string()
-              |> clean_uninterned()
-              |> String.trim_leading(":")
-              |> String.upcase()
-              |> String.replace("_", "-"))
-          )
+          Enum.map(list, &package_designator_string/1)
 
         single ->
-          [
-            single
-            |> to_string()
-            |> clean_uninterned()
-            |> String.trim_leading(":")
-            |> String.upcase()
-            |> String.replace("_", "-")
-          ]
+          [package_designator_string(single)]
       end
 
     uses =
       case Keyword.get(options, :use, ["COMMON-LISP"]) do
+        nil ->
+          []
+
         list when is_list(list) ->
           Enum.map(list, fn u ->
             pkg = find_package!(u)
@@ -1415,6 +1449,7 @@ defmodule ExLisp.Package do
       end
 
     pkg = %ExLisp.Package{
+      id: System.unique_integer([:positive, :monotonic]),
       name: name,
       nicknames: nicks,
       use_list: uses,
@@ -1441,11 +1476,31 @@ defmodule ExLisp.Package do
 
     case find_package(pkg_designator) do
       nil ->
-        nil
+        case pkg_designator do
+          %ExLisp.Package{} -> nil
+          _ ->
+            signal_deletable_package_error(pkg_designator)
+            nil
+        end
 
-      %ExLisp.Package{name: name, nicknames: nicks, use_list: uses} ->
+      %ExLisp.Package{
+        name: name,
+        nicknames: nicks,
+        use_list: uses,
+        used_by_list: used_by
+      } ->
+        if used_by != [] do
+          signal_deletable_package_error(find_package(name))
+        end
+
         :ets.delete(@table, name)
         Enum.each(nicks, fn n -> :ets.delete(@table, n) end)
+
+        Enum.each(used_by, fn using_name ->
+          if using_pkg = find_package(using_name) do
+            save_package(%{using_pkg | use_list: List.delete(using_pkg.use_list, name)})
+          end
+        end)
 
         Enum.each(uses, fn u_name ->
           if u_pkg = find_package(u_name) do
@@ -1457,15 +1512,35 @@ defmodule ExLisp.Package do
     end
   end
 
+  defp signal_deletable_package_error(package) do
+    condition = ExLisp.Condition.make_condition(:package_error, package: package)
+
+    restart = %{
+      name: :continue,
+      fun: fn -> nil end,
+      report: fn stream -> IO.write(stream, "Continue deleting the package") end,
+      test: fn _ -> true end
+    }
+
+    ExLisp.Condition.push_restarts([restart], fn ->
+      ExLisp.Condition.signal(condition)
+    end)
+  end
+
   def rename_package(pkg_designator, new_name_desig, new_nicknames_desig \\ []) do
     ensure_tables()
     old_pkg = find_package!(pkg_designator)
 
-    new_name = new_name_desig |> to_string() |> String.trim_leading(":") |> String.upcase()
+    new_name = package_designator_string(new_name_desig)
 
-    new_nicks =
-      if(is_list(new_nicknames_desig), do: new_nicknames_desig, else: [new_nicknames_desig])
-      |> Enum.map(&(&1 |> to_string() |> String.trim_leading(":") |> String.upcase()))
+    new_nicknames =
+      cond do
+        is_nil(new_nicknames_desig) -> []
+        is_list(new_nicknames_desig) -> new_nicknames_desig
+        true -> [new_nicknames_desig]
+      end
+
+    new_nicks = Enum.map(new_nicknames, &package_designator_string/1)
 
     # Remove old entries
     :ets.delete(@table, old_pkg.name)
@@ -1480,13 +1555,18 @@ defmodule ExLisp.Package do
 
   def defpackage(name_desig, options \\ []) do
     ensure_tables()
-    name = symbol_to_str(name_desig)
+    name = package_designator_string(name_desig)
+    validate_defpackage_options!(name, options)
 
     pkg = find_package(name) || make_package(name, use: [])
 
     # Process options
     pkg =
-      Enum.reduce(options, pkg, fn opt, acc_pkg ->
+      options
+      |> Enum.sort_by(fn opt ->
+        if defpackage_option_key(opt) == "USE", do: 0, else: 1
+      end)
+      |> Enum.reduce(pkg, fn opt, acc_pkg ->
         case opt do
           {:list, _, [opt_key | opt_args]} ->
             apply_defpackage_option(acc_pkg, opt_key, opt_args)
@@ -1545,17 +1625,40 @@ defmodule ExLisp.Package do
 
       "EXPORT" ->
         syms = Enum.map(args, &symbol_to_str/1) |> Enum.reject(&(&1 == ""))
-        %{pkg | external_symbols: MapSet.union(pkg.external_symbols, MapSet.new(syms))}
+        %{
+          pkg
+          | external_symbols: MapSet.union(pkg.external_symbols, MapSet.new(syms)),
+            symbol_packages: add_inherited_sources(pkg, syms)
+        }
 
       "INTERN" ->
         syms = Enum.map(args, &symbol_to_str/1) |> Enum.reject(&(&1 == ""))
-        %{pkg | internal_symbols: MapSet.union(pkg.internal_symbols, MapSet.new(syms))}
+        own_syms =
+          Enum.reject(syms, fn name ->
+            case find_symbol_in_pkg(name, pkg) do
+              {:found, _symbol, _status} -> true
+              :not_found -> false
+            end
+          end)
 
-      "IMPORT_FROM" ->
+        %{
+          pkg
+          | internal_symbols: MapSet.union(pkg.internal_symbols, MapSet.new(own_syms)),
+            symbol_packages: Map.drop(pkg.symbol_packages, own_syms)
+        }
+
+      "IMPORT-FROM" ->
         case args do
-          [_from_pkg_desig | sym_names] ->
+          [from_pkg_desig | sym_names] ->
             syms = Enum.map(sym_names, &symbol_to_str/1) |> Enum.reject(&(&1 == ""))
-            %{pkg | internal_symbols: MapSet.union(pkg.internal_symbols, MapSet.new(syms))}
+            source_pkg = find_package!(from_pkg_desig)
+
+            %{
+              pkg
+              | internal_symbols: MapSet.union(pkg.internal_symbols, MapSet.new(syms)),
+                symbol_packages:
+                  Map.merge(pkg.symbol_packages, Map.new(syms, &{&1, source_pkg.name}))
+            }
 
           _ ->
             pkg
@@ -1570,15 +1673,18 @@ defmodule ExLisp.Package do
             internal_symbols: MapSet.union(pkg.internal_symbols, MapSet.new(syms))
         }
 
-      "SHADOWING_IMPORT_FROM" ->
+      "SHADOWING-IMPORT-FROM" ->
         case args do
-          [_from_pkg_desig | sym_names] ->
+          [from_pkg_desig | sym_names] ->
             syms = Enum.map(sym_names, &symbol_to_str/1) |> Enum.reject(&(&1 == ""))
+            source_pkg = find_package!(from_pkg_desig)
 
             %{
               pkg
               | shadowing_symbols: MapSet.union(pkg.shadowing_symbols, MapSet.new(syms)),
-                internal_symbols: MapSet.union(pkg.internal_symbols, MapSet.new(syms))
+                internal_symbols: MapSet.union(pkg.internal_symbols, MapSet.new(syms)),
+                symbol_packages:
+                  Map.merge(pkg.symbol_packages, Map.new(syms, &{&1, source_pkg.name}))
             }
 
           _ ->
@@ -1590,6 +1696,121 @@ defmodule ExLisp.Package do
     end
   end
 
+  defp validate_defpackage_options!(name, options) do
+    option_groups =
+      Enum.reduce(options, %{}, fn option, groups ->
+        key = defpackage_option_key(option)
+        args = defpackage_option_args(option)
+        Map.update(groups, key, [args], &[args | &1])
+      end)
+
+    Enum.each(["SIZE", "DOCUMENTATION"], fn key ->
+      if length(Map.get(option_groups, key, [])) > 1 do
+        ExLisp.Condition.error(:program_error, "DEFPACKAGE option #{key} may occur only once")
+      end
+    end)
+
+    Enum.each(List.flatten(Map.get(option_groups, "NICKNAMES", [])), fn nickname ->
+      nickname = package_designator_string(nickname)
+
+      if nickname != name and find_package(nickname) do
+        ExLisp.Condition.error(:package_error, package: find_package(nickname))
+      end
+    end)
+
+    shadow = defpackage_option_names(option_groups, "SHADOW")
+    shadow_import = defpackage_import_names(option_groups, "SHADOWING-IMPORT-FROM")
+    import_from = defpackage_import_names(option_groups, "IMPORT-FROM")
+    intern = defpackage_option_names(option_groups, "INTERN")
+    all_names = shadow ++ shadow_import ++ import_from ++ intern
+
+    if length(all_names) != length(Enum.uniq(all_names)) do
+      ExLisp.Condition.error(:program_error, "DEFPACKAGE symbol-name options overlap")
+    end
+
+    exported = defpackage_option_names(option_groups, "EXPORT")
+
+    if MapSet.intersection(MapSet.new(exported), MapSet.new(intern)) |> MapSet.size() > 0 do
+      ExLisp.Condition.error(:program_error, "DEFPACKAGE :EXPORT and :INTERN overlap")
+    end
+
+    Enum.each(["SHADOWING-IMPORT-FROM", "IMPORT-FROM"], fn key ->
+      Enum.each(Map.get(option_groups, key, []), fn
+        [source | symbol_designators] ->
+          source_pkg = find_package!(source)
+
+          Enum.each(symbol_designators, fn symbol_designator ->
+            name = symbol_to_str(symbol_designator)
+
+            case find_symbol_in_pkg(name, source_pkg) do
+              :not_found ->
+                signal_missing_import(source_pkg)
+
+              {:found, _symbol, _status} ->
+                :ok
+            end
+          end)
+
+        _ ->
+          :ok
+      end)
+    end)
+  end
+
+  defp signal_missing_import(_package) do
+    condition = ExLisp.Condition.make_condition(:simple_error, format_control: "Missing package symbol")
+
+    restart = %{
+      name: :continue,
+      fun: fn -> nil end,
+      report: fn stream -> IO.write(stream, "Continue defining the package") end,
+      test: fn _ -> true end
+    }
+
+    ExLisp.Condition.push_restarts([restart], fn ->
+      ExLisp.Condition.signal(condition)
+    end)
+  end
+
+  defp defpackage_option_key(option) do
+    case defpackage_option_parts(option) do
+      [key | _] -> symbol_to_str(key)
+      _ -> ""
+    end
+  end
+
+  defp defpackage_option_args(option) do
+    case defpackage_option_parts(option) do
+      [_key | args] -> args
+      _ -> []
+    end
+  end
+
+  defp defpackage_option_parts({:list, _, parts}), do: parts
+  defp defpackage_option_parts({:quoted, _, parts}), do: parts
+  defp defpackage_option_parts({:dotted_list, _, parts, _tail}), do: parts
+  defp defpackage_option_parts({key, args}) when is_list(args), do: [key | args]
+  defp defpackage_option_parts(parts) when is_list(parts), do: parts
+  defp defpackage_option_parts(_), do: []
+
+  defp defpackage_option_names(groups, key) do
+    groups
+    |> Map.get(key, [])
+    |> List.flatten()
+    |> Enum.map(&symbol_to_str/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp defpackage_import_names(groups, key) do
+    groups
+    |> Map.get(key, [])
+    |> Enum.flat_map(fn
+      [_source | names] -> Enum.map(names, &symbol_to_str/1)
+      _ -> []
+    end)
+    |> Enum.reject(&(&1 == ""))
+  end
+
   # --- Export / Import / Shadow / Use ---
 
   def export(symbols, pkg_desig \\ nil) do
@@ -1599,7 +1820,81 @@ defmodule ExLisp.Package do
     sym_list = if is_list(symbols), do: symbols, else: [symbols]
     sym_strs = Enum.map(sym_list, &symbol_to_str/1)
 
-    updated = %{pkg | external_symbols: MapSet.union(pkg.external_symbols, MapSet.new(sym_strs))}
+    missing_binary_names =
+      sym_list
+      |> Enum.zip(sym_strs)
+      |> Enum.filter(fn {symbol, name} ->
+        is_binary(symbol) and find_symbol_in_pkg(name, pkg) == :not_found
+      end)
+
+    if missing_binary_names != [] do
+      missing =
+        Enum.map(missing_binary_names, fn {_symbol, name} -> name end)
+
+      updated_pkg = %{
+          pkg
+          | internal_symbols: MapSet.union(pkg.internal_symbols, MapSet.new(missing))
+        }
+
+      save_package(updated_pkg)
+      export(symbols, updated_pkg)
+    else
+      do_export(sym_list, sym_strs, pkg)
+    end
+  end
+
+  defp do_export(sym_list, sym_strs, pkg) do
+    Enum.zip(sym_strs, sym_list)
+    |> Enum.each(fn {name, symbol} ->
+      case find_symbol_in_pkg(name, pkg) do
+        :not_found ->
+          ExLisp.Condition.error(:package_error, package: pkg)
+
+        {:found, accessible, _status} ->
+          if not is_binary(symbol) and ExLisp.Builtins.eq(accessible, symbol) != :t do
+            ExLisp.Condition.error(:package_error, package: pkg)
+          end
+      end
+
+      Enum.each(pkg.used_by_list, fn using_name ->
+        case find_package(using_name) do
+          nil ->
+            :ok
+
+          using ->
+            case find_symbol_in_pkg(name, using) do
+              {:found, existing, status}
+              when status in [:internal, :external] ->
+                if not MapSet.member?(using.shadowing_symbols, name) and
+                     ExLisp.Builtins.eq(existing, symbol) != :t do
+                  ExLisp.Condition.error(:package_error, package: using)
+                end
+
+              _ ->
+                :ok
+            end
+        end
+      end)
+    end)
+
+    sources =
+      Enum.zip(sym_strs, sym_list)
+      |> Enum.reduce(pkg.symbol_packages, fn {name, symbol}, acc ->
+        case symbol_package(symbol) do
+          %ExLisp.Package{name: source_name} when source_name != pkg.name ->
+            Map.put(acc, name, source_name)
+
+          _ ->
+            acc
+        end
+      end)
+
+    updated = %{
+      pkg
+      | external_symbols: MapSet.union(pkg.external_symbols, MapSet.new(sym_strs)),
+        symbol_packages: sources
+    }
+
     save_package(updated)
     :t
   end
@@ -1610,6 +1905,12 @@ defmodule ExLisp.Package do
 
     sym_list = if is_list(symbols), do: symbols, else: [symbols]
     sym_strs = Enum.map(sym_list, &symbol_to_str/1)
+
+    Enum.each(sym_strs, fn name ->
+      if find_symbol_in_pkg(name, pkg) == :not_found do
+        ExLisp.Condition.error(:package_error, package: pkg)
+      end
+    end)
 
     updated = %{
       pkg
@@ -1627,7 +1928,21 @@ defmodule ExLisp.Package do
     sym_list = if is_list(symbols), do: symbols, else: [symbols]
     sym_strs = Enum.map(sym_list, &symbol_to_str/1)
 
-    updated = %{pkg | internal_symbols: MapSet.union(pkg.internal_symbols, MapSet.new(sym_strs))}
+    sources =
+      Enum.zip(sym_strs, sym_list)
+      |> Map.new(fn {name, symbol} ->
+        source = symbol_package(symbol) || pkg
+        {name, source.name}
+      end)
+
+    values = Enum.zip(sym_strs, sym_list) |> Map.new()
+
+    updated = %{
+      pkg
+      | internal_symbols: MapSet.union(pkg.internal_symbols, MapSet.new(sym_strs)),
+        symbol_packages: Map.merge(pkg.symbol_packages, sources),
+        symbol_values: Map.merge(pkg.symbol_values, values)
+    }
     save_package(updated)
     :t
   end
@@ -1650,7 +1965,30 @@ defmodule ExLisp.Package do
   end
 
   def shadowing_import(symbols, pkg_desig \\ nil) do
-    shadow(symbols, pkg_desig)
+    pkg =
+      if is_nil(pkg_desig), do: find_package!(current_package()), else: find_package!(pkg_desig)
+
+    sym_list = if is_list(symbols), do: symbols, else: [symbols]
+    sym_strs = Enum.map(sym_list, &symbol_to_str/1)
+
+    sources =
+      Enum.zip(sym_strs, sym_list)
+      |> Map.new(fn {name, symbol} ->
+        source = symbol_package(symbol) || pkg
+        {name, source.name}
+      end)
+
+    updated = %{
+      pkg
+      | internal_symbols: MapSet.union(pkg.internal_symbols, MapSet.new(sym_strs)),
+        shadowing_symbols: MapSet.union(pkg.shadowing_symbols, MapSet.new(sym_strs)),
+        symbol_packages: Map.merge(pkg.symbol_packages, sources),
+        symbol_values:
+          Map.merge(pkg.symbol_values, Enum.zip(sym_strs, sym_list) |> Map.new())
+    }
+
+    save_package(updated)
+    :t
   end
 
   def use_package(packages_to_use, pkg_desig \\ nil) do
@@ -1706,11 +2044,24 @@ defmodule ExLisp.Package do
         [:_values_, [sym, status]]
 
       :not_found ->
-        # Add to internal symbols of pkg
-        updated = %{pkg | internal_symbols: MapSet.put(pkg.internal_symbols, name)}
+        updated =
+          if pkg.name == "KEYWORD" do
+            %{pkg | external_symbols: MapSet.put(pkg.external_symbols, name)}
+          else
+            %{pkg | internal_symbols: MapSet.put(pkg.internal_symbols, name)}
+          end
+
         save_package(updated)
-        sym = str_to_symbol(name)
-        [:_values_, [sym, nil]]
+
+        sym =
+          if pkg.name == "KEYWORD" do
+            ExLisp.Env.register_keyword(str_to_symbol(name))
+          else
+            symbol_in_package(name, pkg)
+          end
+
+        status = if pkg.name == "KEYWORD", do: :external, else: nil
+        [:_values_, [sym, status]]
     end
   end
 
@@ -1740,11 +2091,33 @@ defmodule ExLisp.Package do
     name = symbol_to_str(symbol_desig)
 
     if MapSet.member?(pkg.internal_symbols, name) or MapSet.member?(pkg.external_symbols, name) do
+      inherited =
+        Enum.flat_map(pkg.use_list, fn used_name ->
+          case find_package(used_name) do
+            nil ->
+              []
+
+            used ->
+              if MapSet.member?(used.external_symbols, name) do
+                [symbol_in_package(name, used)]
+              else
+                []
+              end
+          end
+        end)
+        |> Enum.uniq()
+
+      if length(inherited) > 1 do
+        ExLisp.Condition.error(:package_error, package: pkg)
+      end
+
       updated = %{
         pkg
         | internal_symbols: MapSet.delete(pkg.internal_symbols, name),
           external_symbols: MapSet.delete(pkg.external_symbols, name),
-          shadowing_symbols: MapSet.delete(pkg.shadowing_symbols, name)
+          shadowing_symbols: MapSet.delete(pkg.shadowing_symbols, name),
+          symbol_packages: Map.delete(pkg.symbol_packages, name),
+          symbol_values: Map.delete(pkg.symbol_values, name)
       }
 
       save_package(updated)
@@ -1764,20 +2137,43 @@ defmodule ExLisp.Package do
       :t ->
         find_package("COMMON-LISP")
 
-      %ExLisp.Symbol{name: _} ->
-        nil
+      %ExLisp.Symbol{id: id, name: name} = symbol ->
+        Enum.find_value(list_all_packages(), fn pkg ->
+          if Enum.any?(pkg.symbol_values, fn {_key, value} ->
+               value == symbol or match?(%ExLisp.Symbol{id: ^id, name: ^name}, value)
+             end) do
+            pkg
+          end
+        end)
 
       sym when is_atom(sym) ->
         str = Atom.to_string(sym)
+        qualified_package = qualified_symbol_package(str)
+        remembered_package = Process.get({:exlisp_symbol_package, sym})
 
         cond do
+          is_binary(remembered_package) ->
+            find_package(remembered_package) ||
+              if(remembered_package == "KEYWORD", do: find_package("KEYWORD"))
+
           ExLisp.Env.keyword?(sym) or String.starts_with?(str, ":") ->
             find_package("KEYWORD")
+
+          qualified_package ->
+            name = symbol_to_str(sym)
+
+            if MapSet.member?(qualified_package.internal_symbols, name) or
+                 MapSet.member?(qualified_package.external_symbols, name) or
+                 Map.has_key?(qualified_package.symbol_values || %{}, name) do
+              qualified_package
+            end
 
           true ->
             # Search packages
             name = symbol_to_str(sym)
-            curr = find_package(current_package())
+            reader_package = Process.get(:exlisp_current_package, "COMMON-LISP-USER")
+
+            curr = find_package(reader_package)
 
             if curr &&
                  (MapSet.member?(curr.internal_symbols, name) or
@@ -1800,6 +2196,52 @@ defmodule ExLisp.Package do
     end
   end
 
+  def register_read_symbol(symbol) when is_atom(symbol) do
+    atom_name = Atom.to_string(symbol)
+
+    cond do
+      symbol in [nil, :t] or String.starts_with?(atom_name, "#:") ->
+        symbol
+
+      qualified_symbol_package(atom_name) ->
+        [package_name, symbol_name] = String.split(atom_name, ".", parts: 2)
+        pkg = find_package!(String.upcase(package_name) |> String.replace("_", "-"))
+
+        case find_symbol_in_pkg(string_symbol_name(symbol_name), pkg) do
+          {:found, resolved, _status} -> resolved
+          :not_found ->
+            name = string_symbol_name(symbol_name)
+            save_package(%{pkg | internal_symbols: MapSet.put(pkg.internal_symbols, name)})
+            symbol_in_package(name, pkg)
+        end
+
+      true ->
+        pkg =
+          find_package(Process.get(:exlisp_current_package, "COMMON-LISP-USER")) ||
+            find_package!("COMMON-LISP-USER")
+        name = symbol_to_str(symbol)
+
+        {resolved, own_symbol?} =
+          case find_symbol_in_pkg(name, pkg) do
+            {:found, found_symbol, status} ->
+              {found_symbol, status == :internal}
+
+            :not_found ->
+              save_package(%{pkg | internal_symbols: MapSet.put(pkg.internal_symbols, name)})
+              {symbol, true}
+          end
+
+        if own_symbol? and ExLisp.Env.keyword?(symbol) and
+             pkg.name not in ["COMMON-LISP", "COMMON-LISP-USER", "KEYWORD"] do
+          String.to_atom("#{String.downcase(pkg.name)}.#{atom_name}")
+        else
+          resolved
+        end
+    end
+  end
+
+  def register_read_symbol(symbol), do: symbol
+
   # --- Package Qualified Symbol Resolution ---
 
   @doc """
@@ -1811,10 +2253,10 @@ defmodule ExLisp.Package do
     sym_up = String.upcase(sym_name_str)
 
     if internal_allowed? do
-      str_to_symbol(sym_up)
+      symbol_in_package(sym_up, pkg)
     else
       if MapSet.member?(pkg.external_symbols, sym_up) do
-        str_to_symbol(sym_up)
+        symbol_in_package(sym_up, pkg)
       else
         raise RuntimeError, "Symbol #{sym_up} is not external in package #{pkg.name}"
       end
@@ -1825,18 +2267,25 @@ defmodule ExLisp.Package do
 
   defp find_symbol_in_pkg(name_up, %ExLisp.Package{} = pkg) do
     cond do
+      pkg.name == "KEYWORD" and
+          (ExLisp.Env.keyword?(str_to_symbol(name_up)) or
+             MapSet.member?(pkg.external_symbols, name_up) or
+             MapSet.member?(pkg.internal_symbols, name_up)) ->
+        symbol = ExLisp.Env.register_keyword(str_to_symbol(name_up))
+        {:found, symbol, :external}
+
       MapSet.member?(pkg.external_symbols, name_up) ->
-        {:found, str_to_symbol(name_up), :external}
+        {:found, symbol_in_package(name_up, pkg), :external}
 
       MapSet.member?(pkg.internal_symbols, name_up) ->
-        {:found, str_to_symbol(name_up), :internal}
+        {:found, symbol_in_package(name_up, pkg), :internal}
 
       true ->
         # Search inherited symbols from use_list
         Enum.find_value(pkg.use_list, :not_found, fn u_name ->
           if u_pkg = find_package(u_name) do
             if MapSet.member?(u_pkg.external_symbols, name_up) do
-              {:found, str_to_symbol(name_up), :inherited}
+              {:found, symbol_in_package(name_up, u_pkg), :inherited}
             end
           end
         end)
@@ -1853,44 +2302,22 @@ defmodule ExLisp.Package do
   defp symbol_to_str(sym) do
     case sym do
       {:id, _, [n]} when is_binary(n) ->
-        clean_uninterned(n)
-        |> String.trim_leading(":")
-        |> String.upcase()
-        |> String.replace("_", "-")
+        n |> clean_uninterned() |> string_symbol_name()
 
       {:id, _, n} when is_binary(n) ->
-        clean_uninterned(n)
-        |> String.trim_leading(":")
-        |> String.upcase()
-        |> String.replace("_", "-")
+        n |> clean_uninterned() |> string_symbol_name()
 
       {:keyword, _, kw} when is_atom(kw) ->
-        kw
-        |> Atom.to_string()
-        |> clean_uninterned()
-        |> String.trim_leading(":")
-        |> String.upcase()
-        |> String.replace("_", "-")
+        atom_symbol_name(kw)
 
       {:keyword, _, kw} when is_binary(kw) ->
-        clean_uninterned(kw)
-        |> String.trim_leading(":")
-        |> String.upcase()
-        |> String.replace("_", "-")
+        kw |> clean_uninterned() |> string_symbol_name()
 
       {:lit, s} when is_binary(s) ->
         clean_uninterned(s)
-        |> String.trim_leading(":")
-        |> String.upcase()
-        |> String.replace("_", "-")
 
       {:lit, a} when is_atom(a) ->
-        a
-        |> Atom.to_string()
-        |> clean_uninterned()
-        |> String.trim_leading(":")
-        |> String.upcase()
-        |> String.replace("_", "-")
+        atom_symbol_name(a)
 
       {:list, _, _} ->
         ""
@@ -1900,24 +2327,18 @@ defmodule ExLisp.Package do
 
       s when is_binary(s) ->
         clean_uninterned(s)
-        |> String.trim_leading(":")
-        |> String.upcase()
-        |> String.replace("_", "-")
 
       a when is_atom(a) ->
-        a
-        |> Atom.to_string()
-        |> clean_uninterned()
-        |> String.trim_leading(":")
-        |> String.upcase()
-        |> String.replace("_", "-")
+        atom_symbol_name(a)
 
       %ExLisp.Symbol{name: n} ->
-        n
-        |> clean_uninterned()
-        |> String.trim_leading(":")
-        |> String.upcase()
-        |> String.replace("_", "-")
+        n |> clean_uninterned() |> string_symbol_name()
+
+      %ExLisp.Character{code: code} ->
+        List.to_string([code])
+
+      {:array, _, _} = array ->
+        ExLisp.Builtins.to_string_val(array)
 
       _ ->
         ""
@@ -1928,11 +2349,148 @@ defmodule ExLisp.Package do
     if is_binary(symbol), do: symbol, else: symbol_to_str(symbol)
   end
 
+  defp package_designator_string(%ExLisp.Package{name: name}), do: name
+  defp package_designator_string(designator) when is_binary(designator), do: designator
+
+  defp package_designator_string(designator) do
+    case symbol_to_str(designator) do
+      "" -> ExLisp.Builtins.to_string_val(designator)
+      name -> name
+    end
+  end
+
+  defp atom_symbol_name(atom) do
+    atom
+    |> Atom.to_string()
+    |> clean_uninterned()
+    |> string_symbol_name()
+  end
+
+  defp string_symbol_name(str) do
+    str = String.trim_leading(str, ":")
+
+    case str do
+      "|" <> rest ->
+        String.trim_trailing(rest, "|")
+
+      "#:UNINTERNED_" <> rest ->
+        case String.split(rest, "_", parts: 2) do
+          [_id, name] -> string_symbol_name(name)
+          _ -> rest
+        end
+
+      qualified ->
+        case String.split(qualified, ".", parts: 2) do
+          [package, name] ->
+            if find_package(package |> String.upcase() |> String.replace("_", "-")) do
+              string_symbol_name(name)
+            else
+              String.upcase(qualified) |> String.replace("_", "-")
+            end
+
+          [name] -> String.upcase(name) |> String.replace("_", "-")
+        end
+    end
+  end
+
+  defp symbol_in_package(name, pkg_designator) do
+    pkg = find_package!(pkg_designator)
+    source_pkg = find_symbol_package(pkg, name)
+
+    case Map.get(pkg.symbol_values || %{}, name) do
+      nil ->
+        base = str_to_symbol(name)
+
+        if source_pkg.name in ["COMMON-LISP", "COMMON-LISP-USER", "KEYWORD"] or
+             symbol_home_count(name, source_pkg) == 1 do
+          remember_symbol_package(base, source_pkg)
+          base
+        else
+          package_prefix = String.downcase(source_pkg.name)
+          String.to_atom("#{package_prefix}.#{Atom.to_string(base)}")
+        end
+
+      symbol ->
+        symbol
+    end
+  end
+
+  defp find_symbol_package(pkg, name) do
+    case Map.get(pkg.symbol_packages || %{}, name) do
+      nil -> pkg
+      package_name -> find_package(package_name) || pkg
+    end
+  end
+
+  defp qualified_symbol_package(str) do
+    case String.split(str, ".", parts: 2) do
+      [package, _name] ->
+        find_package(String.upcase(package) |> String.replace("_", "-"))
+
+      _ ->
+        nil
+    end
+  end
+
+  def remember_symbol_package(symbol, %ExLisp.Package{name: name}) do
+    Process.put({:exlisp_symbol_package, symbol}, name)
+    symbol
+  end
+
+  def remember_symbol_package(symbol, package_name) do
+    Process.put({:exlisp_symbol_package, symbol}, package_name)
+    symbol
+  end
+
+  defp symbol_home_count(name, _source_pkg) do
+    list_all_packages()
+    |> Enum.count(fn package ->
+      MapSet.member?(package.internal_symbols, name) or
+        MapSet.member?(package.external_symbols, name)
+    end)
+  end
+
+  defp add_inherited_sources(pkg, names) do
+    Enum.reduce(names, pkg.symbol_packages, fn name, sources ->
+      cond do
+        Map.has_key?(sources, name) ->
+          sources
+
+        MapSet.member?(pkg.internal_symbols, name) or
+            MapSet.member?(pkg.external_symbols, name) ->
+          sources
+
+        true ->
+          case inherited_symbol_source(pkg, name) do
+            nil -> sources
+            source -> Map.put(sources, name, source.name)
+          end
+      end
+    end)
+  end
+
+  defp inherited_symbol_source(pkg, name) do
+    Enum.find_value(pkg.use_list, fn used_name ->
+      case find_package(used_name) do
+        %ExLisp.Package{} = used ->
+          if MapSet.member?(used.external_symbols, name), do: used
+
+        nil ->
+          nil
+      end
+    end)
+  end
+
   defp str_to_symbol(str) do
-    normalized = str |> String.downcase() |> String.replace("-", "_")
+    normalized =
+      if String.contains?(str, ".") do
+        String.downcase(str)
+      else
+        str |> String.downcase() |> String.replace("-", "_")
+      end
 
     if str == String.upcase(str) and
-         Regex.match?(~r/^[A-Z0-9+*\/:=<>?!$%&-]+$/, str) do
+         Regex.match?(~r/^[A-Z0-9+*\/:=<>?!$%&.-]+$/, str) do
       String.to_atom(normalized)
     else
       String.to_atom("|#{str}|")

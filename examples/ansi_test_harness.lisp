@@ -6,6 +6,12 @@
 (unless (find-package "CL-TEST")
   (make-package "CL-TEST" :use '("COMMON-LISP" "REGRESSION-TEST" "COMMON-LISP-USER")))
 
+(defun collect-symbols (pkg)
+  (remove-duplicates
+   (sort-symbols
+    (let ((all nil))
+      (do-symbols (x pkg all) (push x all))))))
+
 (defvar *test-passed-count* 0)
 (defvar *test-failed-count* 0)
 (defvar *test-total-count* 0)
