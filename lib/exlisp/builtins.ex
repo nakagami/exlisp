@@ -8398,6 +8398,7 @@ defmodule ExLisp.Builtins do
   def class_of(obj), do: ExLisp.CLOS.class_of(obj)
 
   def find_class(name), do: ExLisp.CLOS.find_class(name)
+  def find_class(name, errorp), do: ExLisp.CLOS.find_class(name, errorp)
 
   def class_name(class_or_name), do: ExLisp.CLOS.class_name(class_or_name)
 
@@ -10986,10 +10987,39 @@ defmodule ExLisp.Builtins do
   def invoke_restart(restart), do: ExLisp.Condition.invoke_restart(restart, [])
 
   def invoke_restart_interactively(args) when is_list(args) do
-    invoke_restart(args)
+    restart_or_name =
+      case args do
+        [restart | _] -> restart
+        _ -> nil
+      end
+
+    restart =
+      case restart_or_name do
+        %{fun: _} = found -> found
+        name -> ExLisp.Condition.find_restart(name)
+      end
+
+    if restart do
+      interactive = restart[:interactive]
+
+      values =
+        cond do
+          is_function(interactive) or match?(%ExLisp.Closure{}, interactive) ->
+            invoke_fn(interactive, []) |> unwrap_mv_primary()
+
+          true ->
+            []
+        end
+
+      ExLisp.Condition.invoke_restart(restart, values)
+    else
+      raise RuntimeError, "Restart #{inspect(restart_or_name)} not found"
+    end
   end
 
-  def invoke_restart_interactively(restart), do: invoke_restart(restart)
+  def invoke_restart_interactively(restart) do
+    invoke_restart_interactively([restart])
+  end
 
   def abort(args \\ [])
 

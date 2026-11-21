@@ -1075,6 +1075,7 @@ defmodule ExLisp.CLFormat do
       nil -> "NIL"
       :t -> "T"
       str when is_binary(str) -> "\"#{str}\""
+      %{name: _name, fun: _fun} = restart -> ExLisp.Condition.format_restart(restart)
       _ -> inspect(ExLisp.to_repl_display(val))
     end
   end

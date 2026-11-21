@@ -93,6 +93,42 @@ defmodule ExLisp.Evaluator do
 
   # --- Symbol evaluation ---
 
+  defp handler_case_param_specs(params_node) do
+    params =
+      case params_node do
+        {:list, _, values} -> values
+        values when is_list(values) -> values
+        _ -> []
+      end
+
+    {required, aux, _mode} =
+      Enum.reduce(params, {[], [], :required}, fn node, {required, aux, mode} ->
+        symbol = LispBeam.extract_symbol_name(node)
+
+        cond do
+          symbol in [:"&aux", :aux] -> {required, aux, :aux}
+          mode == :aux ->
+            case node do
+              {:list, _, [var_node, init_node]} ->
+                {required, aux ++ [{LispBeam.extract_symbol_name(var_node), init_node}], mode}
+
+              _ ->
+                {required, aux ++ [{symbol, {:lit, nil}}], mode}
+            end
+
+          true ->
+            {required ++ [symbol], aux, mode}
+        end
+      end)
+
+    {required, aux}
+  end
+
+  defp bind_required_params(env, vars, vals) do
+    Enum.zip(vars, vals)
+    |> Enum.reduce(env, fn {var, val}, acc -> bind_lexical(acc, var, val) end)
+  end
+
   defp eval_symbol(sym, env) when is_atom(sym) do
     case env do
       %{^sym => binding} ->
@@ -1040,8 +1076,12 @@ defmodule ExLisp.Evaluator do
             try do
               eval_progn(body, env)
             catch
-              {:lisp_throw, thrown_tag, val} when thrown_tag == tag_val ->
-                val
+              {:lisp_throw, thrown_tag, val} ->
+                if catch_tag_equal?(thrown_tag, tag_val) do
+                  val
+                else
+                  throw({:lisp_throw, thrown_tag, val})
+                end
             after
               Process.put(:exlisp_active_catch_tags, active_tags)
             end
@@ -1065,7 +1105,7 @@ defmodule ExLisp.Evaluator do
 
         active_tags = Process.get(:exlisp_active_catch_tags, [])
 
-        if Enum.any?(active_tags, &(Builtins.eq(tag_val, &1) == :t)) do
+        if Enum.any?(active_tags, &catch_tag_equal?(tag_val, &1)) do
           throw({:lisp_throw, tag_val, val})
         else
           ExLisp.Condition.make_condition(:control_error,
@@ -1113,11 +1153,10 @@ defmodule ExLisp.Evaluator do
         end
 
       op when op in [:ignore_errors, :_cl_ignore_errors_, :"ignore-errors"] ->
-        try do
-          eval_progn(args, env)
-        catch
-          :error, _ -> [:_values_, [nil, :error]]
-        end
+        ExLisp.Condition.run_handler_case(
+          fn -> eval_progn(args, env) end,
+          [{:error, fn condition -> [:_values_, [nil, condition]] end}]
+        )
 
       op when op in [:handler_bind, :_cl_handler_bind_, :"handler-bind"] ->
         eval_handler_bind(args, env)
@@ -1191,7 +1230,32 @@ defmodule ExLisp.Evaluator do
             typespec = eval_quote_node(typespec_node)
 
             unless Builtins.truthy?(ExLisp.Type.typep(val, typespec)) do
-              raise RuntimeError, "The value #{inspect(val)} is not of type #{inspect(typespec)}"
+              condition =
+                ExLisp.Condition.make_condition(:type_error,
+                  datum: val,
+                  expected_type: typespec
+                )
+
+              {_getter, setter} = get_setf_expansion(place_node, env)
+              tag = make_ref()
+
+              restart = %{
+                name: :store_value,
+                fun: fn new_value ->
+                  setter.(new_value)
+                  throw({:store_value_invoked, tag})
+                end,
+                report: "Supply a new value for #{inspect(place_node)}",
+                test: nil
+              }
+
+              try do
+                ExLisp.Condition.push_restarts([restart], fn ->
+                  ExLisp.Condition.error(condition)
+                end)
+              catch
+                {:store_value_invoked, ^tag} -> :ok
+              end
             end
 
             nil
@@ -1202,12 +1266,14 @@ defmodule ExLisp.Evaluator do
 
       op when op in [:assert, :_cl_assert_] ->
         case args do
-          [test_node | _] ->
-            val = eval(test_node, env) |> Builtins.unwrap_mv_primary()
+          [test_node | rest_args] ->
+            datum =
+              case rest_args do
+                [_places, datum | _] -> eval(datum, env)
+                _ -> :simple_error
+              end
 
-            unless Builtins.truthy?(val) do
-              raise RuntimeError, "Assertion failed: #{inspect(test_node)}"
-            end
+            eval_assert_loop(test_node, datum, env)
 
             nil
 
@@ -1294,7 +1360,14 @@ defmodule ExLisp.Evaluator do
         :"with-condition-restarts"
       ] ->
         case args do
-          [_condition, _restarts | body] -> eval_progn(body, env)
+          [condition_node, restarts_node | body] ->
+            condition = eval(condition_node, env) |> Builtins.unwrap_mv_primary()
+            restarts = eval(restarts_node, env) |> Builtins.unwrap_mv_primary()
+
+            ExLisp.Condition.with_condition_restarts(condition, restarts, fn ->
+              eval_progn(body, env)
+            end)
+
           _ -> nil
         end
 
@@ -2891,13 +2964,23 @@ defmodule ExLisp.Evaluator do
     handlers =
       Enum.map(binding_pairs, fn
         {:list, _, [type_node, fn_node | _]} ->
-          {LispBeam.extract_symbol_name(type_node), eval(fn_node, env)}
+          {condition_type_spec(type_node, env), eval(fn_node, env)}
 
         [type_node, fn_node | _] ->
-          {LispBeam.extract_symbol_name(type_node), eval(fn_node, env)}
+          {condition_type_spec(type_node, env), eval(fn_node, env)}
       end)
 
     ExLisp.Condition.push_handlers(handlers, fn -> eval_progn(body_nodes, env) end)
+  end
+
+  defp condition_type_spec(type_node, env) do
+    case type_node do
+      {:id, _, _} -> LispBeam.extract_symbol_name(type_node)
+      {:keyword, _, _} -> LispBeam.extract_symbol_name(type_node)
+      {:lit, value} when is_atom(value) -> LispBeam.extract_symbol_name(value)
+      atom when is_atom(atom) -> atom
+      _ -> eval(type_node, env)
+    end
   end
 
   defp eval_handler_case([expr_node | clauses], env) do
@@ -2916,21 +2999,23 @@ defmodule ExLisp.Evaluator do
     no_error_fn =
       case no_error_clause do
         [{:list, _, [_no_err_sym, params_node | body_nodes]} | _] ->
-          var_names = LispBeam.extract_param_names(params_node)
+          {var_names, aux_specs} = handler_case_param_specs(params_node)
 
           fn result ->
             vals = extract_values(result)
-            padded = vals ++ List.duplicate(nil, max(0, length(var_names) - length(vals)))
 
+            if length(vals) != length(var_names) do
+              ExLisp.Condition.error(:program_error, "HANDLER-CASE argument count mismatch")
+            end
+
+            call_env = bind_required_params(env, var_names, vals)
             call_env =
-              Enum.zip(var_names, padded)
-              |> Enum.reduce(env, fn {var, val}, acc ->
-                ref = make_ref()
-                :erlang.put(ref, val)
-                Map.put(acc, var, {:box, ref})
+              Enum.reduce(aux_specs, call_env, fn {var, init}, acc ->
+                bind_lexical(acc, var, eval(init, acc))
               end)
 
-            eval_progn(body_nodes, call_env)
+            {_declarations, actual_body} = LispBeam.split_declarations(body_nodes)
+            eval_progn(actual_body, call_env)
           end
 
         _ ->
@@ -2940,7 +3025,7 @@ defmodule ExLisp.Evaluator do
     parsed_clauses =
       Enum.map(normal_clauses, fn
         {:list, _, [type_spec, params_node | body_nodes]} ->
-          type_name = LispBeam.extract_symbol_name(type_spec)
+            type_name = condition_type_spec(type_spec, env)
 
           param_var =
             case params_node do
@@ -2951,16 +3036,25 @@ defmodule ExLisp.Evaluator do
             end
 
           handler_fn = fn cond_obj ->
+            {declarations, actual_body} = LispBeam.split_declarations(body_nodes)
+            specials = LispBeam.extract_special_vars(declarations)
+
             call_env =
-              if param_var do
+              if param_var && param_var not in specials do
                 ref = make_ref()
                 :erlang.put(ref, cond_obj)
                 Map.put(env, param_var, {:box, ref})
               else
-                env
+                Map.delete(env, param_var)
               end
 
-            eval_progn(body_nodes, call_env)
+            if param_var in specials do
+              Env.with_special_bindings([{param_var, cond_obj}], fn ->
+                eval_progn(actual_body, call_env)
+              end)
+            else
+              eval_progn(actual_body, call_env)
+            end
           end
 
           {type_name, handler_fn}
@@ -2979,14 +3073,41 @@ defmodule ExLisp.Evaluator do
 
     restarts =
       Enum.map(binding_pairs, fn
-        {:list, _, [name_node, fn_node | _]} ->
-          {LispBeam.extract_symbol_name(name_node), eval(fn_node, env)}
+        {:list, _, [name_node, fn_node | option_nodes]} ->
+          build_restart_binding(name_node, fn_node, option_nodes, env)
 
-        [name_node, fn_node | _] ->
-          {LispBeam.extract_symbol_name(name_node), eval(fn_node, env)}
+        [name_node, fn_node | option_nodes] ->
+          build_restart_binding(name_node, fn_node, option_nodes, env)
       end)
 
     ExLisp.Condition.push_restarts(restarts, fn -> eval_progn(body_nodes, env) end)
+  end
+
+  defp build_restart_binding(name_node, fn_node, option_nodes, env) do
+    options =
+      option_nodes
+      |> Enum.chunk_every(2)
+      |> Enum.reduce(%{}, fn
+        [key_node, value_node], acc ->
+          key =
+            LispBeam.extract_symbol_name(key_node)
+            |> Atom.to_string()
+            |> String.trim_leading(":")
+            |> String.to_atom()
+
+          Map.put(acc, key, eval(value_node, env))
+
+        _, acc ->
+          acc
+      end)
+
+    %{
+      name: LispBeam.extract_symbol_name(name_node),
+      fun: eval(fn_node, env),
+      report: Map.get(options, :report_function),
+      test: Map.get(options, :test_function),
+      interactive: Map.get(options, :interactive_function)
+    }
   end
 
   defp eval_restart_case([expr_node | clauses], env) do
@@ -3003,51 +3124,148 @@ defmodule ExLisp.Evaluator do
         name = LispBeam.extract_symbol_name(name_node)
         {options, handler_body} = parse_restart_case_options(rest_nodes)
 
-        params =
-          case params_node do
-            {:list, _, ps} -> Enum.map(ps, &LispBeam.extract_symbol_name/1)
-            ps when is_list(ps) -> Enum.map(ps, &LispBeam.extract_symbol_name/1)
-            nil -> []
-            p -> [LispBeam.extract_symbol_name(p)]
-          end
-
         handler_fn = fn args ->
           args_list = if is_list(args), do: args, else: [args]
-          padded = args_list ++ List.duplicate(nil, max(0, length(params) - length(args_list)))
-
-          call_env =
-            Enum.zip(params, padded)
-            |> Enum.reduce(env, fn {var, val}, acc ->
-              ref = make_ref()
-              :erlang.put(ref, val)
-              Map.put(acc, var, {:box, ref})
-            end)
-
-          eval_progn(handler_body, call_env)
+          call_env = bind_restart_case_params(env, params_node, args_list)
+          {_declarations, actual_body} = LispBeam.split_declarations(handler_body)
+          eval_progn(actual_body, call_env)
         end
 
         report_val =
           case Keyword.get(options, :report) do
             nil -> nil
             rep_node when is_binary(rep_node) -> rep_node
-            rep_node -> eval(rep_node, env)
+            rep_node -> eval_function_designator(rep_node, env)
           end
 
         test_val =
           case Keyword.get(options, :test) do
             nil -> nil
-            test_node -> eval(test_node, env)
+            test_node -> eval_function_designator(test_node, env)
+          end
+
+        interactive_val =
+          case Keyword.get(options, :interactive) do
+            nil -> nil
+            interactive_node -> eval_function_designator(interactive_node, env)
           end
 
         %{
           name: name,
           fun: handler_fn,
           report: report_val,
-          test: test_val
+          test: test_val,
+          interactive: interactive_val
         }
       end)
 
     ExLisp.Condition.run_restart_case(fn -> eval(expr_node, env) end, parsed_clauses)
+  end
+
+  defp eval_function_designator({:id, _, _} = node, env) do
+    symbol = LispBeam.extract_symbol_name(node)
+
+    case Map.get(env, {:fun, symbol}) do
+      nil -> symbol
+      function -> function
+    end
+  end
+
+  defp eval_function_designator(node, env), do: eval(node, env)
+
+  defp bind_restart_case_params(env, params_node, args) do
+    params =
+      case params_node do
+        {:list, _, values} -> values
+        values when is_list(values) -> values
+        _ -> []
+      end
+
+    {call_env, _remaining, _mode} =
+      Enum.reduce(params, {env, args, :required}, fn node, {call_env, remaining, mode} ->
+        symbol = LispBeam.extract_symbol_name(node)
+
+        cond do
+          symbol == :"&optional" ->
+            {call_env, remaining, :optional}
+
+          symbol == :"&rest" ->
+            {call_env, remaining, :rest}
+
+          symbol == :"&key" ->
+            {call_env, remaining, :key}
+
+          symbol == :"&aux" ->
+            {call_env, remaining, :aux}
+
+          mode == :required ->
+            case remaining do
+              [value | rest] -> {bind_lexical(call_env, symbol, value), rest, mode}
+              [] -> {bind_lexical(call_env, symbol, nil), remaining, mode}
+            end
+
+          mode == :optional ->
+            case node do
+              {:list, _, [var_node | defaults]} ->
+                var = LispBeam.extract_symbol_name(var_node)
+                default_node = List.first(defaults) || {:lit, nil}
+
+                case remaining do
+                  [value | rest] -> {bind_lexical(call_env, var, value), rest, mode}
+                  [] -> {bind_lexical(call_env, var, eval(default_node, call_env)), [], mode}
+                end
+
+              _ ->
+                case remaining do
+                  [value | rest] -> {bind_lexical(call_env, symbol, value), rest, mode}
+                  [] -> {bind_lexical(call_env, symbol, nil), [], mode}
+                end
+            end
+
+          mode == :rest ->
+            {bind_lexical(call_env, symbol, remaining), [], :after_rest}
+
+          mode == :key ->
+            var =
+              case node do
+                {:list, _, [var_node | _]} -> LispBeam.extract_symbol_name(var_node)
+                _ -> symbol
+              end
+
+            key = var |> Atom.to_string() |> String.trim_leading("&") |> String.to_atom()
+            value = parse_keyword_argument(remaining, key)
+            {bind_lexical(call_env, var, value), remaining, mode}
+
+          mode == :aux ->
+            case node do
+              {:list, _, [var_node, init_node]} ->
+                var = LispBeam.extract_symbol_name(var_node)
+                {bind_lexical(call_env, var, eval(init_node, call_env)), remaining, mode}
+
+              _ ->
+                {bind_lexical(call_env, symbol, nil), remaining, mode}
+            end
+
+          true ->
+            {call_env, remaining, mode}
+        end
+      end)
+
+    call_env
+  end
+
+  defp parse_keyword_argument(args, key) do
+    args
+    |> Enum.chunk_every(2)
+    |> Enum.find_value(fn
+      [key_node, value] ->
+        atom = LispBeam.extract_symbol_name(key_node)
+        normalized = atom |> Atom.to_string() |> String.trim_leading(":") |> String.to_atom()
+        if atom == key or normalized == key, do: value
+
+      _ ->
+        nil
+    end)
   end
 
   defp parse_restart_case_options(nodes) do
@@ -3076,6 +3294,21 @@ defmodule ExLisp.Evaluator do
   end
 
   defp do_parse_restart_case_options(body_nodes, acc), do: {Enum.reverse(acc), body_nodes}
+
+  defp eval_assert_loop(test_node, datum, env) do
+    value = eval(test_node, env) |> Builtins.unwrap_mv_primary()
+
+    if Builtins.truthy?(value) do
+      :ok
+    else
+      ExLisp.Condition.cerror("Continue after the assertion", datum)
+      eval_assert_loop(test_node, datum, env)
+    end
+  end
+
+  defp catch_tag_equal?(left, right) do
+    Builtins.eq(left, right) == :t or Builtins.equal(left, right) == :t
+  end
 
   defp eval_define_condition([name_node, parents_node | rest_nodes], _env) do
     cond_name = LispBeam.extract_symbol_name(name_node)

@@ -332,6 +332,10 @@ defmodule ExLisp.Env do
   def get_var(name) do
     var_name = normalize_name(name)
 
+    if Process.get(:exlisp_debugger_hook_active) == true and
+         var_name in [:"*debugger-hook*", :"*debugger_hook*"] do
+      nil
+    else
     case :erlang.get({:"$special$", var_name}) do
       :undefined ->
         case :persistent_term.get({:exlisp_var, var_name}, :__not_found__) do
@@ -383,6 +387,7 @@ defmodule ExLisp.Env do
 
       val ->
         val
+    end
     end
   end
 

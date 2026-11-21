@@ -21,6 +21,8 @@ defmodule ExLisp.Condition do
     {:undefined_function, [:cell_error]},
     {:arithmetic_error, [:error]},
     {:division_by_zero, [:arithmetic_error]},
+    {:floating_point_inexact, [:arithmetic_error]},
+    {:floating_point_invalid_operation, [:arithmetic_error]},
     {:floating_point_overflow, [:arithmetic_error]},
     {:floating_point_underflow, [:arithmetic_error]},
     {:control_error, [:error]},
@@ -29,11 +31,14 @@ defmodule ExLisp.Condition do
     {:package_error, [:error]},
     {:stream_error, [:error]},
     {:end_of_file, [:stream_error]},
-    {:reader_error, [:stream_error]},
+    {:reader_error, [:parse_error, :stream_error]},
     {:file_error, [:error]},
+    {:print_not_readable, [:error]},
+    {:simple_type_error, [:simple_condition, :type_error]},
     {:storage_condition, [:serious_condition]},
     {:warning, [:condition]},
     {:style_warning, [:warning]},
+    {:unbound_slot, [:cell_error]},
     {:simple_warning, [:warning, :simple_condition]}
   ]
 
@@ -41,7 +46,7 @@ defmodule ExLisp.Condition do
     Enum.each(@condition_classes, fn {name, supers} ->
       extra_slots =
         case name do
-          n when n in [:cell_error, :unbound_variable, :undefined_function] ->
+          n when n in [:cell_error, :unbound_variable, :undefined_function, :unbound_slot] ->
             [[:name, :initarg, :name, :initform, nil]]
 
           :type_error ->
@@ -88,14 +93,23 @@ defmodule ExLisp.Condition do
 
     parents =
       cond do
-        parent_types == [] or parent_types == nil -> [:condition]
-        is_list(parent_types) -> parent_types
+        parent_types == [] or parent_types == nil ->
+          [:condition]
+
+        is_list(parent_types) ->
+          case Enum.reject(parent_types, &is_nil/1) do
+            [] -> [:condition]
+            normalized -> normalized
+          end
+
         true -> [parent_types]
       end
 
     report_opt =
       Enum.find_value(options, fn
-        [:report, rep] -> rep
+        [key, rep] when is_atom(key) ->
+          if normalize_option_key(key) == "report", do: rep
+
         {:report, rep} -> rep
         [":report", rep] -> rep
         _ -> nil
@@ -103,7 +117,18 @@ defmodule ExLisp.Condition do
 
     extra_slots =
       if report_opt != nil do
-        [[:report_fun, :initarg, :report_fun, :initform, report_opt]]
+        report_form =
+          cond do
+            is_atom(report_opt) ->
+              fn instance, stream ->
+                ExLisp.Builtins.invoke_fn(report_opt, [instance, stream])
+              end
+
+            true ->
+              report_opt
+          end
+
+        [[:report_fun, :initarg, :report_fun, :initform, report_form]]
       else
         []
       end
@@ -131,6 +156,9 @@ defmodule ExLisp.Condition do
       is_condition?(type_or_obj) ->
         type_or_obj
 
+      is_map(type_or_obj) and is_atom(type_or_obj[:name]) ->
+        make_condition(type_or_obj[:name], initargs)
+
       is_atom(type_or_obj) or is_binary(type_or_obj) ->
         norm_type = normalize_name(type_or_obj)
 
@@ -154,11 +182,13 @@ defmodule ExLisp.Condition do
   # --- Handlers Stack Management ---
 
   def push_handlers(handlers, fun) when is_list(handlers) and is_function(fun, 0) do
+    group = make_ref()
+
     norm_handlers =
       Enum.map(handlers, fn
-        %{type: t, fun: f} -> %{type: normalize_name(t), fun: f}
-        {t, f} -> %{type: normalize_name(t), fun: f}
-        [t, f] -> %{type: normalize_name(t), fun: f}
+        %{type: t, fun: f} -> %{type: normalize_name(t), fun: f, group: group}
+        {t, f} -> %{type: normalize_name(t), fun: f, group: group}
+        [t, f] -> %{type: normalize_name(t), fun: f, group: group}
       end)
 
     prev = Process.get(:exlisp_condition_handlers, [])
@@ -181,13 +211,13 @@ defmodule ExLisp.Condition do
     norm_restarts =
       Enum.map(restarts, fn
         %{name: n} = r ->
-          %{r | name: normalize_name(n)}
+          %{r | name: normalize_restart_name(n)}
 
         {n, f} ->
-          %{name: normalize_name(n), fun: f, report: nil, test: nil}
+          %{name: normalize_restart_name(n), fun: f, report: nil, test: nil}
 
         [n, f] ->
-          %{name: normalize_name(n), fun: f, report: nil, test: nil}
+          %{name: normalize_restart_name(n), fun: f, report: nil, test: nil}
       end)
 
     prev = Process.get(:exlisp_condition_restarts, [])
@@ -211,6 +241,7 @@ defmodule ExLisp.Condition do
   """
   def signal(datum, args \\ []) do
     cond_obj = coerce_to_condition(datum, args, :simple_condition)
+    associate_restart_case_condition(cond_obj)
     handlers = get_handlers()
 
     search_and_invoke_handler(handlers, cond_obj, [])
@@ -222,6 +253,18 @@ defmodule ExLisp.Condition do
   """
   def warn(datum, args \\ []) do
     cond_obj = coerce_to_condition(datum, args, :simple_warning)
+
+    if datum == [] do
+      ExLisp.Condition.error(:program_error, "WARN requires a datum")
+    end
+
+    unless ExLisp.Type.typep(cond_obj, :warning) |> ExLisp.Builtins.truthy?() do
+      ExLisp.Condition.error(:type_error, datum: datum, expected_type: :warning)
+    end
+
+    if is_condition?(datum) and args != [] do
+      ExLisp.Condition.error(:type_error, datum: args, expected_type: nil)
+    end
 
     muffle_tag = make_ref()
 
@@ -237,7 +280,19 @@ defmodule ExLisp.Condition do
         signal(cond_obj)
 
         msg = format_condition(cond_obj)
-        IO.puts(:stderr, "WARNING: #{msg}")
+        output = "WARNING: #{msg}\n"
+        stream =
+          try do
+            ExLisp.Env.get_var(:"*error-output*")
+          rescue
+            _ -> :standard_io
+          end
+
+        case stream do
+          :standard_io -> IO.write(:stderr, output)
+          destination -> ExLisp.Stream.write_string(output, destination)
+        end
+
         nil
       end)
     catch
@@ -271,11 +326,25 @@ defmodule ExLisp.Condition do
         :ok
 
       hook ->
-        previous = Process.get(:exlisp_previous_debugger_hook)
+        previous_debugger_state = Process.get(:exlisp_debugger_hook_active, :inactive)
+        Process.put(:exlisp_debugger_hook_active, true)
 
         try do
-          ExLisp.Builtins.invoke_fn(hook, [object, previous || nil])
+          ExLisp.Env.with_special_bindings([{:"*debugger-hook*", nil}], fn ->
+            try do
+              ExLisp.Builtins.invoke_fn(hook, [object, old_hook])
+            rescue
+              e ->
+                error(:program_error, Exception.message(e))
+            end
+          end)
         after
+          if previous_debugger_state == :inactive do
+            Process.delete(:exlisp_debugger_hook_active)
+          else
+            Process.put(:exlisp_debugger_hook_active, previous_debugger_state)
+          end
+
           Process.put(:exlisp_previous_debugger_hook, old_hook)
         end
     end
@@ -284,10 +353,16 @@ defmodule ExLisp.Condition do
   end
 
   defp debugger_hook do
-    if ExLisp.Env.has_var?(:"*debugger-hook*") do
-      ExLisp.Env.get_var(:"*debugger-hook*")
-    else
-      nil
+    key = {:"$special$", ExLisp.Env.normalize_name(:"*debugger-hook*")}
+
+    case :erlang.get(key) do
+      :undefined ->
+        if ExLisp.Env.has_var?(:"*debugger-hook*") do
+          ExLisp.Env.get_var(:"*debugger-hook*")
+        end
+
+      hook ->
+        hook
     end
   rescue
     _ -> nil
@@ -333,7 +408,10 @@ defmodule ExLisp.Condition do
 
     if condition_matches_type?(cond_obj, type) do
       # Temporarily pop current handler while invoking it
-      Process.put(:exlisp_condition_handlers, Enum.reverse(skipped) ++ rest)
+      Process.put(
+        :exlisp_condition_handlers,
+        Enum.reverse(skipped) ++ Enum.reject(rest, &(&1[:group] == handler[:group]))
+      )
 
       try do
         ExLisp.Builtins.invoke_fn(fun, [cond_obj])
@@ -346,7 +424,11 @@ defmodule ExLisp.Condition do
   end
 
   def condition_matches_type?(cond_obj, expected_type) do
-    norm_type = normalize_name(expected_type)
+    norm_type =
+      case expected_type do
+        %{name: name} -> normalize_name(name)
+        _ -> normalize_name(expected_type)
+      end
 
     if norm_type in [:t, :condition, :_] do
       true
@@ -416,6 +498,12 @@ defmodule ExLisp.Condition do
         {_in, out} = StringIO.contents(str_io)
         out
 
+      %ExLisp.Closure{} = closure ->
+        {:ok, str_io} = StringIO.open("")
+        ExLisp.Builtins.invoke_fn(closure, [inst, str_io])
+        {_in, out} = StringIO.contents(str_io)
+        out
+
       str when is_binary(str) ->
         str
 
@@ -454,13 +542,13 @@ defmodule ExLisp.Condition do
   Finds an active restart by name.
   """
   def find_restart(name, condition \\ nil) do
-    norm_name = normalize_name(name)
+    norm_name = normalize_restart_name(name)
     restarts = get_restarts()
 
     Enum.find(restarts, fn r ->
-      r_name = normalize_name(r.name)
+      r_name = normalize_restart_name(r.name)
 
-      if r_name == norm_name do
+      if r_name == norm_name and restart_applies_to_condition?(r, condition) do
         if is_function(r[:test], 1) and condition != nil do
           r.test.(condition)
         else
@@ -482,9 +570,61 @@ defmodule ExLisp.Condition do
       restarts
     else
       Enum.filter(restarts, fn r ->
-        if is_function(r[:test], 1), do: r.test.(condition), else: true
+        restart_applies_to_condition?(r, condition) and
+          (if is_function(r[:test], 1), do: r.test.(condition), else: true)
       end)
     end
+  end
+
+  def with_condition_restarts(condition, restarts, fun) do
+    previous = Process.get(:exlisp_restart_associations, [])
+
+    associations =
+      Enum.reduce(List.wrap(restarts), previous, fn restart, acc ->
+        [{restart, condition} | acc]
+      end)
+
+    Process.put(:exlisp_restart_associations, associations)
+
+    try do
+      fun.()
+    after
+      Process.put(:exlisp_restart_associations, previous)
+    end
+  end
+
+  defp associate_restart_case_condition(condition) do
+    case Process.get(:exlisp_restart_case_groups, []) do
+      [restarts | _] ->
+        existing =
+          Process.get(:exlisp_restart_associations, [])
+          |> Enum.map(&elem(&1, 0))
+
+        additions =
+          Enum.reject(restarts, &(&1 in existing))
+          |> Enum.map(&{&1, condition})
+
+        Process.put(
+          :exlisp_restart_associations,
+          additions ++ Process.get(:exlisp_restart_associations, [])
+        )
+
+      [] ->
+        :ok
+    end
+  end
+
+  defp restart_applies_to_condition?(restart, nil) do
+    if is_function(restart[:test], 1), do: restart.test.(nil), else: true
+  end
+
+  defp restart_applies_to_condition?(restart, condition) do
+    associated =
+      Process.get(:exlisp_restart_associations, [])
+      |> Enum.filter(fn {candidate, _condition} -> candidate == restart end)
+      |> Enum.map(&elem(&1, 1))
+
+    associated == [] or condition in associated
   end
 
   @doc """
@@ -522,10 +662,44 @@ defmodule ExLisp.Condition do
   @doc """
   Returns the name of a restart object.
   """
-  def restart_name(%{name: n}), do: n
+  def restart_name(%{name: n}) do
+    case ExLisp.Package.intern(
+           ExLisp.Builtins.symbol_name(n),
+           ExLisp.Package.current_package()
+         ) do
+      [:_values_, [symbol | _]] -> symbol
+      _ -> n
+    end
+  end
   def restart_name(name) when is_atom(name), do: name
   def restart_name(%ExLisp.Symbol{name: n}), do: String.to_atom(String.downcase(n))
   def restart_name(_), do: nil
+
+  def format_restart(%{report: report, name: _name} = restart) do
+    cond do
+      is_binary(report) ->
+        report
+
+      is_function(report) or match?(%ExLisp.Closure{}, report) ->
+        {:ok, stream} = StringIO.open("")
+
+        try do
+          ExLisp.Builtins.invoke_fn(report, [stream])
+          {_input, output} = StringIO.contents(stream)
+          output
+        after
+          StringIO.close(stream)
+        end
+
+      true ->
+        restart
+        |> Map.get(:name)
+        |> to_string()
+        |> String.upcase()
+    end
+  end
+
+  def format_restart(other), do: to_string(other)
 
   # --- High-level handler-case and restart-case runners ---
 
@@ -650,6 +824,10 @@ defmodule ExLisp.Condition do
         }
       end)
 
+    previous_groups = Process.get(:exlisp_restart_case_groups, [])
+    previous_associations = Process.get(:exlisp_restart_associations, [])
+    Process.put(:exlisp_restart_case_groups, [restarts | previous_groups])
+
     try do
       push_restarts(restarts, fn ->
         body_fun.()
@@ -671,6 +849,9 @@ defmodule ExLisp.Condition do
           true ->
             apply(handler_fn, arg_list)
         end
+    after
+      Process.put(:exlisp_restart_case_groups, previous_groups)
+      Process.put(:exlisp_restart_associations, previous_associations)
     end
   end
 
@@ -678,7 +859,7 @@ defmodule ExLisp.Condition do
 
   def abort(condition \\ nil) do
     case find_restart(:abort, condition) do
-      nil -> raise RuntimeError, "No abort restart active"
+      nil -> error(:control_error, "No abort restart active")
       r -> invoke_restart(r, [])
     end
   end
@@ -692,7 +873,7 @@ defmodule ExLisp.Condition do
 
   def muffle_warning(condition \\ nil) do
     case find_restart(:muffle_warning, condition) do
-      nil -> raise RuntimeError, "No muffle-warning restart active"
+      nil -> error(:control_error, "No muffle-warning restart active")
       r -> invoke_restart(r, [])
     end
   end
@@ -712,6 +893,31 @@ defmodule ExLisp.Condition do
   end
 
   def normalize_name(name), do: ExLisp.Symbol.normalize_name(name)
+
+  defp normalize_restart_name(name) do
+    normalized = normalize_name(name)
+
+    case Atom.to_string(normalized) |> String.split(".", parts: 2) do
+      [package, local] ->
+        if ExLisp.Package.find_package(package |> String.upcase() |> String.replace("_", "-")) do
+          normalize_name(local)
+        else
+          normalized
+        end
+
+      _ ->
+        normalized
+    end
+  end
+
+  defp normalize_option_key(key) do
+    key
+    |> Atom.to_string()
+    |> String.downcase()
+    |> String.split(".", parts: 2)
+    |> List.last()
+    |> String.trim_leading(":")
+  end
 
   # --- Standard Condition Accessors ---
 

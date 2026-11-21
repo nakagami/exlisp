@@ -223,8 +223,25 @@ defmodule ExLisp.Type do
   def normalize_type_name(:t), do: :t
   def normalize_type_name(:common), do: :common
   def normalize_type_name(%ExLisp.Symbol{name: n}), do: normalize_type_name(n)
-  def normalize_type_name(name) when is_binary(name) or is_atom(name),
-    do: ExLisp.Symbol.normalize_name(name)
+  def normalize_type_name(name) when is_binary(name) or is_atom(name) do
+    normalized = ExLisp.Symbol.normalize_name(name)
+
+    case normalized |> Atom.to_string() |> String.split(".", parts: 2) do
+      [package, local] ->
+        package = String.upcase(package) |> String.replace("_", "-")
+
+        case ExLisp.Package.find_symbol(String.upcase(local) |> String.replace("_", "-"), package) do
+          [:_values_, [resolved | _]] when not is_nil(resolved) ->
+            ExLisp.Symbol.normalize_name(ExLisp.Builtins.symbol_name(resolved))
+
+          _ ->
+            normalized
+        end
+
+      _ ->
+        normalized
+    end
+  end
   def normalize_type_name(other), do: other
 
   # --- Type Predicate (typep) ---
@@ -375,6 +392,13 @@ defmodule ExLisp.Type do
          (BuiltinFunction.builtin?(val) or ExLisp.Env.has_fun?(val)))
   end
 
+  defp do_typep(val, type) when type in [:generic_function, :standard_generic_function] do
+    case val do
+      %ExLisp.Closure{name: name} -> ExLisp.CLOS.generic_function_p(name) == :t
+      _ -> ExLisp.CLOS.generic_function_p(val) == :t
+    end
+  end
+
   defp do_typep(val, :compiled_function) do
     (is_function(val) and not match?(%ExLisp.Closure{}, val)) or
       match?(%ExLisp.Closure{compiled: true}, val) or
@@ -385,6 +409,7 @@ defmodule ExLisp.Type do
 
   defp do_typep(val, :package), do: match?(%ExLisp.Package{}, val)
   defp do_typep(val, :readtable), do: match?({:readtable, _}, val)
+  defp do_typep(%{name: _name, fun: fun}, :restart), do: not is_nil(fun)
 
   defp do_typep(val, :structure_object) do
     is_map(val) and Map.has_key?(val, :__struct__)

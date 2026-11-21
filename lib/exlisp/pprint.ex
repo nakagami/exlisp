@@ -360,6 +360,19 @@ defmodule ExLisp.PPrint do
   end
 
   defp object_string(%ExLisp.Character{} = character), do: inspect(character)
+
+  defp object_string(%{name: _name, fun: _fun, report: _report} = restart) do
+    ExLisp.Condition.format_restart(restart)
+  end
+
+  defp object_string({:instance, _class, _tid} = instance) do
+    if ExLisp.Condition.is_condition?(instance) do
+      ExLisp.Condition.format_condition(instance)
+    else
+      ExLisp.Builtins.prin1_to_string(instance)
+    end
+  end
+
   defp object_string(value), do: ExLisp.Builtins.prin1_to_string(value)
 
   defp dispatch_match?(type, object) when is_atom(type) do

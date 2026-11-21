@@ -335,6 +335,8 @@ defmodule ExLisp.CLOS do
             end
             |> String.downcase()
             |> String.trim_leading(":")
+            |> String.split(".", parts: 2)
+            |> List.last()
 
           case k_str do
             "initarg" ->
@@ -358,10 +360,12 @@ defmodule ExLisp.CLOS do
                 |> to_string()
                 |> String.trim_leading(":")
                 |> String.downcase()
+                |> String.split(".", parts: 2)
+                |> List.last()
                 |> String.replace("-", "_")
                 |> String.to_atom()
 
-              Map.update!(acc, :initargs, &[norm_kw | &1])
+              Map.update!(acc, :initargs, &(&1 ++ [norm_kw]))
 
             k when k in ["initform", "initform_fun"] ->
               if is_function(val, 0) do
@@ -401,9 +405,16 @@ defmodule ExLisp.CLOS do
   end
 
   defp compile_initform_fun(ast) do
+    eval_ast =
+      if ast != [] and is_list(ast) and not is_list(hd(ast)) do
+        ExLisp.Macro.lisp_data_to_ast(ast)
+      else
+        ast
+      end
+
     fn ->
       try do
-        ExLisp.Evaluator.eval(ast, %{}) |> ExLisp.Builtins.unwrap_mv_primary()
+        ExLisp.Evaluator.eval(eval_ast, %{}) |> ExLisp.Builtins.unwrap_mv_primary()
       rescue
         _ -> ast
       end
@@ -503,7 +514,8 @@ defmodule ExLisp.CLOS do
     class_info = find_class(class_name)
     slots = if class_info, do: class_info.slots, else: %{}
 
-    init_map = parse_initargs_kv(initargs)
+    ordered_initargs = normalize_initarg_pairs(initargs)
+    init_map = parse_initargs_kv(initargs) |> add_default_initargs(class_info)
 
     tid = :ets.new(:lisp_instance, [:set, :public])
     :ets.insert(tid, {:"$clos_class", class_name})
@@ -511,12 +523,17 @@ defmodule ExLisp.CLOS do
     Enum.each(slots, fn {slot_name, slot_def} ->
       # Check if any initarg matches
       init_val =
-        Enum.find_value(slot_def[:initargs] || [], fn initarg ->
-          case Map.fetch(init_map, initarg) do
-            {:ok, val} -> {:ok, val}
-            :error -> nil
+        Enum.find_value(ordered_initargs, fn {initarg, val} ->
+          if initarg in (slot_def[:initargs] || []) do
+            {:ok, val}
           end
-        end)
+        end) ||
+          Enum.find_value(slot_def[:initargs] || [], fn initarg ->
+            case Map.fetch(init_map, initarg) do
+              {:ok, val} -> {:ok, val}
+              :error -> nil
+            end
+          end)
 
       case init_val do
         {:ok, val} ->
@@ -841,7 +858,7 @@ defmodule ExLisp.CLOS do
         |> String.replace("-", "_")
         |> String.to_atom()
 
-      Map.put(acc, norm_k, v)
+      Map.put_new(acc, norm_k, v)
     end)
   end
 
@@ -858,7 +875,7 @@ defmodule ExLisp.CLOS do
               |> String.replace("-", "_")
               |> String.to_atom()
 
-            Map.put(acc, norm_k, v)
+            Map.put_new(acc, norm_k, v)
 
           _, acc ->
             acc
@@ -876,7 +893,7 @@ defmodule ExLisp.CLOS do
               |> String.replace("-", "_")
               |> String.to_atom()
 
-            Map.put(acc, norm_k, v)
+            Map.put_new(acc, norm_k, v)
 
           _, acc ->
             acc
@@ -885,6 +902,82 @@ defmodule ExLisp.CLOS do
   end
 
   defp parse_initargs_kv(_), do: %{}
+
+  defp normalize_initarg_pairs(initargs) when is_list(initargs) do
+    cond do
+      Keyword.keyword?(initargs) or (initargs != [] and is_tuple(hd(initargs))) ->
+        Enum.flat_map(initargs, fn
+          {key, val} -> [{normalize_initarg_name(key), val}]
+          _ -> []
+        end)
+
+      true ->
+        initargs
+        |> Enum.chunk_every(2)
+        |> Enum.flat_map(fn
+          [key, val] -> [{normalize_initarg_name(key), val}]
+          _ -> []
+        end)
+    end
+  end
+
+  defp normalize_initarg_pairs(initargs) when is_map(initargs) do
+    Enum.map(initargs, fn {key, val} -> {normalize_initarg_name(key), val} end)
+  end
+
+  defp normalize_initarg_pairs(_), do: []
+
+  defp add_default_initargs(init_map, %{options: options}) do
+    defaults =
+      Enum.find_value(options, fn
+        [key | values] ->
+          key_name =
+            key
+            |> to_string()
+            |> String.downcase()
+            |> String.trim_leading(":")
+            |> String.split(".", parts: 2)
+            |> List.last()
+
+          if key_name == "default_initargs", do: values
+
+        _ ->
+          nil
+      end) || []
+
+    defaults
+    |> Enum.chunk_every(2)
+    |> Enum.reduce(init_map, fn
+      [key, form], acc ->
+        normalized = normalize_initarg_name(key)
+
+        if Map.has_key?(acc, normalized) do
+          acc
+        else
+          Map.put(acc, normalized, eval_initform(form))
+        end
+
+      _, acc ->
+        acc
+    end)
+  end
+
+  defp add_default_initargs(init_map, _), do: init_map
+
+  defp normalize_initarg_name(name) do
+    name
+    |> to_string()
+    |> String.trim_leading(":")
+    |> String.downcase()
+    |> String.split(".", parts: 2)
+    |> List.last()
+    |> String.replace("-", "_")
+    |> String.to_atom()
+  end
+
+  defp eval_initform(form) do
+    compile_initform_fun(form).()
+  end
 
   def slot_value({:instance, _class, tid}, slot_name) do
     norm = normalize_slot_name(slot_name)

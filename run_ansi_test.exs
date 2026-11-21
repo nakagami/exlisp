@@ -273,6 +273,29 @@ suites = [
   {"UNUSE-PACKAGE", "packages/unuse-package.lsp"},
   {"USE-PACKAGE", "packages/use-package.lsp"},
   {"WITH-PACKAGE-ITERATOR", "packages/with-package-iterator.lsp"},
+  {"ABORT", "conditions/abort.lsp"},
+  {"ASSERT", "conditions/assert.lsp"},
+  {"CELL-ERROR-NAME", "conditions/cell-error-name.lsp"},
+  {"CERROR", "conditions/cerror.lsp"},
+  {"CHECK-TYPE", "conditions/check-type.lsp"},
+  {"COMPUTE-RESTARTS", "conditions/compute-restarts.lsp"},
+  {"CONDITION", "conditions/condition.lsp"},
+  {"CONTINUE", "conditions/continue.lsp"},
+  {"DEFINE-CONDITION", "conditions/define-condition.lsp"},
+  {"ERROR", "conditions/error.lsp"},
+  {"HANDLER-BIND", "conditions/handler-bind.lsp"},
+  {"HANDLER-CASE", "conditions/handler-case.lsp"},
+  {"IGNORE-ERRORS", "conditions/ignore-errors.lsp"},
+  {"INVOKE-DEBUGGER", "conditions/invoke-debugger.lsp"},
+  {"MAKE-CONDITION", "conditions/make-condition.lsp"},
+  {"MUFFLE-WARNING", "conditions/muffle-warning.lsp"},
+  {"RESTART-BIND", "conditions/restart-bind.lsp"},
+  {"RESTART-CASE", "conditions/restart-case.lsp"},
+  {"STORE-VALUE", "conditions/store-value.lsp"},
+  {"USE-VALUE", "conditions/use-value.lsp"},
+  {"WARN", "conditions/warn.lsp"},
+  {"WITH-CONDITION-RESTARTS", "conditions/with-condition-restarts.lsp"},
+  {"WITH-SIMPLE-RESTART", "conditions/with-simple-restart.lsp"},
   {"COPY-READTABLE", "reader/copy-readtable.lsp"},
   {"DISPATCH-MACRO-CHARACTERS", "reader/dispatch-macro-characters.lsp"},
   {"GET-MACRO-CHARACTER", "reader/get-macro-character.lsp"},
@@ -458,6 +481,7 @@ aux_files = [
   Path.join(ansi_test_dir, "auxiliary/subseq-aux.lsp"),
   Path.join(ansi_test_dir, "auxiliary/package-aux.lsp"),
   Path.join(ansi_test_dir, "auxiliary/packages00-aux.lsp"),
+  Path.join(ansi_test_dir, "auxiliary/define-condition-aux.lsp"),
   Path.join(ansi_test_dir, "auxiliary/numbers-aux.lsp"),
   Path.join(ansi_test_dir, "auxiliary/times-aux.lsp"),
   Path.join(ansi_test_dir, "auxiliary/gcd-aux.lsp"),
@@ -470,6 +494,8 @@ aux_files = [
   Path.join(ansi_test_dir, "auxiliary/fceiling-aux.lsp"),
   Path.join(ansi_test_dir, "auxiliary/ftruncate-aux.lsp"),
   Path.join(ansi_test_dir, "auxiliary/fround-aux.lsp"),
+  Path.join(ansi_test_dir, "cl-symbol-names.lsp"),
+  Path.join(ansi_test_dir, "universe.lsp"),
   Path.join(ansi_test_dir, "auxiliary/ansi-aux.lsp"),
   Path.join(ansi_test_dir, "cons-aux.lsp")
 ]
@@ -508,6 +534,7 @@ ExLisp.Env.put_fun(
     [symbol, package] -> ExLisp.Package.unintern(symbol, package)
   end, :unintern)
 )
+ExLisp.Condition.init_condition_hierarchy()
 ExLisp.Env.put_var(:"regression-test.*compile-tests*", nil)
 ExLisp.Env.put_var(:"regression-test.*compile_tests*", nil)
 ExLisp.Env.put_fun(:has_non_abort_restart, fn condition ->
