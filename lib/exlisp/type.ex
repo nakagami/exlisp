@@ -449,7 +449,9 @@ defmodule ExLisp.Type do
   end
 
   defp do_typep(val, :function) do
-    is_function(val) or match?(%ExLisp.Closure{}, val)
+    is_function(val) or match?(%ExLisp.Closure{}, val) or
+      (is_atom(val) and
+         (BuiltinFunction.builtin?(val) or ExLisp.Env.has_fun?(val)))
   end
 
   defp do_typep(val, type) when type in [:generic_function, :standard_generic_function] do

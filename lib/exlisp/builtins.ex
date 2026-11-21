@@ -7993,18 +7993,29 @@ defmodule ExLisp.Builtins do
 
       # Coerce to complex
       norm in [:complex] or (is_list(norm) and hd(norm) == :complex) ->
+        part_type =
+          case norm do
+            [:complex, type | _] when type != :* -> type
+            _ -> nil
+          end
+
+        convert_part = fn value ->
+          if part_type == nil, do: value, else: coerce(value, part_type)
+        end
+
         cond do
           is_float(object) ->
-            {:complex, object, 0.0}
+            {:complex, convert_part.(object), convert_part.(0.0)}
 
           is_integer(object) ->
-            object
+            {:complex, convert_part.(object), convert_part.(0)}
 
           match?(%ExLisp.Ratio{}, object) ->
-            object
+            {:complex, convert_part.(object), convert_part.(0)}
 
           match?({:complex, _, _}, object) ->
-            object
+            {:complex, real, imag} = object
+            {:complex, convert_part.(real), convert_part.(imag)}
 
           true ->
             raise ArgumentError, "Cannot coerce #{inspect(object)} to complex"
@@ -8406,15 +8417,7 @@ defmodule ExLisp.Builtins do
 
   def slot_exists_p(instance, slot_name), do: ExLisp.CLOS.slot_exists_p(instance, slot_name)
 
-  def class_of(obj) do
-    case ExLisp.CLOS.class_of(obj) do
-      class_name when is_atom(class_name) or is_binary(class_name) ->
-        ExLisp.CLOS.find_class(class_name) || class_name
-
-      other ->
-        other
-    end
-  end
+  def class_of(obj), do: ExLisp.CLOS.class_of(obj)
 
   def find_class(name), do: ExLisp.CLOS.find_class(name)
   def find_class(name, errorp), do: ExLisp.CLOS.find_class(name, errorp)
