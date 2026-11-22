@@ -59,6 +59,41 @@ defmodule ExLisp.CommonLispCompatibilityTest do
            |> Enum.member?("UIOP-SOURCE")
   end
 
+  test "destructive cons operations update shared list references" do
+    ExLisp.Env.reset()
+
+    assert ExLisp.eval("""
+           (let ((x (list 1 2))
+                 (y nil))
+             (setq y x)
+             (rplaca x 9)
+             (setf (cdr x) (list 3 4))
+             (list x y (car x) (cdr x)))
+           """) == [[9, 3, 4], [9, 3, 4], 9, [3, 4]]
+  end
+
+  test "circular cons mutation is observable and list-length detects it" do
+    ExLisp.Env.reset()
+
+    assert ExLisp.eval("""
+           (let ((x (list 1 2)))
+             (rplacd (cdr x) x)
+             (list (eq (cddr x) x) (list-length x)))
+           """) == [:t, nil]
+  end
+
+  test "destructive list operations preserve aliases" do
+    ExLisp.Env.reset()
+
+    assert ExLisp.eval("""
+           (let ((x (list 1 2))
+                 (y nil))
+             (setq y x)
+             (nconc x (list 3 4))
+             (list x y))
+           """) == [[1, 2, 3, 4], [1, 2, 3, 4]]
+  end
+
   setup do
     ExLisp.Env.reset()
     :ok

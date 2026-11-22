@@ -1887,6 +1887,10 @@ defmodule ExLisp.Builtins do
     do: ((xid != nil and xid == yid) or x == y) |> lisp_bool()
 
   def eq(x, y) when is_atom(x) and is_atom(y), do: (x === y) |> lisp_bool()
+
+  def eq(x, y) when is_list(x) and is_list(y),
+    do: (ExLisp.MutableCons.resolve(x) === ExLisp.MutableCons.resolve(y)) |> lisp_bool()
+
   def eq(x, y), do: :erts_debug.same(x, y) |> lisp_bool()
   def eqt(x, y), do: eq(x, y)
 
@@ -2421,10 +2425,7 @@ defmodule ExLisp.Builtins do
 
   # --- List operations ---
 
-  def rplaca([_head | tail], object), do: [object | tail]
-
-  def rplaca(other, _object),
-    do: raise(ArgumentError, "rplaca requires a cons cell, got: #{inspect(other)}")
+  def rplaca(cons, object), do: ExLisp.MutableCons.rplaca(cons, object)
 
   def rplaca(args) when is_list(args) do
     case args do
@@ -2433,10 +2434,7 @@ defmodule ExLisp.Builtins do
     end
   end
 
-  def rplacd([head | _tail], object), do: [head | object]
-
-  def rplacd(other, _object),
-    do: raise(ArgumentError, "rplacd requires a cons cell, got: #{inspect(other)}")
+  def rplacd(cons, object), do: ExLisp.MutableCons.rplacd(cons, object)
 
   def rplacd(args) when is_list(args) do
     case args do
@@ -2455,15 +2453,23 @@ defmodule ExLisp.Builtins do
     if t in [nil, []], do: [h], else: [h | t]
   end
 
-  def car([head | _]), do: head
-  def car(nil), do: nil
-  def car([]), do: nil
-  def car(other), do: raise(ArgumentError, "car requires a list or nil, got: #{inspect(other)}")
+  def car(cons) do
+    case ExLisp.MutableCons.resolve(cons) do
+      [head | _] -> ExLisp.MutableCons.resolve(head)
+      nil -> nil
+      [] -> nil
+      other -> raise(ArgumentError, "car requires a list or nil, got: #{inspect(other)}")
+    end
+  end
 
-  def cdr([_ | tail]), do: tail
-  def cdr(nil), do: nil
-  def cdr([]), do: nil
-  def cdr(other), do: raise(ArgumentError, "cdr requires a list or nil, got: #{inspect(other)}")
+  def cdr(cons) do
+    case ExLisp.MutableCons.resolve(cons) do
+      [_ | tail] -> ExLisp.MutableCons.resolve(tail)
+      nil -> nil
+      [] -> nil
+      other -> raise(ArgumentError, "cdr requires a list or nil, got: #{inspect(other)}")
+    end
+  end
 
   def first(list), do: car(list)
   def rest(list), do: cdr(list)
@@ -2620,32 +2626,43 @@ defmodule ExLisp.Builtins do
         single
 
       _ ->
-        [last | rev_leading] = Enum.reverse(norm_lists)
-        leading = Enum.reverse(rev_leading)
+        result = nconc_result(norm_lists)
+        leading = Enum.drop(norm_lists, -1)
 
-        Enum.reduce(Enum.reverse(leading), last, fn list, acc ->
-          cond do
-            list in [nil, []] ->
-              acc
-
-            is_list(list) ->
-              cars = collect_cars_for_nconc(list, [])
-
-              Enum.reduce(cars, acc, fn elem, tail ->
-                [elem | tail]
-              end)
-
-            true ->
-              raise ArgumentError,
-                    "nconc requires list arguments except possibly the last, got: #{inspect(list)}"
-          end
+        leading
+        |> Enum.with_index()
+        |> Enum.each(fn {original, index} ->
+          suffix = nconc_result(Enum.drop(norm_lists, index))
+          ExLisp.MutableCons.replace(original, suffix)
         end)
+
+        result
     end
   end
 
   def nconc(a, b), do: nconc([a, b])
   def nconc(a, b, c), do: nconc([a, b, c])
   def nconc(a, b, c, d), do: nconc([a, b, c, d])
+
+  defp nconc_result(norm_lists) do
+    [last | rev_leading] = Enum.reverse(norm_lists)
+    leading = Enum.reverse(rev_leading)
+
+    Enum.reduce(Enum.reverse(leading), last, fn list, acc ->
+      cond do
+        list in [nil, []] ->
+          acc
+
+        is_list(list) ->
+          cars = collect_cars_for_nconc(list, [])
+          Enum.reduce(cars, acc, fn elem, tail -> [elem | tail] end)
+
+        true ->
+          raise ArgumentError,
+                "nconc requires list arguments except possibly the last, got: #{inspect(list)}"
+      end
+    end)
+  end
 
   defp collect_cars_for_nconc([], acc), do: acc
   defp collect_cars_for_nconc([head, :., _tail | _], acc), do: [head | acc]
@@ -2711,7 +2728,9 @@ defmodule ExLisp.Builtins do
         seq
 
       true ->
-        reverse(seq)
+        result = reverse(seq)
+        if is_list(seq), do: ExLisp.MutableCons.replace(seq, result)
+        result
     end
   end
 
@@ -3507,20 +3526,10 @@ defmodule ExLisp.Builtins do
   end
 
   def list_length(list) when list in [nil, []], do: 0
-
-  def list_length(list) when is_list(list) do
-    count_list_length(list, 0)
-  end
+  def list_length(list) when is_list(list), do: ExLisp.MutableCons.list_length(list)
 
   def list_length(other),
     do: raise(ArgumentError, "list-length requires a list, got: #{inspect(other)}")
-
-  defp count_list_length([], count), do: count
-
-  defp count_list_length([_ | tail], count) when is_list(tail),
-    do: count_list_length(tail, count + 1)
-
-  defp count_list_length([_ | _], _count), do: raise(ArgumentError, "dotted list")
 
   def adjoin(args) when is_list(args) do
     case args do

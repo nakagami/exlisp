@@ -83,6 +83,7 @@ defmodule ExLisp.Env do
   """
   def reset do
     ensure_env()
+    ExLisp.MutableCons.reset()
 
     for {{tag, _} = key, _} <- :persistent_term.get(),
         tag in [

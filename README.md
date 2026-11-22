@@ -350,10 +350,15 @@ ExLisp.Global.add(1, 2)
 
 ## Limitations and Notes
 
-### Immutability and Circular/Infinite Lists
+### Destructive Cons Cells and Circular Lists
 
-Since ExLisp runs on the BEAM (Erlang/Elixir) virtual machine, all runtime data structures are **immutable and acyclic (DAG)**.
+ExLisp preserves BEAM-native immutable values for Elixir interoperability while
+tracking destructive `car`/`cdr` updates in a Lisp-level cons registry.
+`rplaca`, `rplacd`, `setf` on cons places, `nconc`, and shared aliases observe the
+updated cells. Circular lists can be constructed with `rplacd` or `setf`;
+operations such as `list-length` detect the cycle.
 
-- Destructive cons cell modifications (such as `(setf (cdddr foo) foo)` or `rplacd`) cannot create circular or infinite lists.
-- To handle infinite sequences or repeating streams, use lazy evaluation (e.g. closures or stream generator patterns) instead.
+The Elixir-facing term remains an immutable snapshot rather than an actual cyclic
+BEAM term. When interoperating with Elixir, pass circular lists through Lisp
+operations instead of recursively inspecting the returned BEAM representation.
 

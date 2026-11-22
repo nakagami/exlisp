@@ -134,61 +134,64 @@ defmodule ExLisp.Evaluator do
   end
 
   defp eval_symbol(sym, env) when is_atom(sym) do
-    case env do
-      %{^sym => binding} ->
-        case binding do
-          {:box, ref} ->
-            case :erlang.get(ref) do
-              :undefined -> Env.get_var(sym)
-              val -> val
-            end
+    value =
+      case env do
+        %{^sym => binding} ->
+          case binding do
+            {:box, ref} ->
+              case :erlang.get(ref) do
+                :undefined -> Env.get_var(sym)
+                val -> val
+              end
 
-          {:box, ref, default_val} ->
-            case :erlang.get(ref) do
-              :undefined -> default_val
-              val -> val
-            end
+            {:box, ref, default_val} ->
+              case :erlang.get(ref) do
+                :undefined -> default_val
+                val -> val
+              end
 
-          {:mutated, v_name} ->
-            case :erlang.get(v_name) do
-              :undefined -> Env.get_var(sym)
-              val -> val
-            end
+            {:mutated, v_name} ->
+              case :erlang.get(v_name) do
+                :undefined -> Env.get_var(sym)
+                val -> val
+              end
 
-          val ->
-            val
-        end
+            val ->
+              val
+          end
 
-      %{{:symbol_macro, ^sym} => expansion} ->
-        eval(expansion, env)
+        %{{:symbol_macro, ^sym} => expansion} ->
+          eval(expansion, env)
 
-      _ ->
-        cond do
-          sym in [nil, :t, :T] ->
-            if sym == nil, do: nil, else: :t
+        _ ->
+          cond do
+            sym in [nil, :t, :T] ->
+              if sym == nil, do: nil, else: :t
 
-          Env.has_symbol_macro?(sym) ->
-            eval(Env.get_symbol_macro(sym), env)
+            Env.has_symbol_macro?(sym) ->
+              eval(Env.get_symbol_macro(sym), env)
 
-          keyword_symbol?(sym) ->
-            sym
+            keyword_symbol?(sym) ->
+              sym
 
-          true ->
-            case :erlang.get(sym) do
-              :undefined ->
-                case Env.get_var(sym) do
-                  :unbound ->
-                    raise RuntimeError, "Unbound variable: #{inspect(sym)}"
+            true ->
+              case :erlang.get(sym) do
+                :undefined ->
+                  case Env.get_var(sym) do
+                    :unbound ->
+                      raise RuntimeError, "Unbound variable: #{inspect(sym)}"
 
-                  val ->
-                    val
-                end
+                    val ->
+                      val
+                  end
 
-              val ->
-                val
-            end
-        end
-    end
+                val ->
+                  val
+              end
+          end
+      end
+
+    ExLisp.MutableCons.resolve(value)
   end
 
   defp keyword_symbol?(sym) when is_atom(sym) do
@@ -1247,6 +1250,11 @@ defmodule ExLisp.Evaluator do
              :_cl_with_mutex_,
              :"with-mutex",
              :"sb-thread:with-mutex",
+             :"sb-thread.with-mutex",
+             :"sb-thread:with_mutex",
+             :"sb-thread.with_mutex",
+             :"sb_thread:with_mutex",
+             :"sb_thread.with_mutex",
              :_sb_thread_with_mutex_
            ] ->
         eval_with_mutex(args, env)
@@ -2155,19 +2163,12 @@ defmodule ExLisp.Evaluator do
 
           op in [:car, :_cl_car_] ->
             [target_node | _] = place_args
-            {target_getter, target_setter} = get_setf_expansion(target_node, env)
+            {target_getter, _target_setter} = get_setf_expansion(target_node, env)
             getter = fn -> Builtins.car(target_getter.()) end
 
             setter = fn unwrapped ->
               cur = target_getter.()
-
-              new_target =
-                case cur do
-                  [_ | tail] -> [unwrapped | tail]
-                  _ -> [unwrapped]
-                end
-
-              target_setter.(new_target)
+              Builtins.rplaca(cur, unwrapped)
               unwrapped
             end
 
@@ -2175,19 +2176,12 @@ defmodule ExLisp.Evaluator do
 
           op in [:cdr, :_cl_cdr_] ->
             [target_node | _] = place_args
-            {target_getter, target_setter} = get_setf_expansion(target_node, env)
+            {target_getter, _target_setter} = get_setf_expansion(target_node, env)
             getter = fn -> Builtins.cdr(target_getter.()) end
 
             setter = fn unwrapped ->
               cur = target_getter.()
-
-              new_target =
-                case cur do
-                  [head | _] -> [head | unwrapped]
-                  _ -> unwrapped
-                end
-
-              target_setter.(new_target)
+              Builtins.rplacd(cur, unwrapped)
               unwrapped
             end
 
@@ -2196,13 +2190,12 @@ defmodule ExLisp.Evaluator do
           op in [:nth, :_cl_nth_] ->
             [idx_node, target_node | _] = place_args
             idx = eval(idx_node, env) |> Builtins.unwrap_mv_primary()
-            {target_getter, target_setter} = get_setf_expansion(target_node, env)
+            {target_getter, _target_setter} = get_setf_expansion(target_node, env)
             getter = fn -> Builtins.nth(idx, target_getter.()) end
 
             setter = fn unwrapped ->
               cur = target_getter.()
-              new_target = List.replace_at(cur, idx, unwrapped)
-              target_setter.(new_target)
+              ExLisp.MutableCons.set_nth(idx, cur, unwrapped)
               unwrapped
             end
 
