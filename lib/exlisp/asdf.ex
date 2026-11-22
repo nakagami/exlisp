@@ -587,13 +587,20 @@ defmodule ExLisp.ASDF do
         {nodes, aliases, name_ids} =
           collect_single_component(component, prefix, aliases)
 
+        component_name = normalize_component_name(component)
+
         aliases =
-          Map.update(
-            aliases,
-            normalize_component_name(component),
-            name_ids,
-            &Enum.uniq(&1 ++ name_ids)
-          )
+          case {Map.get(aliases, component_name), component} do
+            {existing, {:module, _, _, _}} when not is_nil(existing) ->
+              aliases
+
+            {existing, _} ->
+              if existing do
+                Map.put(aliases, component_name, Enum.uniq(existing ++ name_ids))
+              else
+                Map.put(aliases, component_name, name_ids)
+              end
+          end
 
         {{nodes, name_ids}, aliases}
       end)

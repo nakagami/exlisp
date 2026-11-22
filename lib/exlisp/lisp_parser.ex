@@ -575,8 +575,6 @@ defmodule ExLisp.LispParser do
     end
   end
 
-  @exponent_regex ~r/^([+-]?(?:[0-9]+\.[0-9]*|\.[0-9]+|[0-9]+))[dDsSfFlL]([+-]?[0-9]+)$/
-
   # Parse number
   defp parse_number(str, line) do
     # Standalone punctuation is not a number
@@ -598,23 +596,18 @@ defmodule ExLisp.LispParser do
                   {:ok, {:float, line, float_val}}
 
                 _ ->
-                  if has_exponent_suffix?(str) do
-                    norm_str = Regex.replace(@exponent_regex, str, "\\1e\\2")
+                  case normalize_exponent_number(str) do
+                    {:ok, norm_str} ->
+                      case Float.parse(norm_str) do
+                        {float_val, ""} ->
+                          {:ok, {:float, line, float_val}}
 
-                    norm_str =
-                      if String.contains?(norm_str, ".e"),
-                        do: String.replace(norm_str, ".e", ".0e"),
-                        else: norm_str
+                        _ ->
+                          :not_number
+                      end
 
-                    case Float.parse(norm_str) do
-                      {float_val, ""} ->
-                        {:ok, {:float, line, float_val}}
-
-                      _ ->
-                        :not_number
-                    end
-                  else
-                    :not_number
+                    :error ->
+                      :not_number
                   end
               end
           end
@@ -622,8 +615,39 @@ defmodule ExLisp.LispParser do
     end
   end
 
-  defp has_exponent_suffix?(str) do
-    :binary.match(str, ["d", "D", "s", "S", "f", "F", "l", "L"]) != :nomatch
+  defp normalize_exponent_number(str) do
+    Enum.find_value(["d", "D", "s", "S", "f", "F", "l", "L"], :error, fn marker ->
+      case :binary.match(str, marker) do
+        {index, 1} when index > 0 ->
+          mantissa = :binary.part(str, 0, index)
+          exponent = :binary.part(str, index + 1, byte_size(str) - index - 1)
+
+          mantissa_number? =
+            case Float.parse(mantissa) do
+              {_, ""} -> true
+              _ -> match?({_, ""}, Integer.parse(mantissa))
+            end
+
+          exponent_number? =
+            case Integer.parse(exponent) do
+              {_, ""} -> true
+              _ -> false
+            end
+
+          if mantissa_number? and exponent_number? do
+            normalized = mantissa <> "e" <> exponent
+
+            {:ok,
+             if(String.contains?(normalized, ".e"),
+               do: String.replace(normalized, ".e", ".0e"),
+               else: normalized
+             )}
+          end
+
+        _ ->
+          nil
+      end
+    end)
   end
 
   defp parse_ratio(str, line) do

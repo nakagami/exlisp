@@ -1127,6 +1127,8 @@ defmodule ExLisp.Package do
       "UNIX-NAMESTRING",
       "DELETE-FILE-IF-EXISTS",
       "GETCWD",
+      "DEFAULT-TEMPORARY-DIRECTORY",
+      "ENSURE-DIRECTORY-PATHNAME",
       "WITH-TEMPORARY-FILE",
       "RUN-PROGRAM",
       "QUIT"
@@ -1156,6 +1158,161 @@ defmodule ExLisp.Package do
       use_list: ["COMMON-LISP"],
       used_by_list: [],
       external_symbols: MapSet.new(["CREATE-SERVER", "STOP-SERVER"]),
+      internal_symbols: MapSet.new()
+    }
+
+    ppcre_pkg = %ExLisp.Package{
+      name: "CL-PPCRE",
+      nicknames: ["PPCRE"],
+      use_list: ["COMMON-LISP"],
+      used_by_list: [],
+      external_symbols:
+        MapSet.new([
+          "CREATE-SCANNER",
+          "SCAN",
+          "SCAN-TO-STRINGS",
+          "SPLIT",
+          "REGEX-REPLACE",
+          "REGEX-REPLACE-ALL",
+          "QUOTE-META-CHARS"
+        ]),
+      internal_symbols: MapSet.new()
+    }
+
+    babel_encodings_pkg = %ExLisp.Package{
+      name: "BABEL-ENCODINGS",
+      nicknames: [],
+      use_list: ["COMMON-LISP", "ALEXANDRIA"],
+      used_by_list: [],
+      external_symbols:
+        MapSet.new([
+          "LIST-CHARACTER-ENCODINGS",
+          "GET-CHARACTER-ENCODING",
+          "*DEFAULT-CHARACTER-ENCODING*"
+        ]),
+      internal_symbols: MapSet.new()
+    }
+
+    babel_pkg = %ExLisp.Package{
+      name: "BABEL",
+      nicknames: [],
+      use_list: ["COMMON-LISP", "BABEL-ENCODINGS"],
+      used_by_list: [],
+      external_symbols:
+        MapSet.new([
+          "STRING-TO-OCTETS",
+          "OCTETS-TO-STRING",
+          "STRING-SIZE-IN-OCTETS",
+          "VECTOR-SIZE-IN-CHARS",
+          "LIST-CHARACTER-ENCODINGS",
+          "*DEFAULT-CHARACTER-ENCODING*"
+        ]),
+      internal_symbols: MapSet.new()
+    }
+
+    quri_pkg = %ExLisp.Package{
+      name: "QURI",
+      nicknames: [],
+      use_list: ["COMMON-LISP"],
+      used_by_list: [],
+      external_symbols:
+        MapSet.new([
+          "URI",
+          "URI-SCHEME",
+          "URI-HOST",
+          "URI-PORT",
+          "URI-PATH",
+          "URI-QUERY",
+          "URL-ENCODE",
+          "URL-DECODE",
+          "URL-ENCODE-PARAMS",
+          "URL-DECODE-PARAMS",
+          "MERGE-URIS"
+        ]),
+      internal_symbols: MapSet.new()
+    }
+
+    yason_pkg = %ExLisp.Package{
+      name: "YASON",
+      nicknames: [],
+      use_list: ["COMMON-LISP"],
+      used_by_list: [],
+      external_symbols:
+        MapSet.new([
+          "PARSE",
+          "ENCODE",
+          "ENCODE-ALIST",
+          "ENCODE-PLIST",
+          "ENCODE-SCALAR",
+          "MAKE-JSON-OUTPUT-STREAM",
+          "WITH-OUTPUT",
+          "WITH-OUTPUT-TO-STRING*"
+        ]),
+      internal_symbols: MapSet.new()
+    }
+
+    ironclad_pkg = %ExLisp.Package{
+      name: "IRONCLAD",
+      nicknames: ["CRYPTO"],
+      use_list: ["COMMON-LISP"],
+      used_by_list: [],
+      external_symbols:
+        MapSet.new([
+          "RANDOM-DATA",
+          "BYTE-ARRAY-TO-HEX-STRING",
+          "HEX-STRING-TO-BYTE-ARRAY",
+          "DIGEST-SEQUENCE",
+          "DIGEST-FILE",
+          "MAKE-DIGEST",
+          "SHA1",
+          "SHA224",
+          "SHA256",
+          "SHA384",
+          "SHA512",
+          "MD5"
+        ]),
+      internal_symbols: MapSet.new()
+    }
+
+    gray_streams_pkg = %ExLisp.Package{
+      name: "TRIVIAL-GRAY-STREAMS",
+      nicknames: [],
+      use_list: ["COMMON-LISP"],
+      used_by_list: [],
+      external_symbols:
+        MapSet.new([
+          "FUNDAMENTAL-STREAM",
+          "FUNDAMENTAL-OUTPUT-STREAM",
+          "FUNDAMENTAL-INPUT-STREAM",
+          "FUNDAMENTAL-CHARACTER-STREAM",
+          "FUNDAMENTAL-BINARY-STREAM",
+          "STREAM-WRITE-BYTE",
+          "STREAM-WRITE-SEQUENCE",
+          "STREAM-WRITE-CHAR",
+          "STREAM-WRITE-STRING",
+          "STREAM-ELEMENT-TYPE",
+          "STREAM-FINISH-OUTPUT",
+          "STREAM-FILE-POSITION",
+          "OPEN-STREAM-P"
+        ]),
+      internal_symbols: MapSet.new()
+    }
+
+    flexi_streams_pkg = %ExLisp.Package{
+      name: "FLEXI-STREAMS",
+      nicknames: ["FLEX"],
+      use_list: ["COMMON-LISP", "TRIVIAL-GRAY-STREAMS"],
+      used_by_list: [],
+      external_symbols:
+        MapSet.new([
+          "VECTOR-STREAM",
+          "VECTOR-STREAM-VECTOR",
+          "MAKE-IN-MEMORY-INPUT-STREAM",
+          "MAKE-IN-MEMORY-OUTPUT-STREAM",
+          "GET-OUTPUT-STREAM-SEQUENCE",
+          "STRING-TO-OCTETS",
+          "OCTETS-TO-STRING"
+        ]),
       internal_symbols: MapSet.new()
     }
 
@@ -1245,6 +1402,14 @@ defmodule ExLisp.Package do
     save_package(uiop_pkg)
     save_package(uiop_image_pkg)
     save_package(swank_pkg)
+    save_package(ppcre_pkg)
+    save_package(babel_encodings_pkg)
+    save_package(babel_pkg)
+    save_package(quri_pkg)
+    save_package(yason_pkg)
+    save_package(ironclad_pkg)
+    save_package(gray_streams_pkg)
+    save_package(flexi_streams_pkg)
     save_package(sb_thread_pkg)
     save_package(sb_ext_pkg)
     save_package(sb_posix_pkg)
@@ -1793,13 +1958,13 @@ defmodule ExLisp.Package do
 
     case norm_key do
       "NICKNAMES" ->
-        nicks = Enum.map(args, &symbol_to_str/1) |> Enum.reject(&(&1 == ""))
+        nicks = Enum.map(args, &package_designator_string/1) |> Enum.reject(&(&1 == ""))
         %{pkg | nicknames: Enum.uniq(pkg.nicknames ++ nicks)}
 
       "USE" ->
         uses =
           args
-          |> Enum.map(&symbol_to_str/1)
+          |> Enum.map(&package_designator_string/1)
           |> Enum.reject(&(&1 == ""))
           |> Enum.map(fn u ->
             u_pkg = find_package!(u)
@@ -1818,7 +1983,7 @@ defmodule ExLisp.Package do
       "USE-REEXPORT" ->
         uses =
           args
-          |> Enum.map(&symbol_to_str/1)
+          |> Enum.map(&package_designator_string/1)
           |> Enum.reject(&(&1 == ""))
           |> Enum.map(fn source ->
             find_package!(source)
@@ -1932,8 +2097,10 @@ defmodule ExLisp.Package do
     Enum.each(List.flatten(Map.get(option_groups, "NICKNAMES", [])), fn nickname ->
       nickname = package_designator_string(nickname)
 
-      if nickname != name and find_package(nickname) do
-        ExLisp.Condition.error(:package_error, package: find_package(nickname))
+      existing = find_package(nickname)
+
+      if (nickname != name and existing) && existing.name != name do
+        ExLisp.Condition.error(:package_error, package: existing)
       end
     end)
 
@@ -2425,6 +2592,23 @@ defmodule ExLisp.Package do
   end
 
   def register_read_symbol(symbol) when is_atom(symbol) do
+    package_name = Process.get(:exlisp_current_package, "COMMON-LISP-USER")
+    cache_key = {:"$exlisp_read_symbol$", package_name, symbol}
+
+    case Process.get(cache_key, :not_cached) do
+      :not_cached ->
+        result = do_register_read_symbol(symbol)
+        Process.put(cache_key, result)
+        result
+
+      result ->
+        result
+    end
+  end
+
+  def register_read_symbol(symbol), do: symbol
+
+  defp do_register_read_symbol(symbol) do
     atom_name = Atom.to_string(symbol)
 
     cond do
@@ -2470,8 +2654,6 @@ defmodule ExLisp.Package do
         end
     end
   end
-
-  def register_read_symbol(symbol), do: symbol
 
   # --- Package Qualified Symbol Resolution ---
 

@@ -292,7 +292,8 @@ defmodule ExLisp.Builtins do
             ExLisp.Env.call_fun(down_sym, mapped_args)
 
           true ->
-            raise RuntimeError, "Undefined function: #{inspect(sym)}"
+            raise RuntimeError,
+                  "Undefined function: #{inspect(sym)} (package #{ExLisp.Package.current_package()}, macro callsite #{inspect(Process.get(:exlisp_macro_callsite_package))})"
         end
     end
   end
@@ -6185,6 +6186,9 @@ defmodule ExLisp.Builtins do
           _ -> symbol_name(val)
         end
 
+      match?({:__keyword__, _}, val) ->
+        val |> elem(1) |> symbol_name()
+
       match?(%ExLisp.Symbol{}, val) ->
         symbol_name(val)
 
@@ -6602,6 +6606,7 @@ defmodule ExLisp.Builtins do
   end
 
   def to_string_val(val) when is_binary(val), do: val
+  def to_string_val({:__keyword__, value}), do: symbol_name(value)
   def to_string_val(%ExLisp.Symbol{} = sym), do: symbol_name(sym)
   def to_string_val(%ExLisp.Character{code: code}), do: List.to_string([code])
   def to_string_val(val) when is_atom(val), do: symbol_name(val)
@@ -8762,6 +8767,14 @@ defmodule ExLisp.Builtins do
   def delete_file_if_exists(path), do: if(File.rm(to_string_val(path)) == :ok, do: :t, else: nil)
   def getcwd([]), do: File.cwd!()
   def getcwd, do: File.cwd!()
+
+  def default_temporary_directory([]), do: ExLisp.Pathname.pathname(System.tmp_dir!() <> "/")
+  def default_temporary_directory, do: ExLisp.Pathname.pathname(System.tmp_dir!() <> "/")
+
+  def ensure_directory_pathname(path) do
+    value = path |> to_string_val() |> String.trim_trailing("/")
+    ExLisp.Pathname.pathname(value <> "/")
+  end
 
   def print_condition_backtrace(args) when is_list(args) do
     [condition | opts] = args

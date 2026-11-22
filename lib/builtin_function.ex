@@ -226,6 +226,12 @@ defmodule BuiltinFunction do
     :"uiop:delete-file-if-exists" => {:delete_file_if_exists, :delete_file_if_exists},
     :"uiop.getcwd" => {:getcwd, :getcwd},
     :"uiop:getcwd" => {:getcwd, :getcwd},
+    :"uiop.default-temporary-directory" =>
+      {:default_temporary_directory, :default_temporary_directory},
+    :"uiop:default-temporary-directory" =>
+      {:default_temporary_directory, :default_temporary_directory},
+    :"uiop.ensure-directory-pathname" => {:ensure_directory_pathname, :ensure_directory_pathname},
+    :"uiop:ensure-directory-pathname" => {:ensure_directory_pathname, :ensure_directory_pathname},
     :"uiop:run-program" => {:run_program, :run_program},
     :"uiop:quit" => {:quit, :quit},
     :"uiop/image:print-condition-backtrace" =>
@@ -1569,25 +1575,24 @@ defmodule BuiltinFunction do
   """
   def canonical_name(name) when is_binary(name) do
     down_str = String.downcase(name)
+    cache_key = {:"$exlisp_canonical_name$", down_str}
 
-    case String.split(down_str, ~r/::?|\./, parts: 2) do
-      [pkg, sym] when pkg in @known_package_prefixes ->
-        norm_atom = sym |> String.replace("-", "_") |> String.to_atom()
-        sym_atom = String.to_atom(sym)
+    case Process.get(cache_key, :not_cached) do
+      :not_cached ->
+        result =
+          case split_qualified_name(down_str) do
+            [pkg, sym] when pkg in @known_package_prefixes ->
+              lookup_mapping_name(sym)
 
-        case Map.get(@builtin_mappings, sym_atom) do
-          {canonical, _} ->
-            {:ok, canonical}
+            _ ->
+              canonical_name(String.to_atom(down_str))
+          end
 
-          nil ->
-            case Map.get(@builtin_mappings, norm_atom) do
-              {canonical, _} -> {:ok, canonical}
-              nil -> :error
-            end
-        end
+        Process.put(cache_key, result)
+        result
 
-      _ ->
-        canonical_name(String.to_atom(down_str))
+      result ->
+        result
     end
   end
 
@@ -1598,68 +1603,118 @@ defmodule BuiltinFunction do
 
       nil ->
         str = atom |> Atom.to_string() |> String.downcase()
+        cache_key = {:"$exlisp_canonical_name$", str}
 
-        case String.split(str, ~r/::?|\./, parts: 2) do
-          [pkg, sym] when pkg in @known_package_prefixes ->
-            norm_atom = sym |> String.replace("-", "_") |> String.to_atom()
-            sym_atom = String.to_atom(sym)
+        case Process.get(cache_key, :not_cached) do
+          :not_cached ->
+            result =
+              case split_qualified_name(str) do
+                [pkg, sym] when pkg in @known_package_prefixes ->
+                  lookup_mapping_name(sym)
 
-            case Map.get(@builtin_mappings, sym_atom) do
-              {canonical, _} ->
-                {:ok, canonical}
+                _ ->
+                  down_atom = String.to_atom(str)
+                  norm_atom = str |> String.replace("-", "_") |> String.to_atom()
 
-              nil ->
-                case Map.get(@builtin_mappings, norm_atom) do
-                  {canonical, _} -> {:ok, canonical}
-                  nil -> :error
-                end
-            end
+                  case Map.get(@builtin_mappings, down_atom) do
+                    {canonical, _} ->
+                      {:ok, canonical}
 
-          _ ->
-            down_atom = String.to_atom(str)
-            norm_atom = str |> String.replace("-", "_") |> String.to_atom()
+                    nil ->
+                      case Map.get(@builtin_mappings, norm_atom) do
+                        {canonical, _} -> {:ok, canonical}
+                        nil -> :error
+                      end
+                  end
+              end
 
-            case Map.get(@builtin_mappings, down_atom) do
-              {canonical, _} ->
-                {:ok, canonical}
+            Process.put(cache_key, result)
+            result
 
-              nil ->
-                case Map.get(@builtin_mappings, norm_atom) do
-                  {canonical, _} -> {:ok, canonical}
-                  nil -> :error
-                end
-            end
+          result ->
+            result
         end
     end
   end
 
   def canonical_name(_), do: :error
 
-  def visible_canonical_name(op) do
-    case canonical_name(op) do
-      {:ok, canonical} ->
-        if extension_builtin_visible?(op, canonical), do: {:ok, canonical}, else: :error
+  defp split_qualified_name(name) do
+    case :binary.matches(name, [".", ":", "::"]) do
+      [] ->
+        [name]
 
-      error ->
-        error
+      [{index, length} | _] ->
+        package = :binary.part(name, 0, index)
+
+        symbol =
+          :binary.part(name, index + length, byte_size(name) - index - length)
+          |> String.trim_leading(":")
+
+        [package, symbol]
     end
   end
 
-  defp extension_builtin_visible?(op, canonical) do
-    package =
-      op
-      |> to_string()
-      |> String.split(~r/[:.]/, parts: 2)
-      |> case do
-        [package, _name] -> package |> String.replace("_", "-") |> String.upcase()
-        _ -> nil
-      end
+  defp lookup_mapping_name(sym) do
+    sym_atom = String.to_atom(sym)
 
+    case Map.get(@builtin_mappings, sym_atom) do
+      {canonical, _} ->
+        {:ok, canonical}
+
+      nil ->
+        norm_atom = sym |> String.replace("-", "_") |> String.to_atom()
+
+        case Map.get(@builtin_mappings, norm_atom) do
+          {canonical, _} -> {:ok, canonical}
+          nil -> :error
+        end
+    end
+  end
+
+  def visible_canonical_name(op) do
     current =
       try do
         ExLisp.Package.current_package()
       rescue
         _ -> "COMMON-LISP-USER"
+      end
+
+    cache_key = {:"$exlisp_visible_canonical$", op, current}
+
+    case Process.get(cache_key, :not_cached) do
+      :not_cached ->
+        result =
+          case canonical_name(op) do
+            {:ok, canonical} ->
+              if extension_builtin_visible?(op, canonical, current),
+                do: {:ok, canonical},
+                else: :error
+
+            error ->
+              error
+          end
+
+        Process.put(cache_key, result)
+        result
+
+      result ->
+        result
+    end
+  end
+
+  defp extension_builtin_visible?(op, canonical, current) do
+    package =
+      case :binary.match(to_string(op), [".", ":"]) do
+        {index, _length} ->
+          op
+          |> to_string()
+          |> :binary.part(0, index)
+          |> String.replace("_", "-")
+          |> String.upcase()
+
+        :nomatch ->
+          nil
       end
 
     cond do

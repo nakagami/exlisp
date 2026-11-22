@@ -290,4 +290,30 @@ defmodule QuicklispTest do
     assert is_list(ExLisp.eval("(ql:system-apropos \"alexandria\")"))
     assert ExLisp.eval("(ql:where-is-system :alexandria)") != nil
   end
+
+  test "web and crypto compatibility backends load real library graphs" do
+    assert ExLisp.eval("(ql:quickload :babel)") != nil
+
+    assert ExLisp.eval("""
+           (babel:octets-to-string
+             (babel:string-to-octets "héllo"))
+           """) == "héllo"
+
+    assert ExLisp.eval("(ql:quickload :cl-ppcre)") != nil
+
+    assert ExLisp.eval("(multiple-value-list (cl-ppcre:scan \"a+\" \"caaad\"))") ==
+             [1, 4, [], []]
+
+    assert ExLisp.eval("(ql:quickload :quri)") != nil
+    assert ExLisp.eval("(quri:url-encode \"a b\")") == "a%20b"
+
+    assert ExLisp.eval("(ql:quickload :ironclad)") != nil
+
+    assert String.length(
+             ExLisp.eval("(ironclad:byte-array-to-hex-string (ironclad:random-data 4))")
+           ) == 8
+
+    assert ExLisp.eval("(ql:quickload :ningle)") != nil
+    assert ExLisp.eval("(ql:quickload :clack)") != nil
+  end
 end

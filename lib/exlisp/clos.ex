@@ -1735,11 +1735,10 @@ defmodule ExLisp.CLOS do
 
   defp normalize_name(name) do
     normalized = ExLisp.Symbol.normalize_name(name)
+    symbol_text = Atom.to_string(normalized)
 
-    case Atom.to_string(normalized) |> String.split(".", parts: 2) do
-      [package, local] ->
-        package = String.upcase(package) |> String.replace("_", "-")
-
+    case longest_package_qualified_parts(symbol_text) do
+      {package, local} ->
         case ExLisp.Package.find_symbol(String.upcase(local) |> String.replace("_", "-"), package) do
           [:_values_, [resolved | _]] when not is_nil(resolved) ->
             ExLisp.Symbol.normalize_name(ExLisp.Builtins.symbol_name(resolved))
@@ -1748,8 +1747,31 @@ defmodule ExLisp.CLOS do
             normalized
         end
 
-      _ ->
+      nil ->
         normalized
+    end
+  end
+
+  defp longest_package_qualified_parts(symbol_text) do
+    parts = String.split(symbol_text, ".")
+
+    if length(parts) < 2 do
+      nil
+    else
+      1..(length(parts) - 1)
+      |> Enum.reverse()
+      |> Enum.find_value(fn split_at ->
+        package =
+          parts
+          |> Enum.take(split_at)
+          |> Enum.join(".")
+          |> String.upcase()
+          |> String.replace("_", "-")
+
+        if ExLisp.Package.find_package(package) do
+          {package, Enum.drop(parts, split_at) |> Enum.join(".")}
+        end
+      end)
     end
   end
 

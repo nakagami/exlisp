@@ -264,6 +264,10 @@ defmodule ExLisp.Env do
     :"*load_verbose*" => nil,
     :"*load-print*" => nil,
     :"*load_print*" => nil,
+    :"*compile-file-pathname*" => nil,
+    :"*compile_file_pathname*" => nil,
+    :"*compile-file-truename*" => nil,
+    :"*compile_file_truename*" => nil,
     :"*print-array*" => :t,
     :"*print_array*" => :t,
     :"*print-base*" => 10,
@@ -924,6 +928,7 @@ defmodule ExLisp.Env do
     ensure_env()
     macro_name = normalize_name(name)
     key = {:exlisp_macro, macro_name}
+    macro_fun = attach_definition_package(macro_fun, macro_name)
 
     name_str = Atom.to_string(macro_name)
     h_name = String.replace(name_str, "_", "-") |> String.to_atom()
@@ -1073,7 +1078,9 @@ defmodule ExLisp.Env do
       package_scope =
         try do
           package = ExLisp.Package.find_package!(ExLisp.Package.current_package())
-          {package.name, package.use_list}
+          callsite = Process.get(:exlisp_macro_callsite_package)
+          extra = if callsite && callsite != package.name, do: [callsite], else: []
+          {package.name, extra ++ package.use_list}
         rescue
           _ -> {nil, []}
         end
@@ -1085,19 +1092,29 @@ defmodule ExLisp.Env do
           candidates = symbol_lookup_candidates(sym)
           {package_name, use_list} = package_scope
 
+          symbol_source =
+            if package_name do
+              package = ExLisp.Package.find_package(package_name)
+              symbol_name = str |> String.upcase() |> String.replace("_", "-")
+              package && Map.get(package.symbol_packages || %{}, symbol_name)
+            end
+
           package_candidates =
             if package_name do
-              Enum.flat_map([package_name | use_list], fn name ->
-                pkg_h = String.downcase(name) |> String.replace("_", "-")
-                pkg_u = String.downcase(name) |> String.replace("-", "_")
+              Enum.flat_map(
+                Enum.uniq([symbol_source, package_name | use_list] |> Enum.reject(&is_nil/1)),
+                fn name ->
+                  pkg_h = String.downcase(name) |> String.replace("_", "-")
+                  pkg_u = String.downcase(name) |> String.replace("-", "_")
 
-                [
-                  :"#{pkg_h}.#{str}",
-                  :"#{pkg_h}:#{str}",
-                  :"#{pkg_u}.#{str}",
-                  :"#{pkg_u}:#{str}"
-                ]
-              end)
+                  [
+                    :"#{pkg_h}.#{str}",
+                    :"#{pkg_h}:#{str}",
+                    :"#{pkg_u}.#{str}",
+                    :"#{pkg_u}:#{str}"
+                  ]
+                end
+              )
             else
               []
             end

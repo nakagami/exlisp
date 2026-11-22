@@ -135,70 +135,111 @@ defmodule ExLisp.Quicklisp do
   # --- Internal processing ---
 
   defp do_quickload(sys_name, systems_map, releases_map, opts) do
-    if is_system_loaded?(sys_name) and not Keyword.get(opts, :force, false) do
-      [sys_name]
-    else
-      case lookup_system_entry(systems_map, sys_name) do
-        nil ->
-          case find_local_asd(sys_name) do
-            {:ok, asd_path} ->
-              load_local_asd_system(asd_path, sys_name, systems_map, releases_map, opts)
+    cond do
+      String.replace(sys_name, "_", "-") == "cl-ppcre" and
+          not Keyword.get(opts, :force, false) ->
+        ExLisp.CLPPCRE.install()
+        mark_system_loaded(sys_name)
+        [sys_name]
 
-            :error ->
-              raise RuntimeError, "Quicklisp system '#{sys_name}' not found in dist"
-          end
+      sys_name == "babel" and not Keyword.get(opts, :force, false) ->
+        ExLisp.BabelCompat.install()
+        mark_system_loaded(sys_name)
+        [sys_name]
 
-        %{project: project_name, file: asd_filename} ->
-          rel_info = Map.get(releases_map, project_name)
+      sys_name == "quri" and not Keyword.get(opts, :force, false) ->
+        ExLisp.QURICompat.install()
+        mark_system_loaded(sys_name)
+        [sys_name]
 
-          if rel_info == nil do
-            raise RuntimeError,
-                  "Quicklisp release info for project '#{project_name}' not found"
-          end
+      sys_name == "yason" and not Keyword.get(opts, :force, false) ->
+        ExLisp.YasonCompat.install()
+        mark_system_loaded(sys_name)
+        [sys_name]
 
-          # 1. Download & extract archive
-          install_path = ensure_project_installed(rel_info)
+      String.starts_with?(String.replace(sys_name, "_", "-"), "ironclad") and
+          not Keyword.get(opts, :force, false) ->
+        ExLisp.IroncladCompat.install()
+        mark_system_loaded(sys_name)
+        [sys_name]
 
-          # 2. Find and parse .asd file
-          asd_path = find_asd_file(install_path, asd_filename, sys_name)
+      String.replace(sys_name, "_", "-") == "trivial-gray-streams" and
+          not Keyword.get(opts, :force, false) ->
+        ExLisp.GrayStreamsCompat.install()
+        mark_system_loaded(sys_name)
+        [sys_name]
 
-          if asd_path == nil or not File.exists?(asd_path) do
-            raise RuntimeError,
-                  "ASDF definition file for '#{sys_name}' not found in #{install_path}"
-          end
+      String.replace(sys_name, "_", "-") == "flexi-streams" and
+          not Keyword.get(opts, :force, false) ->
+        ExLisp.FlexiStreamsCompat.install()
+        mark_system_loaded(sys_name)
+        [sys_name]
 
-          sys_defs = ExLisp.ASDF.parse_asd(asd_path)
+      is_system_loaded?(sys_name) and not Keyword.get(opts, :force, false) ->
+        [sys_name]
 
-          primary_sys_def =
-            case lookup_sys_def(sys_defs, sys_name, project_name) do
-              nil ->
-                case Map.values(sys_defs) do
-                  [first | _] -> first
-                  [] -> %{name: sys_name, depends_on: [], components: [], serial: true}
-                end
+      true ->
+        case lookup_system_entry(systems_map, sys_name) do
+          nil ->
+            case find_local_asd(sys_name) do
+              {:ok, asd_path} ->
+                load_local_asd_system(asd_path, sys_name, systems_map, releases_map, opts)
 
-              found ->
-                found
+              :error ->
+                raise RuntimeError, "Quicklisp system '#{sys_name}' not found in dist"
             end
 
-          # 3. Recursively load defsystem dependencies and regular dependencies
-          defsys_deps =
-            (primary_sys_def[:defsystem_depends_on] || []) |> Enum.reject(&skip_dependency?/1)
+          %{project: project_name, file: asd_filename} ->
+            rel_info = Map.get(releases_map, project_name)
 
-          deps = primary_sys_def.depends_on |> Enum.reject(&skip_dependency?/1)
+            if rel_info == nil do
+              raise RuntimeError,
+                    "Quicklisp release info for project '#{project_name}' not found"
+            end
 
-          Enum.each(defsys_deps ++ deps, fn dep_sys ->
-            load_dependency(dep_sys, sys_defs, asd_path, systems_map, releases_map, opts)
-          end)
+            # 1. Download & extract archive
+            install_path = ensure_project_installed(rel_info)
 
-          # 4. Load component files
-          asd_dir = Path.dirname(asd_path)
-          ExLisp.ASDF.load_system(primary_sys_def, asd_dir)
+            # 2. Find and parse .asd file
+            asd_path = find_asd_file(install_path, asd_filename, sys_name)
 
-          # Record as loaded
-          mark_system_loaded(sys_name)
-          [sys_name]
-      end
+            if asd_path == nil or not File.exists?(asd_path) do
+              raise RuntimeError,
+                    "ASDF definition file for '#{sys_name}' not found in #{install_path}"
+            end
+
+            sys_defs = ExLisp.ASDF.parse_asd(asd_path)
+
+            primary_sys_def =
+              case lookup_sys_def(sys_defs, sys_name, project_name) do
+                nil ->
+                  case Map.values(sys_defs) do
+                    [first | _] -> first
+                    [] -> %{name: sys_name, depends_on: [], components: [], serial: true}
+                  end
+
+                found ->
+                  found
+              end
+
+            # 3. Recursively load defsystem dependencies and regular dependencies
+            defsys_deps =
+              (primary_sys_def[:defsystem_depends_on] || []) |> Enum.reject(&skip_dependency?/1)
+
+            deps = primary_sys_def.depends_on |> Enum.reject(&skip_dependency?/1)
+
+            Enum.each(defsys_deps ++ deps, fn dep_sys ->
+              load_dependency(dep_sys, sys_defs, asd_path, systems_map, releases_map, opts)
+            end)
+
+            # 4. Load component files
+            asd_dir = Path.dirname(asd_path)
+            ExLisp.ASDF.load_system(primary_sys_def, asd_dir)
+
+            # Record as loaded
+            mark_system_loaded(sys_name)
+            [sys_name]
+        end
     end
   end
 
@@ -280,7 +321,10 @@ defmodule ExLisp.Quicklisp do
       [
         sys_name,
         String.replace(sys_name, "_", "-"),
-        String.replace(sys_name, "-", "_")
+        String.replace(sys_name, "-", "_"),
+        String.replace(sys_name, ".", "-"),
+        String.replace(sys_name, ".", "/"),
+        String.replace(sys_name, "/", ".")
       ]
       |> Enum.uniq()
 

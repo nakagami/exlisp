@@ -1552,12 +1552,35 @@ defmodule ExLisp.Evaluator do
   end
 
   defp normalize_qualified_op(op) when is_atom(op) do
-    case String.split(Atom.to_string(op), ~r/[:.]/, parts: 2) do
-      [package, name] when package in ["cl", "common-lisp", "common_lisp"] ->
-        name |> String.replace("-", "_") |> String.to_atom()
+    cache_key = {:"$exlisp_qualified_op$", op}
 
-      _ ->
-        op
+    case Process.get(cache_key, :not_cached) do
+      :not_cached ->
+        result =
+          case :binary.match(Atom.to_string(op), [".", ":"]) do
+            {index, length} ->
+              text = Atom.to_string(op)
+              package = :binary.part(text, 0, index)
+
+              if package in ["cl", "common-lisp", "common_lisp"] do
+                text
+                |> :binary.part(index + length, byte_size(text) - index - length)
+                |> String.trim_leading(":")
+                |> String.replace("-", "_")
+                |> String.to_atom()
+              else
+                op
+              end
+
+            :nomatch ->
+              op
+          end
+
+        Process.put(cache_key, result)
+        result
+
+      result ->
+        result
     end
   end
 
@@ -1599,26 +1622,43 @@ defmodule ExLisp.Evaluator do
 
   defp expand_macro_in_package(op, macro_fun, args, full_form, env) do
     package =
-      op
-      |> Atom.to_string()
-      |> String.split(~r/[:.]/, parts: 2)
-      |> case do
-        [package_name, _symbol_name] ->
-          ExLisp.Package.find_package(String.upcase(package_name) |> String.replace("_", "-"))
+      case macro_fun do
+        %ExLisp.Closure{package: package_name} when not is_nil(package_name) ->
+          ExLisp.Package.find_package(package_name)
 
         _ ->
-          nil
+          op
+          |> Atom.to_string()
+          |> String.split(~r/[:.]/, parts: 2)
+          |> case do
+            [package_name, _symbol_name] ->
+              ExLisp.Package.find_package(String.upcase(package_name) |> String.replace("_", "-"))
+
+            _ ->
+              nil
+          end
       end
 
     if package do
       previous = ExLisp.Package.current_package()
+      previous_callsite = Process.get(:exlisp_macro_callsite_package, :undefined)
+
+      effective_callsite =
+        if previous_callsite == :undefined, do: previous, else: previous_callsite
 
       try do
+        Process.put(:exlisp_macro_callsite_package, effective_callsite)
         ExLisp.Package.set_current_package(package)
         expanded = apply_macro(macro_fun, args, full_form)
         eval(expanded, env)
       after
         ExLisp.Package.set_current_package(previous)
+
+        if previous_callsite == :undefined do
+          Process.delete(:exlisp_macro_callsite_package)
+        else
+          Process.put(:exlisp_macro_callsite_package, previous_callsite)
+        end
       end
     else
       expanded = apply_macro(macro_fun, args, full_form)
@@ -3816,6 +3856,9 @@ defmodule ExLisp.Evaluator do
 
     parsed_slots =
       Enum.map(slot_specs, fn
+        {:list, _pos, [slot_name]} ->
+          {LispBeam.extract_symbol_name(slot_name), nil}
+
         {:list, _pos, [slot_name, default_val | _]} ->
           {LispBeam.extract_symbol_name(slot_name), eval(default_val, env)}
 
@@ -3831,7 +3874,7 @@ defmodule ExLisp.Evaluator do
       Env.put_fun(:"make_#{struct_name}", ExLisp.Closure.new(make_fn, :"make_#{struct_name}"))
     else
       Enum.each(constructor_specs, fn spec ->
-        define_struct_constructor(struct_name, parsed_slots, spec)
+        define_struct_constructor(struct_name, parsed_slots, spec, env)
       end)
     end
 
@@ -3868,9 +3911,15 @@ defmodule ExLisp.Evaluator do
 
   defp defstruct_constructor_option?(_), do: false
 
-  defp define_struct_constructor(_struct_name, _slots, {:list, _, [_option, nil]}), do: :ok
+  defp define_struct_constructor(_struct_name, _slots, {:list, _, [_option, nil]}, _env),
+    do: :ok
 
-  defp define_struct_constructor(struct_name, slots, {:list, _, [_option, name_node | params]}) do
+  defp define_struct_constructor(
+         struct_name,
+         slots,
+         {:list, _, [_option, name_node | params]},
+         env
+       ) do
     constructor_name = LispBeam.extract_symbol_name(name_node)
 
     parameter_nodes =
@@ -3888,17 +3937,43 @@ defmodule ExLisp.Evaluator do
           fn passed_args -> Builtins.make_struct(struct_name, slots, passed_args) end
 
         nodes ->
-          constructor_names = Enum.map(nodes, &LispBeam.extract_symbol_name/1)
+          {required, keyword, aux} = parse_constructor_parameters(nodes)
 
           fn passed_args ->
-            positional =
-              constructor_names
-              |> Enum.zip(passed_args)
-              |> Enum.flat_map(fn {name, value} ->
-                [String.replace(to_string(name), "_", "-") |> String.to_atom(), value]
+            {required_values, keyword_args} = Enum.split(passed_args, length(required))
+            provided = Builtins.parse_lisp_keywords(keyword_args)
+
+            required_pairs =
+              required
+              |> Enum.zip(required_values)
+              |> Enum.map(fn {name, value} ->
+                {normalize_constructor_name(name), value}
               end)
 
-            Builtins.make_struct(struct_name, slots, positional)
+            keyword_pairs =
+              Enum.map(keyword, fn {name, default_node} ->
+                normalized = normalize_constructor_name(name)
+
+                {normalized,
+                 if(
+                   Keyword.has_key?(provided, normalized),
+                   do: Keyword.fetch!(provided, normalized),
+                   else: if(default_node, do: eval(default_node, env), else: nil)
+                 )}
+              end)
+
+            aux_pairs =
+              Enum.map(aux, fn {name, default_node} ->
+                {normalize_constructor_name(name),
+                 if(default_node, do: eval(default_node, env), else: nil)}
+              end)
+
+            kwargs =
+              Enum.flat_map(required_pairs ++ keyword_pairs ++ aux_pairs, fn {name, value} ->
+                [name, value]
+              end)
+
+            Builtins.make_struct(struct_name, slots, kwargs)
           end
       end
 
@@ -3907,6 +3982,39 @@ defmodule ExLisp.Evaluator do
       ExLisp.Closure.new(constructor, constructor_name)
     )
   end
+
+  defp parse_constructor_parameters(nodes) do
+    Enum.reduce(nodes, {:required, [], [], []}, fn node, {mode, required, keyword, aux} ->
+      name = if match?({:list, _, _}, node), do: elem(node, 2) |> hd(), else: node
+      marker = LispBeam.extract_symbol_name(node)
+
+      cond do
+        marker == :"&key" ->
+          {:key, required, keyword, aux}
+
+        marker == :"&aux" ->
+          {:aux, required, keyword, aux}
+
+        mode == :required ->
+          {mode, required ++ [LispBeam.extract_symbol_name(name)], keyword, aux}
+
+        mode == :key ->
+          {mode, required, keyword ++ [constructor_parameter_pair(node)], aux}
+
+        mode == :aux ->
+          {mode, required, keyword, aux ++ [constructor_parameter_pair(node)]}
+      end
+    end)
+    |> then(fn {_mode, required, keyword, aux} -> {required, keyword, aux} end)
+  end
+
+  defp constructor_parameter_pair({:list, _, [name, default | _]}),
+    do: {LispBeam.extract_symbol_name(name), default}
+
+  defp constructor_parameter_pair(name), do: {LispBeam.extract_symbol_name(name), nil}
+
+  defp normalize_constructor_name(name),
+    do: name |> Atom.to_string() |> String.replace("-", "_") |> String.to_atom()
 
   defp eval_defclass([name_node, superclasses_node | rest], _env) do
     name = LispBeam.extract_symbol_name(name_node)
