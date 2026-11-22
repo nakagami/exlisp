@@ -2,6 +2,64 @@ defmodule QuicklispTest do
   use ExUnit.Case
   @moduletag timeout: 180_000
 
+  setup do
+    ExLisp.Env.reset()
+    :ok
+  end
+
+  test "ASDF propagates component parse and evaluation errors" do
+    dir = Path.join(System.tmp_dir!(), "exlisp-asdf-errors-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf!(dir) end)
+
+    eval_file = Path.join(dir, "broken-eval.lisp")
+    syntax_file = Path.join(dir, "broken-syntax.lisp")
+    File.write!(eval_file, "(error \"component failed\")")
+    File.write!(syntax_file, "(defun broken (x)")
+
+    system = %{
+      name: "BROKEN",
+      pathname: nil,
+      components: [{:file, "missing", []}]
+    }
+
+    assert_raise RuntimeError, ~r/ASDF component file not found/, fn ->
+      ExLisp.ASDF.load_system(system, dir)
+    end
+
+    system = %{system | components: [{:file, "broken-eval", []}]}
+
+    assert_raise RuntimeError, ~r/component failed/, fn ->
+      ExLisp.ASDF.load_system(system, dir)
+    end
+
+    system = %{system | components: [{:file, "broken-syntax", []}]}
+
+    assert_raise SyntaxError, fn ->
+      ExLisp.ASDF.load_system(system, dir)
+    end
+  end
+
+  test "ASDF restores the current package after a failed load" do
+    dir =
+      Path.join(System.tmp_dir!(), "exlisp-asdf-package-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf!(dir) end)
+    File.write!(Path.join(dir, "broken.lisp"), "(in-package :broken) (error \"stop\")")
+    ExLisp.Package.make_package("BROKEN")
+    previous = ExLisp.Package.current_package()
+
+    assert_raise RuntimeError, fn ->
+      ExLisp.ASDF.load_system(
+        %{name: "BROKEN", pathname: nil, components: [{:file, "broken", []}]},
+        dir
+      )
+    end
+
+    assert ExLisp.Package.current_package() == previous
+  end
+
   test "reader syntax: block comments, vectors, reader conditionals, uninterned symbols" do
     # Nested block comments #| ... |#
     assert ExLisp.eval("#| block comment |# (+ 1 2)") == 3

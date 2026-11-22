@@ -227,7 +227,13 @@ defmodule ExLisp.ASDF do
       []
     else
       cond do
-        type_str in ["file", "cl-source-file", "asdf:cl-source-file", "asdf/cl-source-file:cl-source-file", "asdf.cl-source-file"] ->
+        type_str in [
+          "file",
+          "cl-source-file",
+          "asdf:cl-source-file",
+          "asdf/cl-source-file:cl-source-file",
+          "asdf.cl-source-file"
+        ] ->
           [{:file, path_name, opts[:depends_on] || []}]
 
         type_str in ["module", "asdf:module"] ->
@@ -314,33 +320,33 @@ defmodule ExLisp.ASDF do
     prev_pkg = ExLisp.Package.current_package()
     files = get_load_order(system_info)
 
-    Enum.each(files, fn rel_file ->
-      full_path = Path.join(base_dir, rel_file)
+    try do
+      Enum.each(files, fn rel_file ->
+        full_path = Path.join(base_dir, rel_file)
 
-      if File.exists?(full_path) do
-        load_lisp_file(full_path)
-      else
-        # Try without extension, etc.
-        alt_path = Path.join(base_dir, String.replace_suffix(rel_file, ".lisp", ""))
+        if File.exists?(full_path) do
+          load_lisp_file(full_path)
+        else
+          alt_path = Path.join(base_dir, String.replace_suffix(rel_file, ".lisp", ""))
 
-        if File.exists?(alt_path) do
-          load_lisp_file(alt_path)
+          if File.exists?(alt_path) do
+            load_lisp_file(alt_path)
+          else
+            raise "ASDF component file not found: #{full_path}"
+          end
         end
-      end
-    end)
+      end)
 
-    # Use package in COMMON-LISP-USER if system matches package
-    sys_name = system_info.name
-    if pkg = ExLisp.Package.find_package(sys_name) do
-      try do
+      sys_name = system_info.name
+
+      if pkg = ExLisp.Package.find_package(sys_name) do
         ExLisp.Package.use_package(pkg.name, "COMMON-LISP-USER")
-      rescue
-        _ -> :ok
       end
-    end
 
-    ExLisp.Package.set_current_package(prev_pkg)
-    :ok
+      :ok
+    after
+      ExLisp.Package.set_current_package(prev_pkg)
+    end
   end
 
   @doc """
@@ -403,20 +409,6 @@ defmodule ExLisp.ASDF do
   Loads a single `.lisp` source file and evaluates each top-level expression.
   """
   def load_lisp_file(path) do
-    content = File.read!(path)
-
-    case ExLisp.LispParser.parse_multiple(content) do
-      {:ok, asts} ->
-        try do
-          LispBeam.evaluate_asts(asts)
-        rescue
-          _ -> :ok
-        end
-
-      _ ->
-        :ok
-    end
-
-    :ok
+    ExLisp.load_file(path)
   end
 end
