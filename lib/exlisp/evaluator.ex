@@ -1473,7 +1473,17 @@ defmodule ExLisp.Evaluator do
         end
 
       op when op in [:defsystem, :_cl_defsystem_] ->
-        :t
+        case args do
+          [name_node | options] ->
+            if Process.get(:exlisp_asdf_definitions) do
+              ExLisp.ASDF.capture_defsystem(name_node, options)
+            else
+              :t
+            end
+
+          _ ->
+            :t
+        end
 
       op when op in [:eval, :_cl_eval_] ->
         case args do

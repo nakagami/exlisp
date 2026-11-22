@@ -138,6 +138,36 @@ defmodule QuicklispTest do
     end
   end
 
+  test "ASDF evaluates macros that generate secondary systems" do
+    dir =
+      Path.join(System.tmp_dir!(), "exlisp-asdf-generated-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf!(dir) end)
+
+    asd = Path.join(dir, "generated.asd")
+
+    File.write!(
+      asd,
+      """
+      (defmacro define-generated-systems (kind path &rest components)
+        `(progn
+           ,@(mapcar (lambda (component)
+                       `(defsystem ,(format nil "~a/~a/~a" "generated" kind component)
+                          :pathname ,path
+                          :components ((:file ,component))))
+                     components)))
+      (define-generated-systems "impl" #p"src/" "one" "two")
+      """
+    )
+
+    systems = ExLisp.ASDF.parse_asd(asd)
+
+    assert systems["generated/impl/one"].pathname == "src"
+    assert systems["generated/impl/one"].components == [{:file, "one", []}]
+    assert systems["generated/impl/two"].components == [{:file, "two", []}]
+  end
+
   test "reader syntax: block comments, vectors, reader conditionals, uninterned symbols" do
     # Nested block comments #| ... |#
     assert ExLisp.eval("#| block comment |# (+ 1 2)") == 3

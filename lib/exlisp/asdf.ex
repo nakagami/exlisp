@@ -13,7 +13,7 @@ defmodule ExLisp.ASDF do
 
     case ExLisp.LispParser.parse_multiple(content) do
       {:ok, asts} ->
-        defs =
+        static_defs =
           Enum.reduce(asts, %{}, fn ast, acc ->
             case extract_defsystem(ast) do
               {:ok, sys_info} -> Map.put(acc, sys_info.name, sys_info)
@@ -21,10 +21,60 @@ defmodule ExLisp.ASDF do
             end
           end)
 
+        defs = collect_macro_defsystems(asts, static_defs)
         add_package_inferred_systems(defs, Path.dirname(asd_path))
 
       {:error, reason} ->
         raise SyntaxError, description: inspect(reason), file: asd_path, line: 1
+    end
+  end
+
+  defp collect_macro_defsystems(asts, definitions) do
+    Process.put(:exlisp_asdf_definitions, definitions)
+
+    try do
+      Enum.each(asts, fn
+        {:list, _pos, [op | _]} = ast ->
+          if LispBeam.extract_symbol_name(op) in [:defmacro, :_cl_defmacro_] do
+            ExLisp.Evaluator.eval(ast, %{})
+          end
+
+        _ ->
+          :ok
+      end)
+
+      Enum.each(asts, fn
+        {:list, _pos, [op | _]} = ast ->
+          op_name = LispBeam.extract_symbol_name(op)
+
+          if ExLisp.Env.has_macro?(op_name) do
+            ExLisp.Evaluator.eval(ast, %{})
+          end
+
+        _ ->
+          :ok
+      end)
+
+      Process.get(:exlisp_asdf_definitions, definitions)
+    after
+      Process.delete(:exlisp_asdf_definitions)
+    end
+  end
+
+  def capture_defsystem(name_node, rest_args) do
+    case extract_defsystem({:list, 1, [{:id, 1, ["defsystem"]}, name_node | rest_args]}) do
+      {:ok, system_info} ->
+        definitions = Process.get(:exlisp_asdf_definitions, %{})
+
+        Process.put(
+          :exlisp_asdf_definitions,
+          Map.put(definitions, system_info.name, system_info)
+        )
+
+        :t
+
+      :error ->
+        :t
     end
   end
 
@@ -303,6 +353,12 @@ defmodule ExLisp.ASDF do
 
   defp normalize_name({:lit, val}) when is_atom(val), do: Atom.to_string(val) |> String.downcase()
   defp normalize_name({:lit, val}) when is_binary(val), do: String.downcase(val)
+  defp normalize_name({:lit, val}), do: normalize_name(val)
+
+  defp normalize_name(%ExLisp.Pathname{} = pathname) do
+    pathname |> ExLisp.Pathname.namestring() |> String.trim_trailing("/")
+  end
+
   defp normalize_name(val) when is_atom(val), do: Atom.to_string(val) |> String.downcase()
   defp normalize_name(val) when is_binary(val), do: String.downcase(val)
   defp normalize_name(_), do: nil

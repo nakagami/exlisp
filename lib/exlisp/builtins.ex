@@ -425,8 +425,8 @@ defmodule ExLisp.Builtins do
       :/ -> divide_two(1, unwrap_mv_primary(a))
       :car -> car(unwrap_mv_primary(a))
       :cdr -> cdr(unwrap_mv_primary(a))
-      :not -> (if truthy?(unwrap_mv_primary(a)), do: nil, else: :t)
-      :null -> (if truthy?(unwrap_mv_primary(a)), do: nil, else: :t)
+      :not -> if truthy?(unwrap_mv_primary(a)), do: nil, else: :t
+      :null -> if truthy?(unwrap_mv_primary(a)), do: nil, else: :t
       :atom -> atom(unwrap_mv_primary(a))
       :consp -> consp(unwrap_mv_primary(a))
       :listp -> listp(unwrap_mv_primary(a))
@@ -1228,6 +1228,7 @@ defmodule ExLisp.Builtins do
   def float_radix(_value), do: 2
 
   def float_sign(value, other \\ 1.0)
+
   def float_sign(value, other) when is_float(value) do
     if negative_float?(value), do: -Kernel.abs(other * 1.0), else: Kernel.abs(other * 1.0)
   end
@@ -1286,17 +1287,24 @@ defmodule ExLisp.Builtins do
     imag = number_to_float(imagpart(value))
     magnitude = complex_magnitude(value)
     root_real = :math.sqrt(max(0.0, (magnitude + real) / 2.0))
-    root_imag = if imag < 0.0, do: -:math.sqrt(max(0.0, (magnitude - real) / 2.0)), else: :math.sqrt(max(0.0, (magnitude - real) / 2.0))
+
+    root_imag =
+      if imag < 0.0,
+        do: -:math.sqrt(max(0.0, (magnitude - real) / 2.0)),
+        else: :math.sqrt(max(0.0, (magnitude - real) / 2.0))
+
     {:complex, root_real, root_imag}
   end
 
   def sqrt(%ExLisp.Ratio{} = x), do: :math.sqrt(ExLisp.Ratio.to_float(x))
   def sqrt(x) when is_number(x) and x >= 0, do: :math.sqrt(x * 1.0)
   def sqrt(x) when is_number(x), do: {:complex, 0.0, :math.sqrt(-x * 1.0)}
+
   def exp({:complex, real, imag}) do
     scale = :math.exp(number_to_float(real))
     {:complex, scale * :math.cos(number_to_float(imag)), scale * :math.sin(number_to_float(imag))}
   end
+
   def exp(%ExLisp.Ratio{} = x), do: :math.exp(ExLisp.Ratio.to_float(x))
   def exp(x) when is_number(x), do: :math.exp(x * 1.0)
 
@@ -1401,26 +1409,48 @@ defmodule ExLisp.Builtins do
     imag = number_to_float(imag)
     {:complex, :math.sin(real) * :math.cosh(imag), :math.cos(real) * :math.sinh(imag)}
   end
+
   def sin(x) when is_number(x), do: :math.sin(x)
   def sin(%ExLisp.Ratio{} = x), do: :math.sin(ExLisp.Ratio.to_float(x))
+
   def cos({:complex, real, imag}) do
     real = number_to_float(real)
     imag = number_to_float(imag)
     {:complex, :math.cos(real) * :math.cosh(imag), -:math.sin(real) * :math.sinh(imag)}
   end
+
   def cos(x) when is_number(x), do: :math.cos(x)
   def cos(%ExLisp.Ratio{} = x), do: :math.cos(ExLisp.Ratio.to_float(x))
   def tan({:complex, _, _} = value), do: divide_two(sin(value), cos(value))
   def tan(x) when is_number(x), do: :math.tan(x)
   def tan(%ExLisp.Ratio{} = x), do: :math.tan(ExLisp.Ratio.to_float(x))
-  def asin({:complex, _, _} = value), do: mul_two({:complex, 0.0, -1.0}, log(add_two(mul_two({:complex, 0.0, 1.0}, value), sqrt(sub_two(1, mul_two(value, value))))))
+
+  def asin({:complex, _, _} = value),
+    do:
+      mul_two(
+        {:complex, 0.0, -1.0},
+        log(
+          add_two(mul_two({:complex, 0.0, 1.0}, value), sqrt(sub_two(1, mul_two(value, value))))
+        )
+      )
+
   def asin(x) when is_number(x) and x >= -1 and x <= 1, do: :math.asin(x)
   def asin(x) when is_number(x), do: asin({:complex, x * 1.0, 0.0})
   def asin(%ExLisp.Ratio{} = x), do: asin(ExLisp.Ratio.to_float(x))
-  def acos({:complex, _, _} = value), do: mul_two({:complex, 0.0, -1.0}, log(add_two(value, mul_two({:complex, 0.0, 1.0}, sqrt(sub_two(1, mul_two(value, value)))))))
+
+  def acos({:complex, _, _} = value),
+    do:
+      mul_two(
+        {:complex, 0.0, -1.0},
+        log(
+          add_two(value, mul_two({:complex, 0.0, 1.0}, sqrt(sub_two(1, mul_two(value, value)))))
+        )
+      )
+
   def acos(x) when is_number(x) and x >= -1 and x <= 1, do: :math.acos(x)
   def acos(x) when is_number(x), do: acos({:complex, x * 1.0, 0.0})
   def acos(%ExLisp.Ratio{} = x), do: acos(ExLisp.Ratio.to_float(x))
+
   def atan({:complex, _, _} = value) do
     mul_two(
       {:complex, 0.0, 0.5},
@@ -1430,6 +1460,7 @@ defmodule ExLisp.Builtins do
       )
     )
   end
+
   def atan(x) when is_number(x), do: :math.atan(x)
   def atan(%ExLisp.Ratio{} = x), do: :math.atan(ExLisp.Ratio.to_float(x))
   def atan([y, x]), do: atan(unwrap_mv_primary(y), unwrap_mv_primary(x))
@@ -1441,26 +1472,38 @@ defmodule ExLisp.Builtins do
     imag = number_to_float(imag)
     {:complex, :math.sinh(real) * :math.cos(imag), :math.cosh(real) * :math.sin(imag)}
   end
+
   def sinh(x) when is_number(x), do: :math.sinh(x)
   def sinh(%ExLisp.Ratio{} = x), do: :math.sinh(ExLisp.Ratio.to_float(x))
+
   def cosh({:complex, real, imag}) do
     real = number_to_float(real)
     imag = number_to_float(imag)
     {:complex, :math.cosh(real) * :math.cos(imag), :math.sinh(real) * :math.sin(imag)}
   end
+
   def cosh(x) when is_number(x), do: :math.cosh(x)
   def cosh(%ExLisp.Ratio{} = x), do: :math.cosh(ExLisp.Ratio.to_float(x))
   def tanh({:complex, _, _} = value), do: divide_two(sinh(value), cosh(value))
   def tanh(x) when is_number(x), do: :math.tanh(x)
   def tanh(%ExLisp.Ratio{} = x), do: :math.tanh(ExLisp.Ratio.to_float(x))
-  def asinh({:complex, _, _} = value), do: log(add_two(value, sqrt(add_two(mul_two(value, value), 1))))
+
+  def asinh({:complex, _, _} = value),
+    do: log(add_two(value, sqrt(add_two(mul_two(value, value), 1))))
+
   def asinh(x) when is_number(x), do: :math.asinh(x)
   def asinh(%ExLisp.Ratio{} = x), do: :math.asinh(ExLisp.Ratio.to_float(x))
-  def acosh({:complex, _, _} = value), do: log(add_two(value, mul_two(sqrt(sub_two(value, 1)), sqrt(add_two(value, 1)))))
+
+  def acosh({:complex, _, _} = value),
+    do: log(add_two(value, mul_two(sqrt(sub_two(value, 1)), sqrt(add_two(value, 1)))))
+
   def acosh(x) when is_number(x) and x >= 1, do: :math.acosh(x)
   def acosh(x) when is_number(x), do: acosh({:complex, x * 1.0, 0.0})
   def acosh(%ExLisp.Ratio{} = x), do: acosh(ExLisp.Ratio.to_float(x))
-  def atanh({:complex, _, _} = value), do: mul_two(0.5, sub_two(log(add_two(1, value)), log(sub_two(1, value))))
+
+  def atanh({:complex, _, _} = value),
+    do: mul_two(0.5, sub_two(log(add_two(1, value)), log(sub_two(1, value))))
+
   def atanh(x) when is_number(x) and x > -1 and x < 1, do: :math.atanh(x)
   def atanh(x) when is_number(x), do: atanh({:complex, x * 1.0, 0.0})
   def atanh(%ExLisp.Ratio{} = x), do: atanh(ExLisp.Ratio.to_float(x))
@@ -1839,16 +1882,20 @@ defmodule ExLisp.Builtins do
   def eq({:__keyword__, x}, y), do: eq(x, y)
   def eq(x, {:__keyword__, y}), do: eq(x, y)
   def eq(x, y) when is_binary(x) and is_binary(y), do: :erts_debug.same(x, y) |> lisp_bool()
+
   def eq(%ExLisp.Package{id: xid, name: x}, %ExLisp.Package{id: yid, name: y}),
     do: ((xid != nil and xid == yid) or x == y) |> lisp_bool()
+
   def eq(x, y) when is_atom(x) and is_atom(y), do: (x === y) |> lisp_bool()
   def eq(x, y), do: :erts_debug.same(x, y) |> lisp_bool()
   def eqt(x, y), do: eq(x, y)
 
   def eql(x, y) when x in [nil, [], nil] and y in [nil, [], nil], do: :t
   def eql(x, y) when is_binary(x) and is_binary(y), do: :erts_debug.same(x, y) |> lisp_bool()
+
   def eql(%ExLisp.Package{id: xid, name: x}, %ExLisp.Package{id: yid, name: y}),
     do: ((xid != nil and xid == yid) or x == y) |> lisp_bool()
+
   def eql(x, y) when is_atom(x) and is_atom(y), do: (x === y) |> lisp_bool()
 
   def eql(x, y) when is_number(x) and is_number(y) do
@@ -1871,6 +1918,7 @@ defmodule ExLisp.Builtins do
   def case_eql(x, y), do: eql(x, y)
 
   def equal([:vector | elems1], [:vector | elems2]), do: equal(elems1, elems2)
+
   def equal(%ExLisp.Package{id: xid, name: x}, %ExLisp.Package{id: yid, name: y}),
     do: ((xid != nil and xid == yid) or x == y) |> lisp_bool()
 
@@ -1891,6 +1939,7 @@ defmodule ExLisp.Builtins do
   end
 
   def equal(x, y) when x in [nil, [], nil] and y in [nil, [], nil], do: :t
+
   def equal(x, y) when is_atom(x) and is_atom(y) do
     x_str = Atom.to_string(x)
     y_str = Atom.to_string(y)
@@ -2161,6 +2210,7 @@ defmodule ExLisp.Builtins do
   def not_fn(x), do: !truthy?(x) |> lisp_bool()
 
   def zerop([:_values_ | _] = v), do: zerop(unwrap_mv_primary(v))
+
   def zerop({:complex, real, imag}) do
     if compare_nums(real, 0) == :eq and compare_nums(imag, 0) == :eq, do: :t, else: nil
   end
@@ -2468,6 +2518,10 @@ defmodule ExLisp.Builtins do
   def tenth(_), do: nil
 
   def list(args) when is_list(args), do: Enum.map(args, &primary_val/1)
+
+  def ensure_list(nil), do: []
+  def ensure_list(value) when is_list(value), do: value
+  def ensure_list(value), do: [value]
 
   def list_star([]), do: nil
   def list_star([x]) when x in [nil, []], do: []
@@ -3241,6 +3295,7 @@ defmodule ExLisp.Builtins do
 
   defp copy_list_cells([]), do: []
   defp copy_list_cells([head | tail]) when is_list(tail), do: [head | copy_list_cells(tail)]
+
   defp copy_list_cells([head | tail]),
     do: List.foldr([head], tail, fn item, copied -> [item | copied] end)
 
@@ -4098,7 +4153,8 @@ defmodule ExLisp.Builtins do
 
         actual_len =
           case :ets.lookup(tid, :__meta__) do
-            [{:__meta__, %{fill_pointer: fp}}] when is_integer(fp) -> fp
+            [{:__meta__, %{fill_pointer: fp}}] when is_integer(fp) ->
+              fp
 
             _ ->
               case dims do
@@ -6354,6 +6410,7 @@ defmodule ExLisp.Builtins do
 
         for i <- start_idx..(end_idx - 1)//1 do
           c = aref([arr, i])
+
           if is_integer(c) or match?(%ExLisp.Character{}, c),
             do: set_aref(arr, i, char_upcase(as_character(c)))
         end
@@ -7131,6 +7188,7 @@ defmodule ExLisp.Builtins do
   def hash_table_keys({:hash_table, _test, tid}) do
     :ets.foldl(fn {k, _v}, acc -> [k | acc] end, [], tid)
   end
+
   def hash_table_keys(_), do: []
 
   def hash_table_values(args) when is_list(args) do
@@ -7143,6 +7201,7 @@ defmodule ExLisp.Builtins do
   def hash_table_values({:hash_table, _test, tid}) do
     :ets.foldl(fn {_k, v}, acc -> [v | acc] end, [], tid)
   end
+
   def hash_table_values(_), do: []
 
   def hash_table_pairs(args) when is_list(args) do
@@ -7155,6 +7214,7 @@ defmodule ExLisp.Builtins do
   def hash_table_pairs({:hash_table, _test, tid}) do
     :ets.foldl(fn {k, v}, acc -> [[k | v] | acc] end, [], tid)
   end
+
   def hash_table_pairs(_), do: []
 
   def all_symbols_list([pkg_desig]), do: ExLisp.Package.all_symbols_list(pkg_desig)
@@ -8009,7 +8069,8 @@ defmodule ExLisp.Builtins do
 
     if length(shared_dims) == length(old_dims) and length(shared_dims) == length(new_dims) do
       for indices <- cartesian_indices(shared_dims) do
-        {compute_flat_index(new_dims, indices), row_major_aref(arr, compute_flat_index(old_dims, indices))}
+        {compute_flat_index(new_dims, indices),
+         row_major_aref(arr, compute_flat_index(old_dims, indices))}
       end
     else
       old_size = Enum.reduce(old_dims, 1, &Kernel.*/2)
@@ -8018,7 +8079,8 @@ defmodule ExLisp.Builtins do
       if old_dims == [] or new_dims == [] do
         []
       else
-        for index <- 0..(min(old_size, new_size) - 1), index >= 0,
+        for index <- 0..(min(old_size, new_size) - 1),
+            index >= 0,
             do: {index, row_major_aref(arr, index)}
       end
     end
@@ -8028,7 +8090,9 @@ defmodule ExLisp.Builtins do
   defp cartesian_indices([0 | _rest]), do: []
 
   defp cartesian_indices([dimension | rest]) do
-    for index <- 0..(dimension - 1), index >= 0, suffix <- cartesian_indices(rest),
+    for index <- 0..(dimension - 1),
+        index >= 0,
+        suffix <- cartesian_indices(rest),
         do: [index | suffix]
   end
 
@@ -8485,9 +8549,15 @@ defmodule ExLisp.Builtins do
 
   def copy_struct({:struct, name, tid}) do
     new_tid = :ets.new(:lisp_struct, [:set, :public])
-    :ets.foldl(fn {k, _v}, _acc ->
-      put_struct_slot(new_tid, k, get_struct_slot({:struct, name, tid}, k))
-    end, nil, tid)
+
+    :ets.foldl(
+      fn {k, _v}, _acc ->
+        put_struct_slot(new_tid, k, get_struct_slot({:struct, name, tid}, k))
+      end,
+      nil,
+      tid
+    )
+
     {:struct, name, new_tid}
   end
 
@@ -8681,80 +8751,80 @@ defmodule ExLisp.Builtins do
               values(nil, start + String.length(str))
           end
         else
-        readtable =
-          try do
-            ExLisp.Env.get_var(:"*readtable*")
-          rescue
-            _ -> ExLisp.Readtable.current_readtable()
-          end
-
-        str = ExLisp.Readtable.normalize_reader_syntax(str, readtable)
-
-        chars = String.to_charlist(str)
-
-        custom_macro_result =
-          case chars do
-            [char | rest] ->
-              case ExLisp.Readtable.custom_macro_character(char, readtable) do
-                {:dispatch, _function, _non_terminating} ->
-                  ExLisp.Condition.error(:reader_error, "Invalid dispatch macro expression")
-
-                {function, _non_terminating} ->
-                  stream = ExLisp.Stream.make_string_input_stream(rest |> List.to_string())
-                  value = invoke_fn(function, [stream, ExLisp.Character.new(char)])
-                  values(value, 1)
-
-                nil ->
-                  nil
-              end
-
-            [] ->
-              nil
-          end
-
-        if custom_macro_result != nil do
-          custom_macro_result
-        else
-          terminating_macro_index =
-            chars
-            |> Enum.with_index()
-            |> Enum.find_value(fn {char, index} ->
-              case ExLisp.Readtable.custom_macro_character(char, readtable) do
-                {_, false} -> index
-                {:dispatch, _, false} -> index
-                _ -> nil
-              end
-            end)
-
-          source =
-            if terminating_macro_index && terminating_macro_index > 0 do
-              Enum.take(chars, terminating_macro_index) |> List.to_string()
-            else
-              str
+          readtable =
+            try do
+              ExLisp.Env.get_var(:"*readtable*")
+            rescue
+              _ -> ExLisp.Readtable.current_readtable()
             end
 
-          source_chars = String.to_charlist(source)
+          str = ExLisp.Readtable.normalize_reader_syntax(str, readtable)
 
-          case scan_first_expr(source_chars, 0, [], false, false, 0, []) do
-            {:ok, expr_str, consumed_count} ->
-              consumed_count =
-                if not preserve_whitespace and
-                     Enum.at(source_chars, consumed_count) in [?\s, ?\t, ?\n, ?\r] do
-                  consumed_count + 1
-                else
-                  consumed_count
+          chars = String.to_charlist(str)
+
+          custom_macro_result =
+            case chars do
+              [char | rest] ->
+                case ExLisp.Readtable.custom_macro_character(char, readtable) do
+                  {:dispatch, _function, _non_terminating} ->
+                    ExLisp.Condition.error(:reader_error, "Invalid dispatch macro expression")
+
+                  {function, _non_terminating} ->
+                    stream = ExLisp.Stream.make_string_input_stream(rest |> List.to_string())
+                    value = invoke_fn(function, [stream, ExLisp.Character.new(char)])
+                    values(value, 1)
+
+                  nil ->
+                    nil
                 end
 
-              values(parse_read_expr(expr_str), start + consumed_count)
+              [] ->
+                nil
+            end
 
-            :eof ->
-              if eof_error_p in [:t, true] do
-                ExLisp.Condition.error(:end_of_file, "Unexpected end of input")
+          if custom_macro_result != nil do
+            custom_macro_result
+          else
+            terminating_macro_index =
+              chars
+              |> Enum.with_index()
+              |> Enum.find_value(fn {char, index} ->
+                case ExLisp.Readtable.custom_macro_character(char, readtable) do
+                  {_, false} -> index
+                  {:dispatch, _, false} -> index
+                  _ -> nil
+                end
+              end)
+
+            source =
+              if terminating_macro_index && terminating_macro_index > 0 do
+                Enum.take(chars, terminating_macro_index) |> List.to_string()
               else
-                values(eof_value, start)
+                str
               end
+
+            source_chars = String.to_charlist(source)
+
+            case scan_first_expr(source_chars, 0, [], false, false, 0, []) do
+              {:ok, expr_str, consumed_count} ->
+                consumed_count =
+                  if not preserve_whitespace and
+                       Enum.at(source_chars, consumed_count) in [?\s, ?\t, ?\n, ?\r] do
+                    consumed_count + 1
+                  else
+                    consumed_count
+                  end
+
+                values(parse_read_expr(expr_str), start + consumed_count)
+
+              :eof ->
+                if eof_error_p in [:t, true] do
+                  ExLisp.Condition.error(:end_of_file, "Unexpected end of input")
+                else
+                  values(eof_value, start)
+                end
+            end
           end
-        end
         end
 
       _ ->
@@ -8859,11 +8929,13 @@ defmodule ExLisp.Builtins do
     read_one_s_expr(Map.fetch!(extra, :input))
   end
 
-  defp read_one_s_expr(%ExLisp.Stream{
-         id: id,
-         type: :concatenated,
-         extra: %{streams: initial_streams}
-       } = stream) do
+  defp read_one_s_expr(
+         %ExLisp.Stream{
+           id: id,
+           type: :concatenated,
+           extra: %{streams: initial_streams}
+         } = stream
+       ) do
     streams = Process.get({:exlisp_concatenated_streams, id}, initial_streams)
 
     case streams do
@@ -9073,9 +9145,12 @@ defmodule ExLisp.Builtins do
 
   defp parse_read_expr(str) do
     Process.put(:exlisp_reader_mode, true)
+
     try do
       case ExLisp.LispParser.parse(str) do
-        {:ok, ast} -> ast_to_lisp_val(ast)
+        {:ok, ast} ->
+          ast_to_lisp_val(ast)
+
         {:error, reason} ->
           ExLisp.Condition.error(:reader_error, reason)
       end
@@ -9443,7 +9518,8 @@ defmodule ExLisp.Builtins do
             str
           end
 
-        [name] -> name
+        [name] ->
+          name
       end
 
     cleaned =
@@ -12437,14 +12513,15 @@ defmodule ExLisp.Builtins do
         suffix \\ "",
         fun \\ nil
       ),
-      do: ExLisp.PPrint.pprint_logical_block(
-        stream,
-        list,
-        prefix,
-        per_line_prefix,
-        suffix,
-        fun
-      )
+      do:
+        ExLisp.PPrint.pprint_logical_block(
+          stream,
+          list,
+          prefix,
+          per_line_prefix,
+          suffix,
+          fun
+        )
 
   def pprint_newline(kind \\ :linear, stream \\ nil),
     do: ExLisp.PPrint.pprint_newline(kind, stream)
@@ -12505,8 +12582,10 @@ defmodule ExLisp.Builtins do
     do: ExLisp.Package.with_package_iterator(packages, types, fun)
 
   def find_all_symbols(name), do: ExLisp.Package.find_all_symbols(name)
+
   def package_iterator(packages \\ nil, types \\ [:internal, :external, :inherited]),
     do: ExLisp.Package.package_iterator(packages, types)
+
   def logical_pathname(path), do: ExLisp.Pathname.logical_pathname(path)
   def logical_pathname_p(path), do: ExLisp.Pathname.logical_pathname_p(path)
 
@@ -12605,6 +12684,7 @@ defmodule ExLisp.Builtins do
 
   def copy_structure({:struct, _name, tid} = structure) do
     clone = :ets.new(:lisp_struct, [:set, :public])
+
     :ets.tab2list(tid)
     |> Enum.each(fn {slot, _val} ->
       put_struct_slot(clone, slot, get_struct_slot(structure, slot))
@@ -12639,6 +12719,7 @@ defmodule ExLisp.Builtins do
   end
 
   def hash_table_test({:hash_table, test, _}), do: test
+
   def hash_table_iterator({:hash_table, _, tid}) do
     entries = :ets.tab2list(tid)
     index = :atomics.new(1, [])
@@ -12720,29 +12801,38 @@ defmodule ExLisp.Builtins do
     do: ExLisp.CLOS.ensure_generic_function(name, lambda_list, options)
 
   def invalid_method_error(method, control \\ "", args \\ []),
-    do: ExLisp.Condition.error(:invalid_method_error, [method: method, format_control: control, format_arguments: args])
+    do:
+      ExLisp.Condition.error(:invalid_method_error,
+        method: method,
+        format_control: control,
+        format_arguments: args
+      )
 
   def method_combination_error(control \\ "", args \\ []),
-    do: ExLisp.Condition.error(:method_combination_error, [format_control: control, format_arguments: args])
+    do:
+      ExLisp.Condition.error(:method_combination_error,
+        format_control: control,
+        format_arguments: args
+      )
 
   def no_applicable_method(generic, args \\ []),
-    do: ExLisp.Condition.error(:no_applicable_method, [generic_function: generic, arguments: args])
+    do: ExLisp.Condition.error(:no_applicable_method, generic_function: generic, arguments: args)
 
   def no_next_method(method, args \\ []),
-    do: ExLisp.Condition.error(:no_next_method, [method: method, arguments: args])
+    do: ExLisp.Condition.error(:no_next_method, method: method, arguments: args)
 
   def slot_missing(class, object, slot, operation, new_value \\ nil),
     do:
-      ExLisp.Condition.error(:slot_missing, [
+      ExLisp.Condition.error(:slot_missing,
         class: class,
         object: object,
         slot: slot,
         operation: operation,
         new_value: new_value
-      ])
+      )
 
   def slot_unbound(class, instance, slot),
-    do: ExLisp.Condition.error(:unbound_slot, [class: class, instance: instance, name: slot])
+    do: ExLisp.Condition.error(:unbound_slot, class: class, instance: instance, name: slot)
 
   def unbound_slot_instance(condition),
     do: ExLisp.Condition.get_slot(condition, :instance)
