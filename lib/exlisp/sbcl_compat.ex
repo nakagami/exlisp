@@ -61,10 +61,12 @@ defmodule ExLisp.SBCLCompat do
 
         ref = make_ref()
         parent_env = ExLisp.Package.current_package()
+        mutable_cons_scope = ExLisp.MutableCons.scope()
 
         pid =
           Kernel.spawn(fn ->
             ExLisp.Package.set_current_package(parent_env)
+            ExLisp.MutableCons.set_scope(mutable_cons_scope)
 
             result =
               try do
@@ -339,7 +341,7 @@ defmodule ExLisp.SBCLCompat do
             {:t, %{state | count: new_count}}
           end
         else
-          {:nil, state}
+          {nil, state}
         end
       end)
     rescue

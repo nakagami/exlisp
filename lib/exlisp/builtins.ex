@@ -8725,6 +8725,55 @@ defmodule ExLisp.Builtins do
     end
   end
 
+  def uiop_symbol_call([package, name | args]) do
+    symbol_name = "#{to_string_val(package)}.#{to_string_val(name)}"
+    function = ExLisp.Env.get_fun(ExLisp.Env.normalize_name(symbol_name))
+    invoke_fn(function, args)
+  end
+
+  def file_exists_p(path), do: if(File.regular?(path |> to_string_val()), do: :t, else: nil)
+
+  def directory_exists_p(path),
+    do: if(File.dir?(path |> to_string_val()), do: :t, else: nil)
+
+  def directory_pathname_p(path) do
+    value = to_string_val(path)
+    if String.ends_with?(value, "/") or File.dir?(value), do: :t, else: nil
+  end
+
+  def directory_files(path) do
+    path
+    |> to_string_val()
+    |> Path.join("*")
+    |> Path.wildcard()
+    |> Enum.filter(&File.regular?/1)
+  end
+
+  def subdirectories(path) do
+    path
+    |> to_string_val()
+    |> Path.join("*")
+    |> Path.wildcard()
+    |> Enum.filter(&File.dir?/1)
+    |> Enum.map(&(&1 <> "/"))
+  end
+
+  def unix_namestring(path), do: path |> ExLisp.Pathname.namestring() |> Path.expand()
+  def delete_file_if_exists(path), do: if(File.rm(to_string_val(path)) == :ok, do: :t, else: nil)
+  def getcwd([]), do: File.cwd!()
+  def getcwd, do: File.cwd!()
+
+  def print_condition_backtrace(args) when is_list(args) do
+    [condition | opts] = args
+    options = parse_lisp_keywords(opts)
+    stream = Keyword.get(options, :stream, :standard_error)
+    IO.inspect(condition, device: if(stream == :standard_error, do: :stderr, else: :stdio))
+    nil
+  end
+
+  def swank_create_server(_args), do: nil
+  def swank_stop_server(_args), do: nil
+
   def compile_file(path, opts \\ []) do
     file_path = to_string_val(path)
 
@@ -10770,10 +10819,10 @@ defmodule ExLisp.Builtins do
           macro_fun = ExLisp.Env.get_macro(op_name)
 
           expanded =
-            if is_function(macro_fun, 2) do
-              macro_fun.(args, form)
-            else
-              macro_fun.(args)
+            cond do
+              match?(%ExLisp.Closure{}, macro_fun) -> invoke_fn(macro_fun, [args, form])
+              is_function(macro_fun, 2) -> macro_fun.(args, form)
+              true -> macro_fun.(args)
             end
 
           expanded

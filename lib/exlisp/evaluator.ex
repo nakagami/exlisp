@@ -1246,6 +1246,15 @@ defmodule ExLisp.Evaluator do
 
       op
       when op in [
+             :"uiop:with-temporary-file",
+             :"uiop.with-temporary-file",
+             :"uiop:with_temporary_file",
+             :"uiop.with_temporary_file"
+           ] ->
+        eval_with_temporary_file(args, env)
+
+      op
+      when op in [
              :with_mutex,
              :_cl_with_mutex_,
              :"with-mutex",
@@ -1393,6 +1402,11 @@ defmodule ExLisp.Evaluator do
 
       op
       when op in [:declaim, :_cl_declaim_, :proclaim, :_cl_proclaim_, :declare, :_cl_declare_] ->
+        declaration = {:list, 1, [{:id, 1, [to_string(op)]} | args]}
+
+        LispBeam.extract_special_vars([declaration])
+        |> Enum.each(&Env.proclaim_special/1)
+
         :t
 
       op
@@ -2633,7 +2647,8 @@ defmodule ExLisp.Evaluator do
   defp do_fallback_setf_place(place, unwrapped, env) do
     case place do
       {:list, _pos, [op_node | place_args]} ->
-        op = LispBeam.extract_op_name(op_node)
+        raw_op = LispBeam.extract_op_name(op_node)
+        op = local_operator_name(raw_op)
         setf_fn_sym = :"setf_#{op}"
 
         cond do
@@ -2674,6 +2689,17 @@ defmodule ExLisp.Evaluator do
         unwrapped
     end
   end
+
+  defp local_operator_name(op) when is_atom(op) do
+    op
+    |> Atom.to_string()
+    |> String.split(~r/[:.]/, parts: 2)
+    |> List.last()
+    |> String.replace("-", "_")
+    |> String.to_atom()
+  end
+
+  defp local_operator_name(op), do: op
 
   defp eval_psetq(args, env) do
     pairs = Enum.chunk_every(args, 2)
@@ -3712,6 +3738,52 @@ defmodule ExLisp.Evaluator do
     end
   end
 
+  defp eval_with_temporary_file([options_node | body_nodes], env) do
+    options =
+      case options_node do
+        {:list, _, values} -> values
+        values when is_list(values) -> values
+        _ -> []
+      end
+
+    {stream_var, pathname_var, keep?} =
+      options
+      |> Enum.chunk_every(2)
+      |> Enum.reduce({nil, nil, false}, fn
+        [key_node, value_node], {stream, pathname, keep} ->
+          case LispBeam.extract_symbol_name(key_node) do
+            :stream -> {LispBeam.extract_symbol_name(value_node), pathname, keep}
+            :pathname -> {stream, LispBeam.extract_symbol_name(value_node), keep}
+            :keep -> {stream, pathname, eval(value_node, env) not in [nil, false]}
+            _ -> {stream, pathname, keep}
+          end
+
+        _, acc ->
+          acc
+      end)
+
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "exlisp-#{System.unique_integer([:positive, :monotonic])}.tmp"
+      )
+
+    File.touch!(path)
+    stream = ExLisp.Stream.open(path, [:direction, :output, :if_exists, :supersede])
+
+    temp_env =
+      [{stream_var, stream}, {pathname_var, ExLisp.Pathname.pathname(path)}]
+      |> Enum.reject(fn {name, _value} -> is_nil(name) end)
+      |> Enum.reduce(env, fn {name, value}, acc -> bind_lexical(acc, name, value) end)
+
+    try do
+      eval_progn(body_nodes, temp_env)
+    after
+      ExLisp.Stream.close(stream)
+      unless keep?, do: File.rm(path)
+    end
+  end
+
   defp eval_with_mutex(args, env) do
     case args do
       [{:list, _, [mutex_node | _opts]} | body_nodes] ->
@@ -3806,22 +3878,29 @@ defmodule ExLisp.Evaluator do
         [{:list, _, parameter_list}] -> parameter_list
         [{:lit, nil}] -> []
         [nil] -> []
-        [] -> Enum.map(slots, &elem(&1, 0))
+        [] -> :keyword
         _ -> params
       end
 
-    constructor_names = Enum.map(parameter_nodes, &LispBeam.extract_symbol_name/1)
+    constructor =
+      case parameter_nodes do
+        :keyword ->
+          fn passed_args -> Builtins.make_struct(struct_name, slots, passed_args) end
 
-    constructor = fn passed_args ->
-      positional =
-        constructor_names
-        |> Enum.zip(passed_args)
-        |> Enum.flat_map(fn {name, value} ->
-          [String.replace(to_string(name), "_", "-") |> String.to_atom(), value]
-        end)
+        nodes ->
+          constructor_names = Enum.map(nodes, &LispBeam.extract_symbol_name/1)
 
-      Builtins.make_struct(struct_name, slots, positional)
-    end
+          fn passed_args ->
+            positional =
+              constructor_names
+              |> Enum.zip(passed_args)
+              |> Enum.flat_map(fn {name, value} ->
+                [String.replace(to_string(name), "_", "-") |> String.to_atom(), value]
+              end)
+
+            Builtins.make_struct(struct_name, slots, positional)
+          end
+      end
 
     Env.put_fun(
       constructor_name,
@@ -4354,8 +4433,24 @@ defmodule ExLisp.Evaluator do
   defp bind_lexical(env, name, value) do
     ref = make_ref()
     :erlang.put(ref, value)
-    Map.put(env, name, {:box, ref})
+    binding = {:box, ref}
+
+    lexical_aliases(name)
+    |> Enum.reduce(env, fn alias_name, acc -> Map.put(acc, alias_name, binding) end)
   end
+
+  defp lexical_aliases(name) when is_atom(name) do
+    str = Atom.to_string(name)
+
+    [
+      name,
+      str |> String.replace("-", "_") |> String.to_atom(),
+      str |> String.replace("_", "-") |> String.to_atom()
+    ]
+    |> Enum.uniq()
+  end
+
+  defp lexical_aliases(name), do: [name]
 
   # --- Function / Closure creation ---
 

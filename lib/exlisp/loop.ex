@@ -1182,23 +1182,33 @@ defmodule ExLisp.Loop do
               |> Enum.map(&LispBeam.extract_symbol_name/1)
               |> MapSet.new()
 
-            initial_bindings =
-              if ast_references_any?(expr, prior_vars) do
-                []
-              else
-                Enum.map(var_bindings, fn {var, value} ->
-                  {:list, {1, 1}, [var, value]}
-                end)
-              end
+            if ast_references_any?(expr, prior_vars) and is_simple_var?(var_node) do
+              {
+                inits_acc,
+                params_acc,
+                inits_val_acc,
+                steps_acc,
+                checks_acc,
+                bindings_acc ++ var_bindings
+              }
+            else
+              temp_sym =
+                if is_simple_var?(var_node),
+                  do: symbol_node(LispBeam.extract_symbol_name(var_node)),
+                  else: symbol_node(:"__eq_#{unique_loop_id()}")
 
-            {
-              inits_acc ++ initial_bindings,
-              params_acc,
-              inits_val_acc,
-              steps_acc,
-              checks_acc,
-              bindings_acc ++ var_bindings
-            }
+              dependent_bindings =
+                if is_simple_var?(var_node), do: [], else: var_bindings
+
+              {
+                inits_acc ++ [{:list, {1, 1}, [temp_sym, expr]}],
+                params_acc ++ [temp_sym],
+                inits_val_acc ++ [temp_sym],
+                steps_acc ++ [expr],
+                checks_acc,
+                bindings_acc ++ dependent_bindings
+              }
+            end
 
           {:repeat, count_expr} ->
             cnt_sym = symbol_node(:"__cnt_#{unique_loop_id()}")

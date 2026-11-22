@@ -1115,6 +1115,50 @@ defmodule ExLisp.Package do
       internal_symbols: MapSet.new()
     }
 
+    uiop_exports = [
+      "DEFINE-PACKAGE",
+      "ENSURE-LIST",
+      "SYMBOL-CALL",
+      "FILE-EXISTS-P",
+      "DIRECTORY-EXISTS-P",
+      "DIRECTORY-PATHNAME-P",
+      "DIRECTORY-FILES",
+      "SUBDIRECTORIES",
+      "UNIX-NAMESTRING",
+      "DELETE-FILE-IF-EXISTS",
+      "GETCWD",
+      "WITH-TEMPORARY-FILE",
+      "RUN-PROGRAM",
+      "QUIT"
+    ]
+
+    uiop_pkg = %ExLisp.Package{
+      name: "UIOP",
+      nicknames: [],
+      use_list: ["COMMON-LISP"],
+      used_by_list: [],
+      external_symbols: MapSet.new(uiop_exports),
+      internal_symbols: MapSet.new()
+    }
+
+    uiop_image_pkg = %ExLisp.Package{
+      name: "UIOP/IMAGE",
+      nicknames: ["UIOP.IMAGE"],
+      use_list: ["COMMON-LISP"],
+      used_by_list: [],
+      external_symbols: MapSet.new(["PRINT-CONDITION-BACKTRACE"]),
+      internal_symbols: MapSet.new()
+    }
+
+    swank_pkg = %ExLisp.Package{
+      name: "SWANK",
+      nicknames: [],
+      use_list: ["COMMON-LISP"],
+      used_by_list: [],
+      external_symbols: MapSet.new(["CREATE-SERVER", "STOP-SERVER"]),
+      internal_symbols: MapSet.new()
+    }
+
     sb_thread_exports = [
       "MAKE-THREAD",
       "JOIN-THREAD",
@@ -1198,6 +1242,9 @@ defmodule ExLisp.Package do
     save_package(cl_pkg)
     save_package(cl_user_pkg)
     save_package(kw_pkg)
+    save_package(uiop_pkg)
+    save_package(uiop_image_pkg)
+    save_package(swank_pkg)
     save_package(sb_thread_pkg)
     save_package(sb_ext_pkg)
     save_package(sb_posix_pkg)
@@ -1232,7 +1279,7 @@ defmodule ExLisp.Package do
         end
 
       name ->
-        str = package_designator_string(name)
+        str = package_designator_string(name) |> String.upcase()
 
         [str, String.replace(str, "_", "-"), String.replace(str, "-", "_")]
         |> Enum.uniq()
@@ -2072,6 +2119,14 @@ defmodule ExLisp.Package do
     :t
   end
 
+  def add_nickname(pkg_desig, nickname) do
+    pkg = find_package!(pkg_desig)
+    nick = package_designator_string(nickname)
+    updated = %{pkg | nicknames: Enum.uniq(pkg.nicknames ++ [nick])}
+    save_package(updated)
+    updated
+  end
+
   def unexport(symbols, pkg_desig \\ nil) do
     pkg =
       if is_nil(pkg_desig), do: find_package!(current_package()), else: find_package!(pkg_desig)
@@ -2527,6 +2582,15 @@ defmodule ExLisp.Package do
 
   defp package_designator_string(%ExLisp.Package{name: name}), do: name
   defp package_designator_string(designator) when is_binary(designator), do: designator
+
+  defp package_designator_string(designator) when is_atom(designator),
+    do:
+      designator
+      |> Atom.to_string()
+      |> clean_uninterned()
+      |> String.trim_leading(":")
+      |> String.upcase()
+      |> String.replace("_", "-")
 
   defp package_designator_string(designator) do
     case symbol_to_str(designator) do

@@ -102,7 +102,8 @@ defmodule ExLisp.Condition do
             normalized -> normalized
           end
 
-        true -> [parent_types]
+        true ->
+          [parent_types]
       end
 
     report_opt =
@@ -110,9 +111,14 @@ defmodule ExLisp.Condition do
         [key, rep] when is_atom(key) ->
           if normalize_option_key(key) == "report", do: rep
 
-        {:report, rep} -> rep
-        [":report", rep] -> rep
-        _ -> nil
+        {:report, rep} ->
+          rep
+
+        [":report", rep] ->
+          rep
+
+        _ ->
+          nil
       end)
 
     extra_slots =
@@ -281,6 +287,7 @@ defmodule ExLisp.Condition do
 
         msg = format_condition(cond_obj)
         output = "WARNING: #{msg}\n"
+
         stream =
           try do
             ExLisp.Env.get_var(:"*error-output*")
@@ -517,21 +524,7 @@ defmodule ExLisp.Condition do
   def format_condition(other), do: inspect(other)
 
   defp format_string(ctrl, args) when is_binary(ctrl) do
-    if args == [] or args == nil do
-      ctrl
-    else
-      flat_args = if is_list(args), do: args, else: [args]
-
-      Enum.reduce(flat_args, ctrl, fn arg, acc ->
-        arg_str = ExLisp.to_repl_display(arg) |> inspect()
-
-        if String.contains?(acc, "~a") or String.contains?(acc, "~A") do
-          Regex.replace(~r/~[aA]/, acc, to_string(arg), global: false)
-        else
-          Regex.replace(~r/~[sS]/, acc, arg_str, global: false)
-        end
-      end)
-    end
+    ExLisp.CLFormat.format(ctrl, args || [])
   end
 
   defp format_string(other, _), do: to_string(other)
@@ -571,7 +564,7 @@ defmodule ExLisp.Condition do
     else
       Enum.filter(restarts, fn r ->
         restart_applies_to_condition?(r, condition) and
-          (if is_function(r[:test], 1), do: r.test.(condition), else: true)
+          if is_function(r[:test], 1), do: r.test.(condition), else: true
       end)
     end
   end
@@ -671,6 +664,7 @@ defmodule ExLisp.Condition do
       _ -> n
     end
   end
+
   def restart_name(name) when is_atom(name), do: name
   def restart_name(%ExLisp.Symbol{name: n}), do: String.to_atom(String.downcase(n))
   def restart_name(_), do: nil

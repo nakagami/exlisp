@@ -21,13 +21,65 @@ defmodule ExLisp.ASDF do
             end
           end)
 
-        defs = collect_macro_defsystems(asts, static_defs)
+        defs =
+          asts
+          |> collect_macro_defsystems(static_defs)
+          |> collect_registered_packages(asts)
+
         add_package_inferred_systems(defs, Path.dirname(asd_path))
 
       {:error, reason} ->
         raise SyntaxError, description: inspect(reason), file: asd_path, line: 1
     end
   end
+
+  defp collect_registered_packages(definitions, asts) do
+    Enum.reduce(asts, definitions, fn ast, acc ->
+      case extract_registered_packages(ast) do
+        {:ok, system_name, packages} ->
+          case Map.get(acc, system_name) do
+            nil ->
+              acc
+
+            system ->
+              Map.put(
+                acc,
+                system_name,
+                Map.put(system, :registered_packages, packages)
+              )
+          end
+
+        :error ->
+          acc
+      end
+    end)
+  end
+
+  defp extract_registered_packages(
+         {:list, _, [op, system_node, {:list, _, [{:id, _, [quote_op]}, package_list]}]}
+       )
+       when quote_op in ["quote", "QUOTE"] do
+    if LispBeam.extract_symbol_name(op) == :register_system_packages do
+      system_name = normalize_name(system_node)
+      packages = extract_list_of_names(package_list)
+      {:ok, system_name, packages}
+    else
+      :error
+    end
+  end
+
+  defp extract_registered_packages({:list, _, [op, system_node, {:quoted, _, packages_node}]}) do
+    if LispBeam.extract_symbol_name(op) ==
+         :register_system_packages do
+      system_name = normalize_name(system_node)
+      packages = Enum.flat_map(packages_node, &extract_list_of_names/1)
+      {:ok, system_name, packages}
+    else
+      :error
+    end
+  end
+
+  defp extract_registered_packages(_), do: :error
 
   defp collect_macro_defsystems(asts, definitions) do
     Process.put(:exlisp_asdf_definitions, definitions)
@@ -228,6 +280,7 @@ defmodule ExLisp.ASDF do
   defp parse_options_kv([k_node, v_node | rest], acc) do
     key =
       case k_node do
+        {:keyword, _, k} -> k
         {:lit, k} when is_atom(k) -> k
         {:id, _, [name]} -> String.downcase(name) |> String.to_atom()
         _ -> nil
@@ -458,6 +511,7 @@ defmodule ExLisp.ASDF do
   defp parse_component_opts_kv([k_node, v_node | rest], acc) do
     key =
       case k_node do
+        {:keyword, _, k} -> k
         {:lit, k} when is_atom(k) -> k
         {:id, _, [name]} -> String.downcase(name) |> String.to_atom()
         _ -> nil
@@ -719,6 +773,8 @@ defmodule ExLisp.ASDF do
         end)
       end)
 
+      register_system_packages(system_info)
+
       sys_name = system_info.name
 
       if pkg = ExLisp.Package.find_package(String.upcase(sys_name)) do
@@ -729,6 +785,21 @@ defmodule ExLisp.ASDF do
     after
       ExLisp.Package.set_current_package(prev_pkg)
     end
+  end
+
+  defp register_system_packages(system_info) do
+    Enum.each(system_info[:registered_packages] || [], fn alias_name ->
+      alias_name = String.upcase(alias_name)
+
+      source =
+        ExLisp.Package.find_package(String.replace(alias_name, ".", "/")) ||
+          ExLisp.Package.find_package(String.replace(alias_name, ".", "-")) ||
+          ExLisp.Package.find_package(system_info.name)
+
+      if source do
+        ExLisp.Package.add_nickname(source, alias_name)
+      end
+    end)
   end
 
   defp with_system_load_features(system_info, fun) do

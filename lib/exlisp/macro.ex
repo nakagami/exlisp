@@ -47,6 +47,7 @@ defmodule ExLisp.Macro do
 
   defp extract_elements({:list, _pos, elems}), do: elems
   defp extract_elements({:quoted, _pos, elems}), do: elems
+
   defp extract_elements({:dotted_list, pos, elems, tail}),
     do: elems ++ [{:id, pos, ["&rest"]}, tail]
 

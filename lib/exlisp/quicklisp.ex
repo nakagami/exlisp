@@ -304,7 +304,7 @@ defmodule ExLisp.Quicklisp do
 
   defp skip_dependency?(dep) do
     d = String.downcase(to_string(dep))
-    d in ["asdf", "sb-rt", "rt", "sb-bsd-sockets", "uiop"]
+    d in ["asdf", "sb-rt", "rt", "sb-bsd-sockets", "uiop", "swank"]
   end
 
   defp ensure_project_installed(%{url: url, prefix: prefix}) do

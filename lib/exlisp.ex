@@ -103,7 +103,9 @@ defmodule ExLisp do
     ExLisp.Env.ensure_env()
     abs_path = Path.expand(path)
     ExLisp.Env.set_var(:"*load-pathname*", abs_path)
+    ExLisp.Env.set_var(:"*load_pathname*", abs_path)
     ExLisp.Env.set_var(:"*load-truename*", abs_path)
+    ExLisp.Env.set_var(:"*load_truename*", abs_path)
     content = File.read!(path)
 
     res =

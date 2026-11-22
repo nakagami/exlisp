@@ -212,6 +212,32 @@ defmodule QuicklispTest do
     assert ExLisp.eval("(symbol-name '#:temp-var)") == "TEMP-VAR"
   end
 
+  test "reader executes registered numeric dispatch macro characters" do
+    ExLisp.eval("""
+    (defun number-array-reader (stream subchar bits)
+      (declare (ignore subchar))
+      (let ((data (read stream)))
+        `(make-array ,(length data)
+                     :element-type '(unsigned-byte ,bits)
+                     :initial-contents ',data)))
+    """)
+
+    ExLisp.eval("(set-dispatch-macro-character #\\# #\\N #'number-array-reader)")
+    assert ExLisp.eval("(arrayp #8N(1 2 3))") == :t
+  end
+
+  test "UIOP filesystem and temporary file helpers" do
+    path =
+      ExLisp.eval("""
+      (uiop:with-temporary-file (:pathname path :keep t)
+        (namestring path))
+      """)
+
+    assert File.exists?(path)
+    assert ExLisp.eval("(uiop:file-exists-p #{inspect(path)})") == :t
+    File.rm!(path)
+  end
+
   test "special forms: typecase, etypecase, check-type" do
     assert ExLisp.eval("(typecase 42 (string :str) (integer :int) (t :other))") == :int
     assert ExLisp.eval("(typecase \"hello\" (number :num) (string :str))") == :str

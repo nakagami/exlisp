@@ -185,6 +185,7 @@ defmodule ExLisp.LispParser do
   # Keyword pipe-escaped symbol (:|...|)
   defp tokenize_chars([?:, ?| | rest], line, acc) do
     {sym_str, rem} = read_pipe_symbol_chars(rest, [])
+
     atom =
       if sym_str == String.upcase(sym_str) do
         sym_str |> String.downcase() |> String.to_atom()
@@ -199,6 +200,7 @@ defmodule ExLisp.LispParser do
   # Pipe-escaped symbol (|...|)
   defp tokenize_chars([?| | rest], line, acc) do
     {sym_str, rem} = read_pipe_symbol_chars(rest, [])
+
     sym_atom =
       if sym_str == String.upcase(sym_str) do
         sym_str |> String.downcase() |> String.replace("-", "_") |> String.to_atom()
@@ -254,7 +256,22 @@ defmodule ExLisp.LispParser do
         read_sized_bit_vector(after_star, n, line, acc)
 
       [?@ | after_array] ->
-        tokenize_chars(after_array, line, [{:sized_array_elements, line, n} | acc])
+        case custom_dispatch_value(?@, n, after_array) do
+          {:ok, value, remaining} ->
+            tokenize_chars(remaining, line, [{:custom_dispatch, line, value} | acc])
+
+          :error ->
+            tokenize_chars(after_array, line, [{:sized_array_elements, line, n} | acc])
+        end
+
+      [sub_char | after_dispatch] ->
+        case custom_dispatch_value(sub_char, n, after_dispatch) do
+          {:ok, value, remaining} ->
+            tokenize_chars(remaining, line, [{:custom_dispatch, line, value} | acc])
+
+          :error ->
+            {:error, "invalid dispatch macro ##{n} at line #{line}"}
+        end
 
       _ ->
         {:error, "invalid dispatch macro ##{n} at line #{line}"}
@@ -400,8 +417,10 @@ defmodule ExLisp.LispParser do
   end
 
   defp read_pathname([], line, _curr, _acc), do: {:error, "unclosed pathname at line #{line}"}
+
   defp read_pathname([?\\, ?\" | rest], line, curr, acc),
     do: read_pathname(rest, line, [?\" | curr], acc)
+
   defp read_pathname([?\\, c | rest], line, curr, acc),
     do: read_pathname(rest, line, [c | curr], acc)
 
@@ -581,6 +600,7 @@ defmodule ExLisp.LispParser do
                 _ ->
                   if has_exponent_suffix?(str) do
                     norm_str = Regex.replace(@exponent_regex, str, "\\1e\\2")
+
                     norm_str =
                       if String.contains?(norm_str, ".e"),
                         do: String.replace(norm_str, ".e", ".0e"),
@@ -643,58 +663,58 @@ defmodule ExLisp.LispParser do
          ExLisp.Readtable.readtable_case() != :upcase do
       parse_preserved_symbol_or_keyword(str, line)
     else
-    case str do
-      "nil" ->
-        {nil, line}
+      case str do
+        "nil" ->
+          {nil, line}
 
-      "NIL" ->
-        {nil, line}
+        "NIL" ->
+          {nil, line}
 
-      "t" ->
-        {:t, line}
+        "t" ->
+          {:t, line}
 
-      "T" ->
-        {:t, line}
+        "T" ->
+          {:t, line}
 
-      _ ->
-        cond do
-          # 1. nil / NIL / n.i.l
-          String.downcase(str) in ["nil", "n.i.l"] ->
-            {nil, line}
+        _ ->
+          cond do
+            # 1. nil / NIL / n.i.l
+            String.downcase(str) in ["nil", "n.i.l"] ->
+              {nil, line}
 
-          # 2. t / T
-          String.downcase(str) == "t" ->
-            {:t, line}
+            # 2. t / T
+            String.downcase(str) == "t" ->
+              {:t, line}
 
-          # 3. Module function remote call (e.g., :math:sqrt, :io:read, math:sqrt, IO.puts, String.upcase)
-          is_remote_call?(str) ->
-            parts = split_remote_parts(str)
-            {:id, line, parts}
+            # 3. Module function remote call (e.g., :math:sqrt, :io:read, math:sqrt, IO.puts, String.upcase)
+            is_remote_call?(str) ->
+              parts = split_remote_parts(str)
+              {:id, line, parts}
 
-          # 4. Single keyword (e.g., :foo, :bar, :my-key, :nil, :t)
-          String.starts_with?(str, ":") ->
-            keyword_name = String.slice(str, 1..-1//1) |> normalize_symbol_name()
+            # 4. Single keyword (e.g., :foo, :bar, :my-key, :nil, :t)
+            String.starts_with?(str, ":") ->
+              keyword_name = String.slice(str, 1..-1//1) |> normalize_symbol_name()
 
-            atom =
-              case keyword_name do
-                "nil" -> :":nil"
-                "t" -> :":t"
-                _ -> String.to_atom(keyword_name)
-              end
+              atom =
+                case keyword_name do
+                  "nil" -> :":nil"
+                  "t" -> :":t"
+                  _ -> String.to_atom(keyword_name)
+                end
 
-            ExLisp.Env.register_keyword(atom)
-            {:keyword, line, atom}
+              ExLisp.Env.register_keyword(atom)
+              {:keyword, line, atom}
 
-          # 5. Regular symbol
-          true ->
-            normalized =
-              if Process.get(:exlisp_reader_mode, false),
-                do: normalize_reader_symbol_name(str),
-                else: normalize_symbol_name(str)
+            # 5. Regular symbol
+            true ->
+              normalized =
+                if Process.get(:exlisp_reader_mode, false),
+                  do: normalize_reader_symbol_name(str),
+                  else: normalize_symbol_name(str)
 
-            {:symbol, line, normalized}
-        end
-    end
+              {:symbol, line, normalized}
+          end
+      end
     end
   end
 
@@ -802,37 +822,37 @@ defmodule ExLisp.LispParser do
 
   # Symbol operators and special symbols (not undergoing hyphen conversion)
   @preserved_symbols MapSet.new([
-    "+",
-    "-",
-    "*",
-    "/",
-    "1+",
-    "1-",
-    "=",
-    "/=",
-    "<",
-    "<=",
-    ">",
-    ">=",
-    "**",
-    "***",
-    "++",
-    "+++",
-    "string=",
-    "string/=",
-    "string<",
-    "string<=",
-    "string>",
-    "string>=",
-    "char=",
-    "char/=",
-    "char<",
-    "char<=",
-    "char>",
-    "char>=",
-    "list*",
-    "let*"
-  ])
+                       "+",
+                       "-",
+                       "*",
+                       "/",
+                       "1+",
+                       "1-",
+                       "=",
+                       "/=",
+                       "<",
+                       "<=",
+                       ">",
+                       ">=",
+                       "**",
+                       "***",
+                       "++",
+                       "+++",
+                       "string=",
+                       "string/=",
+                       "string<",
+                       "string<=",
+                       "string>",
+                       "string>=",
+                       "char=",
+                       "char/=",
+                       "char<",
+                       "char<=",
+                       "char>",
+                       "char>=",
+                       "list*",
+                       "let*"
+                     ])
 
   @doc """
   Normalizes a symbol string to ExLisp's standard symbol representation.
@@ -842,26 +862,26 @@ defmodule ExLisp.LispParser do
     if String.contains?(str, <<@escaped_marker::utf8>>) do
       normalize_escaped_case(str, &String.upcase/1)
     else
-    down = String.downcase(str)
+      down = String.downcase(str)
 
-    cond do
-      MapSet.member?(@preserved_symbols, down) ->
-        down
+      cond do
+        MapSet.member?(@preserved_symbols, down) ->
+          down
 
-      match?(<<"+", _::binary-size(byte_size(down) - 2), "+">>, down) and byte_size(down) > 2 ->
-        <<"+", inner::binary-size(byte_size(down) - 2), "+">> = down
-        "+#{String.replace(inner, "-", "_")}+"
+        match?(<<"+", _::binary-size(byte_size(down) - 2), "+">>, down) and byte_size(down) > 2 ->
+          <<"+", inner::binary-size(byte_size(down) - 2), "+">> = down
+          "+#{String.replace(inner, "-", "_")}+"
 
-      match?(<<"*", _::binary-size(byte_size(down) - 2), "*">>, down) and byte_size(down) > 2 ->
-        <<"*", inner::binary-size(byte_size(down) - 2), "*">> = down
-        "*#{String.replace(inner, "-", "_")}*"
+        match?(<<"*", _::binary-size(byte_size(down) - 2), "*">>, down) and byte_size(down) > 2 ->
+          <<"*", inner::binary-size(byte_size(down) - 2), "*">> = down
+          "*#{String.replace(inner, "-", "_")}*"
 
-      not String.contains?(down, "-") ->
-        down
+        not String.contains?(down, "-") ->
+          down
 
-      true ->
-        String.replace(down, "-", "_")
-    end
+        true ->
+          String.replace(down, "-", "_")
+      end
     end
   end
 
@@ -937,12 +957,15 @@ defmodule ExLisp.LispParser do
   defp parse_expr([{:float, _line, val} | rest]), do: {:ok, {:lit, val}, rest}
   defp parse_expr([{:ratio, _line, val} | rest]), do: {:ok, {:lit, val}, rest}
   defp parse_expr([{:string, _line, val} | rest]), do: {:ok, {:lit, val}, rest}
+
   defp parse_expr([{:pathname, _line, val} | rest]),
     do: {:ok, {:lit, ExLisp.Pathname.pathname(val)}, rest}
+
   defp parse_expr([{:char, _line, val} | rest]) do
     char_val = if match?(%ExLisp.Character{}, val), do: val, else: ExLisp.Character.new(val)
     {:ok, {:lit, char_val}, rest}
   end
+
   defp parse_expr([{:keyword, line, nil} | rest]), do: {:ok, {:keyword, line, nil}, rest}
   defp parse_expr([{:keyword, _line, val} | rest]), do: {:ok, {:lit, val}, rest}
   defp parse_expr([{nil, _line} | rest]), do: {:ok, {:lit, nil}, rest}
@@ -1006,6 +1029,10 @@ defmodule ExLisp.LispParser do
   end
 
   # Array literal (#nA(...) or #A(...))
+  defp parse_expr([{:custom_dispatch, _line, value} | rest]) do
+    {:ok, value |> mark_reader_keywords() |> ExLisp.Macro.lisp_data_to_ast(), rest}
+  end
+
   defp parse_expr([{:array_rank, line, rank} | rest]) do
     case parse_expr(rest) do
       {:ok, contents_expr, rem} ->
@@ -1054,12 +1081,10 @@ defmodule ExLisp.LispParser do
   defp parse_expr([{:complex_lparen, line} | rest]) do
     case parse_list(rest, line, :rparen, []) do
       {:ok, {:list, l, [real, imag]}, rem} ->
-        {:ok,
-         {:reader_macro, l, {:list, l, [{:id, l, ["complex"]}, real, imag]}}, rem}
+        {:ok, {:reader_macro, l, {:list, l, [{:id, l, ["complex"]}, real, imag]}}, rem}
 
       {:ok, {:list, l, elems}, rem} ->
-        {:ok,
-         {:reader_macro, l, {:list, l, [{:id, l, ["complex"]} | elems]}}, rem}
+        {:ok, {:reader_macro, l, {:list, l, [{:id, l, ["complex"]} | elems]}}, rem}
 
       err ->
         err
@@ -1299,6 +1324,36 @@ defmodule ExLisp.LispParser do
         {:dotted_list, line, elements, other}
     end
   end
+
+  defp custom_dispatch_value(sub_char, arg, remaining_chars) do
+    function = ExLisp.Readtable.get_dispatch_macro_character(?#, sub_char)
+
+    if function do
+      remaining = List.to_string(remaining_chars)
+      stream = ExLisp.Stream.make_string_input_stream(remaining)
+
+      value =
+        ExLisp.Builtins.invoke_fn(function, [
+          stream,
+          ExLisp.Character.new(sub_char),
+          arg
+        ])
+
+      position = ExLisp.Stream.file_position(stream)
+      rest = remaining |> String.slice(position..-1//1) |> String.to_charlist()
+      {:ok, value, rest}
+    else
+      :error
+    end
+  end
+
+  defp mark_reader_keywords(data) when is_list(data), do: Enum.map(data, &mark_reader_keywords/1)
+
+  defp mark_reader_keywords(value) when is_atom(value) do
+    if ExLisp.Env.keyword?(value), do: {:__keyword__, value}, else: value
+  end
+
+  defp mark_reader_keywords(value), do: value
 
   defp skip_next_expr(tokens) do
     case parse_expr(tokens) do

@@ -1169,7 +1169,7 @@ defmodule ExLisp.CLOS do
         true
       else
         cpl = get_cpl(actual_class)
-        exp_norm in cpl
+        exp_norm in cpl or ExLisp.Type.typep(arg, exp_norm)
       end
     end
   end
@@ -1708,6 +1708,8 @@ defmodule ExLisp.CLOS do
   defp compare_specializer(s, s, _arg), do: :equal
   defp compare_specializer({:eql, _}, _other, _arg), do: :greater
   defp compare_specializer(_other, {:eql, _}, _arg), do: :lesser
+  defp compare_specializer(s, :t, _arg) when s != :t, do: :greater
+  defp compare_specializer(:t, s, _arg) when s != :t, do: :lesser
 
   defp compare_specializer(s1, s2, arg) do
     cpl = get_cpl(class_of(arg))

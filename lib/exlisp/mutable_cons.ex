@@ -2,24 +2,58 @@ defmodule ExLisp.MutableCons do
   @moduledoc false
 
   @table :exlisp_mutable_cons_table
+  @owner :exlisp_mutable_cons_owner
 
   def ensure_table do
     case :ets.whereis(@table) do
-      :undefined ->
-        try do
-          :ets.new(@table, [:set, :public, :named_table])
-        rescue
-          ArgumentError -> :ok
-        end
+      :undefined -> start_table_owner()
+      _ -> :ok
+    end
+  end
 
-      _ ->
-        :ok
+  defp start_table_owner do
+    :global.trans({__MODULE__, @table}, fn ->
+      if :ets.whereis(@table) == :undefined do
+        parent = self()
+
+        pid =
+          spawn(fn ->
+            try do
+              Process.register(self(), @owner)
+            rescue
+              ArgumentError -> :ok
+            end
+
+            :ets.new(@table, [:set, :public, :named_table])
+            send(parent, {:exlisp_mutable_cons_table, self()})
+            table_owner_loop()
+          end)
+
+        receive do
+          {:exlisp_mutable_cons_table, ^pid} -> :ok
+        end
+      end
+    end)
+
+    :ok
+  end
+
+  defp table_owner_loop do
+    receive do
+      :stop -> :ok
     end
   end
 
   def reset do
     ensure_table()
-    :ets.delete_all_objects(@table)
+    scope = scope()
+
+    try do
+      :ets.select_delete(@table, [{{{scope, :_}, :_}, [], [true]}])
+    rescue
+      ArgumentError -> reset()
+    end
+
     :ok
   end
 
@@ -35,9 +69,12 @@ defmodule ExLisp.MutableCons do
     if MapSet.member?(seen, value) do
       value
     else
-      case :ets.lookup(@table, value) do
-        [{^value, replacement}] -> resolve(replacement, MapSet.put(seen, value))
-        [] -> value
+      case :ets.lookup(@table, {scope(), value}) do
+        [{{_scope, ^value}, replacement}] ->
+          resolve(replacement, MapSet.put(seen, value))
+
+        [] ->
+          value
       end
     end
   end
@@ -107,7 +144,17 @@ defmodule ExLisp.MutableCons do
 
   defp register(original, current, replacement) do
     ensure_table()
-    :ets.insert(@table, [{original, replacement}, {current, replacement}])
+    scope = scope()
+
+    :ets.insert(@table, [
+      {{scope, original}, replacement},
+      {{scope, current}, replacement}
+    ])
+
     replacement
   end
+
+  def scope, do: Process.get(:exlisp_mutable_cons_scope, self())
+
+  def set_scope(scope), do: Process.put(:exlisp_mutable_cons_scope, scope)
 end

@@ -562,7 +562,8 @@ defmodule ExLisp.Env do
   def has_var?(name) do
     var_name = normalize_name(name)
 
-    if :persistent_term.get({:exlisp_var, var_name}, :__not_found__) != :__not_found__ do
+    if :erlang.get({:"$special$", var_name}) != :undefined or
+         :persistent_term.get({:exlisp_var, var_name}, :__not_found__) != :__not_found__ do
       true
     else
       cands = symbol_lookup_candidates(var_name)
@@ -1064,33 +1065,50 @@ defmodule ExLisp.Env do
   end
 
   defp namespaced_lookup_candidates(sym) do
-    candidates = symbol_lookup_candidates(sym)
     str = Atom.to_string(sym)
 
     if String.contains?(str, ".") or String.contains?(str, ":") do
-      candidates
+      symbol_lookup_candidates(sym)
     else
-      package_candidates =
+      package_scope =
         try do
           package = ExLisp.Package.find_package!(ExLisp.Package.current_package())
-          package_names = [package.name | package.use_list]
-
-          Enum.flat_map(package_names, fn package_name ->
-            pkg_h = String.downcase(package_name) |> String.replace("_", "-")
-            pkg_u = String.downcase(package_name) |> String.replace("-", "_")
-
-            [
-              :"#{pkg_h}.#{str}",
-              :"#{pkg_h}:#{str}",
-              :"#{pkg_u}.#{str}",
-              :"#{pkg_u}:#{str}"
-            ]
-          end)
+          {package.name, package.use_list}
         rescue
-          _ -> []
+          _ -> {nil, []}
         end
 
-      Enum.uniq(candidates ++ package_candidates)
+      cache_key = {:"$exlisp_lookup_candidates$", sym, package_scope}
+
+      case Process.get(cache_key, :undefined) do
+        :undefined ->
+          candidates = symbol_lookup_candidates(sym)
+          {package_name, use_list} = package_scope
+
+          package_candidates =
+            if package_name do
+              Enum.flat_map([package_name | use_list], fn name ->
+                pkg_h = String.downcase(name) |> String.replace("_", "-")
+                pkg_u = String.downcase(name) |> String.replace("-", "_")
+
+                [
+                  :"#{pkg_h}.#{str}",
+                  :"#{pkg_h}:#{str}",
+                  :"#{pkg_u}.#{str}",
+                  :"#{pkg_u}:#{str}"
+                ]
+              end)
+            else
+              []
+            end
+
+          result = Enum.uniq(candidates ++ package_candidates)
+          Process.put(cache_key, result)
+          result
+
+        result ->
+          result
+      end
     end
   end
 
