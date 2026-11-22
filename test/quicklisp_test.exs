@@ -74,6 +74,8 @@ defmodule QuicklispTest do
     assert ExLisp.eval("#-exlisp 99 #+exlisp 100") == 100
     assert ExLisp.eval("#+(or sbcl exlisp) 123") == 123
     assert ExLisp.eval("#-(and (not exlisp) sbcl) 456") == 456
+    assert ExLisp.eval("#+sbcl 99 #-sbcl 77") == 77
+    assert ExLisp.eval("#+threads 55") == 55
 
     # Uninterned symbol #:
     assert ExLisp.eval("(symbolp '#:temp-var)") == :t

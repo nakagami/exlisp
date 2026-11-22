@@ -139,6 +139,7 @@ defmodule ExLisp.Env do
   def specialp(name) do
     normalized = normalize_name(name)
     atom_text = Atom.to_string(normalized)
+
     predefined_specials =
       [
         :standard_input,
@@ -256,15 +257,7 @@ defmodule ExLisp.Env do
       :beam,
       :erlang,
       :elixir,
-      :sbcl,
-      :sb_thread,
-      :sb_ext,
-      :sb_posix,
-      :sb_sys,
-      :"sb-thread",
-      :"sb-ext",
-      :"sb-posix",
-      :"sb-sys"
+      :threads
     ],
     :"*features*" => [
       :exlisp,
@@ -274,15 +267,7 @@ defmodule ExLisp.Env do
       :beam,
       :erlang,
       :elixir,
-      :sbcl,
-      :sb_thread,
-      :sb_ext,
-      :sb_posix,
-      :sb_sys,
-      :"sb-thread",
-      :"sb-ext",
-      :"sb-posix",
-      :"sb-sys"
+      :threads
     ],
     :pi => :math.pi(),
     :least_positive_single_float => 4.9e-45,
@@ -375,61 +360,61 @@ defmodule ExLisp.Env do
          var_name in [:"*debugger-hook*", :"*debugger_hook*"] do
       nil
     else
-    case :erlang.get({:"$special$", var_name}) do
-      :undefined ->
-        case :persistent_term.get({:exlisp_var, var_name}, :__not_found__) do
-          :__not_found__ ->
-            cands = symbol_lookup_candidates(var_name)
+      case :erlang.get({:"$special$", var_name}) do
+        :undefined ->
+          case :persistent_term.get({:exlisp_var, var_name}, :__not_found__) do
+            :__not_found__ ->
+              cands = symbol_lookup_candidates(var_name)
 
-            posix_argv_names = [
-              :"*posix-argv*",
-              :posix_argv,
-              :"*posix_argv*",
-              :"sb-ext:*posix-argv*",
-              :"sb_ext:*posix_argv*",
-              :"sb-ext:*posix_argv*",
-              :"sb-ext.*posix-argv*",
-              :"sb_ext.*posix_argv*",
-              :"sb-ext.*posix_argv*"
-            ]
+              posix_argv_names = [
+                :"*posix-argv*",
+                :posix_argv,
+                :"*posix_argv*",
+                :"sb-ext:*posix-argv*",
+                :"sb_ext:*posix_argv*",
+                :"sb-ext:*posix_argv*",
+                :"sb-ext.*posix-argv*",
+                :"sb_ext.*posix_argv*",
+                :"sb-ext.*posix_argv*"
+              ]
 
-            cond do
-              var_name == :"*readtable*" or var_name == :readtable or
-                  Enum.any?(cands, &(&1 == :"*readtable*")) ->
-                ExLisp.Readtable.current_readtable()
+              cond do
+                var_name == :"*readtable*" or var_name == :readtable or
+                    Enum.any?(cands, &(&1 == :"*readtable*")) ->
+                  ExLisp.Readtable.current_readtable()
 
-              var_name in posix_argv_names or Enum.any?(cands, &(&1 in posix_argv_names)) ->
-                ["exlisp" | System.argv()]
+                var_name in posix_argv_names or Enum.any?(cands, &(&1 in posix_argv_names)) ->
+                  ["exlisp" | System.argv()]
 
-              var_name in [:"*random-state*", :"*random_state*"] ->
-                ExLisp.Builtins.make_random_state()
+                var_name in [:"*random-state*", :"*random_state*"] ->
+                  ExLisp.Builtins.make_random_state()
 
-              Map.has_key?(@predefined_vars, var_name) ->
-                Map.fetch!(@predefined_vars, var_name)
+                Map.has_key?(@predefined_vars, var_name) ->
+                  Map.fetch!(@predefined_vars, var_name)
 
-              Enum.find_value(cands, fn c -> Map.get(@predefined_vars, c) end) != nil ->
-                Enum.find_value(cands, fn c -> Map.get(@predefined_vars, c) end)
+                Enum.find_value(cands, fn c -> Map.get(@predefined_vars, c) end) != nil ->
+                  Enum.find_value(cands, fn c -> Map.get(@predefined_vars, c) end)
 
-              keyword?(var_name) ->
-                var_name
+                keyword?(var_name) ->
+                  var_name
 
-              true ->
-                case lookup_global_module_var(var_name) do
-                  {:ok, value} ->
-                    value
+                true ->
+                  case lookup_global_module_var(var_name) do
+                    {:ok, value} ->
+                      value
 
-                  :error ->
-                    raise RuntimeError, "Unbound variable: #{var_name}"
-                end
-            end
+                    :error ->
+                      raise RuntimeError, "Unbound variable: #{var_name}"
+                  end
+              end
 
-          value ->
-            value
-        end
+            value ->
+              value
+          end
 
-      val ->
-        val
-    end
+        val ->
+          val
+      end
     end
   end
 
