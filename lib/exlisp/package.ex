@@ -21,6 +21,112 @@ defmodule ExLisp.Package do
             symbol_values: %{}
 
   @table :lisp_packages_table
+  @missing_cl_exports [
+    "**",
+    "***",
+    "*BREAK-ON-SIGNALS*",
+    "*COMPILE-FILE-PATHNAME*",
+    "*COMPILE-FILE-TRUENAME*",
+    "*COMPILE-PRINT*",
+    "*COMPILE-VERBOSE*",
+    "*DEBUG-IO*",
+    "*DEBUGGER-HOOK*",
+    "*DEFAULT-PATHNAME-DEFAULTS*",
+    "*ERROR-OUTPUT*",
+    "*FEATURES*",
+    "*GENSYM-COUNTER*",
+    "*LOAD-PATHNAME*",
+    "*LOAD-PRINT*",
+    "*LOAD-TRUENAME*",
+    "*LOAD-VERBOSE*",
+    "*MACROEXPAND-HOOK*",
+    "*MODULES*",
+    "*PACKAGE*",
+    "*PRINT-ARRAY*",
+    "*PRINT-BASE*",
+    "*PRINT-CASE*",
+    "*PRINT-CIRCLE*",
+    "*PRINT-ESCAPE*",
+    "*PRINT-GENSYM*",
+    "*PRINT-LENGTH*",
+    "*PRINT-LEVEL*",
+    "*PRINT-LINES*",
+    "*PRINT-MISER-WIDTH*",
+    "*PRINT-PPRINT-DISPATCH*",
+    "*PRINT-PRETTY*",
+    "*PRINT-RADIX*",
+    "*PRINT-READABLY*",
+    "*PRINT-RIGHT-MARGIN*",
+    "*QUERY-IO*",
+    "*RANDOM-STATE*",
+    "*READ-BASE*",
+    "*READ-DEFAULT-FLOAT-FORMAT*",
+    "*READ-EVAL*",
+    "*READ-SUPPRESS*",
+    "*READTABLE*",
+    "*STANDARD-INPUT*",
+    "*STANDARD-OUTPUT*",
+    "*TERMINAL-IO*",
+    "*TRACE-OUTPUT*",
+    "++",
+    "+++",
+    "//",
+    "///",
+    "/=",
+    "ABORT",
+    "ACONS",
+    "ADD-METHOD",
+    "ARITHMETIC-ERROR-OPERANDS",
+    "ARITHMETIC-ERROR-OPERATION",
+    "ARRAY-DIMENSION-LIMIT",
+    "ARRAY-RANK-LIMIT",
+    "ARRAY-TOTAL-SIZE-LIMIT",
+    "BASE-STRING",
+    "BIGNUM",
+    "BOOLEAN",
+    "BROADCAST-STREAM-STREAMS",
+    "CALL-ARGUMENTS-LIMIT",
+    "CHAR-CODE-LIMIT",
+    "CLEAR-INPUT",
+    "CLEAR-OUTPUT",
+    "CONCATENATED-STREAM-STREAMS",
+    "DOUBLE-FLOAT-EPSILON",
+    "DOUBLE-FLOAT-NEGATIVE-EPSILON",
+    "DRIBBLE",
+    "ECHO-STREAM-INPUT-STREAM",
+    "ECHO-STREAM-OUTPUT-STREAM",
+    "END-OF-FILE",
+    "LOGICAL-PATHNAME",
+    "LOGICAL-PATHNAME-TRANSLATIONS",
+    "LONG-SITE-NAME",
+    "MOST-NEGATIVE-DOUBLE-FLOAT",
+    "MOST-NEGATIVE-FIXNUM",
+    "MOST-NEGATIVE-LONG-FLOAT",
+    "MOST-NEGATIVE-SHORT-FLOAT",
+    "MOST-NEGATIVE-SINGLE-FLOAT",
+    "MOST-POSITIVE-DOUBLE-FLOAT",
+    "MOST-POSITIVE-FIXNUM",
+    "MOST-POSITIVE-LONG-FLOAT",
+    "MOST-POSITIVE-SHORT-FLOAT",
+    "MOST-POSITIVE-SINGLE-FLOAT",
+    "NBUTLAST",
+    "NIL",
+    "QUOTE",
+    "RASSOC",
+    "READER-ERROR",
+    "STREAMP",
+    "THROW"
+  ]
+  @nonstandard_cl_exports [
+    "APPLY-METHOD-COMBINATION",
+    "DEFGLOBAL",
+    "DRY-RUN",
+    "NBOUNDP",
+    "PROCLAMATION",
+    "RASSOR",
+    "STRING-CHAR",
+    "STRING-CHAR-P"
+  ]
 
   def ensure_tables do
     case :ets.whereis(@table) do
@@ -54,6 +160,7 @@ defmodule ExLisp.Package do
 
   def set_current_package(pkg_designator) do
     ensure_tables()
+
     pkg =
       case find_package(pkg_designator) do
         nil ->
@@ -63,6 +170,7 @@ defmodule ExLisp.Package do
         found ->
           found
       end
+
     special_key = {:"$special$", ExLisp.Env.normalize_name(:"*package*")}
 
     if :erlang.get(special_key) != :undefined do
@@ -974,12 +1082,18 @@ defmodule ExLisp.Package do
       "ZEROP"
     ]
 
+    cl_symbols =
+      cl_exports
+      |> MapSet.new()
+      |> MapSet.union(MapSet.new(@missing_cl_exports))
+      |> MapSet.difference(MapSet.new(@nonstandard_cl_exports))
+
     cl_pkg = %ExLisp.Package{
       name: "COMMON-LISP",
       nicknames: ["CL"],
       use_list: [],
       used_by_list: ["COMMON-LISP-USER"],
-      external_symbols: MapSet.new(cl_exports),
+      external_symbols: cl_symbols,
       internal_symbols: MapSet.new()
     }
 
@@ -1103,7 +1217,9 @@ defmodule ExLisp.Package do
     case pkg_designator do
       %ExLisp.Package{id: id} = p ->
         case :ets.lookup(@table, p.name) do
-          [{_key, %ExLisp.Package{} = stored}] -> stored
+          [{_key, %ExLisp.Package{} = stored}] ->
+            stored
+
           _ ->
             if id do
               :ets.tab2list(@table)
@@ -1149,7 +1265,8 @@ defmodule ExLisp.Package do
 
   def package_name(pkg_designator) do
     case find_package(pkg_designator) do
-      %ExLisp.Package{name: n} -> n
+      %ExLisp.Package{name: n} ->
+        n
 
       nil when is_struct(pkg_designator, ExLisp.Package) ->
         nil
@@ -1165,7 +1282,8 @@ defmodule ExLisp.Package do
     end
 
     case find_package(pkg_designator) do
-      %ExLisp.Package{nicknames: n} -> n
+      %ExLisp.Package{nicknames: n} ->
+        n
 
       nil when is_struct(pkg_designator, ExLisp.Package) ->
         []
@@ -1502,7 +1620,9 @@ defmodule ExLisp.Package do
     case find_package(pkg_designator) do
       nil ->
         case pkg_designator do
-          %ExLisp.Package{} -> nil
+          %ExLisp.Package{} ->
+            nil
+
           _ ->
             signal_deletable_package_error(pkg_designator)
             nil
@@ -1648,8 +1768,34 @@ defmodule ExLisp.Package do
 
         %{pkg | use_list: Enum.uniq(pkg.use_list ++ uses)}
 
+      "USE-REEXPORT" ->
+        uses =
+          args
+          |> Enum.map(&symbol_to_str/1)
+          |> Enum.reject(&(&1 == ""))
+          |> Enum.map(fn source ->
+            find_package!(source)
+          end)
+
+        Enum.each(uses, fn source_pkg ->
+          save_package(%{
+            source_pkg
+            | used_by_list: Enum.uniq([pkg.name | source_pkg.used_by_list])
+          })
+        end)
+
+        %{
+          pkg
+          | use_list: Enum.uniq(pkg.use_list ++ Enum.map(uses, & &1.name)),
+            external_symbols:
+              Enum.reduce(uses, pkg.external_symbols, fn source_pkg, symbols ->
+                MapSet.union(symbols, source_pkg.external_symbols)
+              end)
+        }
+
       "EXPORT" ->
         syms = Enum.map(args, &symbol_to_str/1) |> Enum.reject(&(&1 == ""))
+
         %{
           pkg
           | external_symbols: MapSet.union(pkg.external_symbols, MapSet.new(syms)),
@@ -1658,6 +1804,7 @@ defmodule ExLisp.Package do
 
       "INTERN" ->
         syms = Enum.map(args, &symbol_to_str/1) |> Enum.reject(&(&1 == ""))
+
         own_syms =
           Enum.reject(syms, fn name ->
             case find_symbol_in_pkg(name, pkg) do
@@ -1783,7 +1930,8 @@ defmodule ExLisp.Package do
   end
 
   defp signal_missing_import(_package) do
-    condition = ExLisp.Condition.make_condition(:simple_error, format_control: "Missing package symbol")
+    condition =
+      ExLisp.Condition.make_condition(:simple_error, format_control: "Missing package symbol")
 
     restart = %{
       name: :continue,
@@ -1857,9 +2005,9 @@ defmodule ExLisp.Package do
         Enum.map(missing_binary_names, fn {_symbol, name} -> name end)
 
       updated_pkg = %{
-          pkg
-          | internal_symbols: MapSet.union(pkg.internal_symbols, MapSet.new(missing))
-        }
+        pkg
+        | internal_symbols: MapSet.union(pkg.internal_symbols, MapSet.new(missing))
+      }
 
       save_package(updated_pkg)
       export(symbols, updated_pkg)
@@ -1968,6 +2116,7 @@ defmodule ExLisp.Package do
         symbol_packages: Map.merge(pkg.symbol_packages, sources),
         symbol_values: Map.merge(pkg.symbol_values, values)
     }
+
     save_package(updated)
     :t
   end
@@ -2008,8 +2157,7 @@ defmodule ExLisp.Package do
       | internal_symbols: MapSet.union(pkg.internal_symbols, MapSet.new(sym_strs)),
         shadowing_symbols: MapSet.union(pkg.shadowing_symbols, MapSet.new(sym_strs)),
         symbol_packages: Map.merge(pkg.symbol_packages, sources),
-        symbol_values:
-          Map.merge(pkg.symbol_values, Enum.zip(sym_strs, sym_list) |> Map.new())
+        symbol_values: Map.merge(pkg.symbol_values, Enum.zip(sym_strs, sym_list) |> Map.new())
     }
 
     save_package(updated)
@@ -2233,7 +2381,9 @@ defmodule ExLisp.Package do
         pkg = find_package!(String.upcase(package_name) |> String.replace("_", "-"))
 
         case find_symbol_in_pkg(string_symbol_name(symbol_name), pkg) do
-          {:found, resolved, _status} -> resolved
+          {:found, resolved, _status} ->
+            resolved
+
           :not_found ->
             name = string_symbol_name(symbol_name)
             save_package(%{pkg | internal_symbols: MapSet.put(pkg.internal_symbols, name)})
@@ -2244,6 +2394,7 @@ defmodule ExLisp.Package do
         pkg =
           find_package(Process.get(:exlisp_current_package, "COMMON-LISP-USER")) ||
             find_package!("COMMON-LISP-USER")
+
         name = symbol_to_str(symbol)
 
         {resolved, own_symbol?} =
@@ -2413,7 +2564,8 @@ defmodule ExLisp.Package do
               String.upcase(qualified) |> String.replace("_", "-")
             end
 
-          [name] -> String.upcase(name) |> String.replace("_", "-")
+          [name] ->
+            String.upcase(name) |> String.replace("_", "-")
         end
     end
   end
@@ -2507,18 +2659,22 @@ defmodule ExLisp.Package do
   end
 
   defp str_to_symbol(str) do
-    normalized =
-      if String.contains?(str, ".") do
-        String.downcase(str)
-      else
-        str |> String.downcase() |> String.replace("-", "_")
-      end
-
-    if str == String.upcase(str) and
-         Regex.match?(~r/^[A-Z0-9+*\/:=<>?!$%&.-]+$/, str) do
-      String.to_atom(normalized)
+    if str == "NIL" do
+      ExLisp.Symbol.new("NIL")
     else
-      String.to_atom("|#{str}|")
+      normalized =
+        if String.contains?(str, ".") do
+          String.downcase(str)
+        else
+          str |> String.downcase() |> String.replace("-", "_")
+        end
+
+      if str == String.upcase(str) and
+           Regex.match?(~r/^[A-Z0-9+*\/:=<>?!$%&.-]+$/, str) do
+        String.to_atom(normalized)
+      else
+        String.to_atom("|#{str}|")
+      end
     end
   end
 end

@@ -249,6 +249,65 @@ defmodule ExLisp.Env do
     :"*terminal_io*" => :standard_io,
     :"*read-suppress*" => nil,
     :"*read_suppress*" => nil,
+    :"*read-default-float-format*" => :single_float,
+    :"*read_default_float_format*" => :single_float,
+    :"*read-base*" => 10,
+    :"*read_base*" => 10,
+    :"*read-eval*" => :t,
+    :"*read_eval*" => :t,
+    :"*compile-verbose*" => nil,
+    :"*compile_verbose*" => nil,
+    :"*compile-print*" => nil,
+    :"*compile_print*" => nil,
+    :"*load-verbose*" => nil,
+    :"*load_verbose*" => nil,
+    :"*load-print*" => nil,
+    :"*load_print*" => nil,
+    :"*print-array*" => :t,
+    :"*print_array*" => :t,
+    :"*print-base*" => 10,
+    :"*print_base*" => 10,
+    :"*print-case*" => :upcase,
+    :"*print_case*" => :upcase,
+    :"*print-circle*" => nil,
+    :"*print_circle*" => nil,
+    :"*print-escape*" => :t,
+    :"*print_escape*" => :t,
+    :"*print-gensym*" => :t,
+    :"*print_gensym*" => :t,
+    :"*print-length*" => nil,
+    :"*print_length*" => nil,
+    :"*print-level*" => nil,
+    :"*print_level*" => nil,
+    :"*print-lines*" => nil,
+    :"*print_lines*" => nil,
+    :"*print-miser-width*" => nil,
+    :"*print_miser_width*" => nil,
+    :"*print-pprint-dispatch*" => nil,
+    :"*print_pprint_dispatch*" => nil,
+    :"*print-pretty*" => nil,
+    :"*print_pretty*" => nil,
+    :"*print-radix*" => nil,
+    :"*print_radix*" => nil,
+    :"*print-readably*" => nil,
+    :"*print_readably*" => nil,
+    :"*print-right-margin*" => nil,
+    :"*print_right_margin*" => nil,
+    :"*break-on-signals*" => nil,
+    :"*break_on_signals*" => nil,
+    :"*debugger-hook*" => nil,
+    :"*debugger_hook*" => nil,
+    :"*macroexpand-hook*" => :funcall,
+    :"*macroexpand_hook*" => :funcall,
+    :"*gensym-counter*" => 0,
+    :"*gensym_counter*" => 0,
+    :"*modules*" => [],
+    :char_code_limit => 0x110000,
+    :"char-code-limit" => 0x110000,
+    :call_arguments_limit => 1_048_576,
+    :"call-arguments-limit" => 1_048_576,
+    :lambda_parameters_limit => 1_048_576,
+    :"lambda-parameters-limit" => 1_048_576,
     :features => [
       :exlisp,
       :cl,
@@ -556,19 +615,22 @@ defmodule ExLisp.Env do
     ensure_env()
     fun_name = normalize_name(name)
     key = {:exlisp_fun, fun_name}
-    :persistent_term.put(key, fun)
 
     name_str = Atom.to_string(fun_name)
     h_name = String.replace(name_str, "_", "-") |> String.to_atom()
     u_name = String.replace(name_str, "-", "_") |> String.to_atom()
-    :persistent_term.put({:exlisp_fun, h_name}, fun)
-    :persistent_term.put({:exlisp_fun, u_name}, fun)
 
     try do
       curr_pkg = ExLisp.Package.current_package()
+      unqualified? = not String.contains?(name_str, ".") and not String.contains?(name_str, ":")
 
-      if curr_pkg != nil and not String.contains?(name_str, ".") and
-           not String.contains?(name_str, ":") do
+      if not unqualified? or curr_pkg in ["COMMON-LISP", "COMMON-LISP-USER"] do
+        :persistent_term.put(key, fun)
+        :persistent_term.put({:exlisp_fun, h_name}, fun)
+        :persistent_term.put({:exlisp_fun, u_name}, fun)
+      end
+
+      if curr_pkg != nil and unqualified? do
         pkg_name = to_string(curr_pkg) |> String.downcase()
         pkg_h = String.replace(pkg_name, "_", "-")
         :persistent_term.put({:exlisp_fun, :"#{pkg_name}.#{fun_name}"}, fun)
@@ -577,7 +639,10 @@ defmodule ExLisp.Env do
         :persistent_term.put({:exlisp_fun, :"#{pkg_h}:#{h_name}"}, fun)
       end
     rescue
-      _ -> :ok
+      _ ->
+        :persistent_term.put(key, fun)
+        :persistent_term.put({:exlisp_fun, h_name}, fun)
+        :persistent_term.put({:exlisp_fun, u_name}, fun)
     end
 
     fun_name
@@ -591,7 +656,7 @@ defmodule ExLisp.Env do
 
     case :persistent_term.get({:exlisp_fun, fun_name}, :__not_found__) do
       :__not_found__ ->
-        candidates = symbol_lookup_candidates(fun_name)
+        candidates = namespaced_lookup_candidates(fun_name)
 
         found_fun =
           Enum.find_value(candidates, fn cand ->
@@ -683,7 +748,7 @@ defmodule ExLisp.Env do
 
     case :persistent_term.get({:exlisp_fun_ast, fun_name}, :__not_found__) do
       :__not_found__ ->
-        candidates = symbol_lookup_candidates(fun_name)
+        candidates = namespaced_lookup_candidates(fun_name)
 
         Enum.find_value(candidates, fn cand ->
           case :persistent_term.get({:exlisp_fun_ast, cand}, :__not_found__) do
@@ -706,7 +771,7 @@ defmodule ExLisp.Env do
     if :persistent_term.get({:exlisp_fun, fun_name}, :__not_found__) != :__not_found__ do
       true
     else
-      candidates = symbol_lookup_candidates(fun_name)
+      candidates = namespaced_lookup_candidates(fun_name)
 
       Enum.any?(candidates, fn cand ->
         if :persistent_term.get({:exlisp_fun, cand}, :__not_found__) != :__not_found__ do
@@ -762,7 +827,7 @@ defmodule ExLisp.Env do
   """
   def delete_fun(name) do
     fun_name = normalize_name(name)
-    candidates = symbol_lookup_candidates(fun_name)
+    candidates = namespaced_lookup_candidates(fun_name)
 
     Enum.each(candidates, fn cand ->
       try do
@@ -803,19 +868,22 @@ defmodule ExLisp.Env do
     ensure_env()
     macro_name = normalize_name(name)
     key = {:exlisp_macro, macro_name}
-    :persistent_term.put(key, macro_fun)
 
     name_str = Atom.to_string(macro_name)
     h_name = String.replace(name_str, "_", "-") |> String.to_atom()
     u_name = String.replace(name_str, "-", "_") |> String.to_atom()
-    :persistent_term.put({:exlisp_macro, h_name}, macro_fun)
-    :persistent_term.put({:exlisp_macro, u_name}, macro_fun)
 
     try do
       curr_pkg = ExLisp.Package.current_package()
+      unqualified? = not String.contains?(name_str, ".") and not String.contains?(name_str, ":")
 
-      if curr_pkg != nil and not String.contains?(name_str, ".") and
-           not String.contains?(name_str, ":") do
+      if not unqualified? or curr_pkg in ["COMMON-LISP", "COMMON-LISP-USER"] do
+        :persistent_term.put(key, macro_fun)
+        :persistent_term.put({:exlisp_macro, h_name}, macro_fun)
+        :persistent_term.put({:exlisp_macro, u_name}, macro_fun)
+      end
+
+      if curr_pkg != nil and unqualified? do
         pkg_name = to_string(curr_pkg) |> String.downcase()
         pkg_h = String.replace(pkg_name, "_", "-")
         :persistent_term.put({:exlisp_macro, :"#{pkg_name}.#{macro_name}"}, macro_fun)
@@ -824,7 +892,10 @@ defmodule ExLisp.Env do
         :persistent_term.put({:exlisp_macro, :"#{pkg_h}:#{h_name}"}, macro_fun)
       end
     rescue
-      _ -> :ok
+      _ ->
+        :persistent_term.put(key, macro_fun)
+        :persistent_term.put({:exlisp_macro, h_name}, macro_fun)
+        :persistent_term.put({:exlisp_macro, u_name}, macro_fun)
     end
 
     macro_name
@@ -838,7 +909,7 @@ defmodule ExLisp.Env do
 
     case :persistent_term.get({:exlisp_macro, macro_name}, :__not_found__) do
       :__not_found__ ->
-        candidates = symbol_lookup_candidates(macro_name)
+        candidates = namespaced_lookup_candidates(macro_name)
 
         found_macro =
           Enum.find_value(candidates, fn cand ->
@@ -870,7 +941,7 @@ defmodule ExLisp.Env do
     if :persistent_term.get({:exlisp_macro, macro_name}, :__not_found__) != :__not_found__ do
       true
     else
-      candidates = symbol_lookup_candidates(macro_name)
+      candidates = namespaced_lookup_candidates(macro_name)
 
       Enum.any?(candidates, fn cand ->
         :persistent_term.get({:exlisp_macro, cand}, :__not_found__) != :__not_found__
@@ -926,6 +997,37 @@ defmodule ExLisp.Env do
         end
 
       cands |> Enum.uniq()
+    end
+  end
+
+  defp namespaced_lookup_candidates(sym) do
+    candidates = symbol_lookup_candidates(sym)
+    str = Atom.to_string(sym)
+
+    if String.contains?(str, ".") or String.contains?(str, ":") do
+      candidates
+    else
+      package_candidates =
+        try do
+          package = ExLisp.Package.find_package!(ExLisp.Package.current_package())
+          package_names = [package.name | package.use_list]
+
+          Enum.flat_map(package_names, fn package_name ->
+            pkg_h = String.downcase(package_name) |> String.replace("_", "-")
+            pkg_u = String.downcase(package_name) |> String.replace("-", "_")
+
+            [
+              :"#{pkg_h}.#{str}",
+              :"#{pkg_h}:#{str}",
+              :"#{pkg_u}.#{str}",
+              :"#{pkg_u}:#{str}"
+            ]
+          end)
+        rescue
+          _ -> []
+        end
+
+      Enum.uniq(candidates ++ package_candidates)
     end
   end
 

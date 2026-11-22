@@ -1,6 +1,64 @@
 defmodule ExLisp.CommonLispCompatibilityTest do
   use ExUnit.Case
 
+  test "Common Lisp exports and default variables are available" do
+    ExLisp.Env.reset()
+
+    for name <- [
+          "*READ-DEFAULT-FLOAT-FORMAT*",
+          "CHAR-CODE-LIMIT",
+          "BROADCAST-STREAM-STREAMS",
+          "THROW"
+        ] do
+      assert [:_values_, [_, status]] = ExLisp.Package.find_symbol(name, "COMMON-LISP")
+      assert status == :external
+    end
+
+    assert ExLisp.eval("*read-default-float-format*") == :single_float
+    assert ExLisp.eval("char-code-limit") == 0x110000
+  end
+
+  test "package functions do not shadow same-named functions in other packages" do
+    ExLisp.Env.reset()
+
+    result =
+      ExLisp.eval("""
+      (progn
+        (defpackage :compat-one (:use :cl) (:export :same-name-probe))
+        (defpackage :compat-two (:use :cl) (:export :same-name-probe))
+        (in-package :compat-one)
+        (defun same-name-probe () 1)
+        (in-package :compat-two)
+        (defun same-name-probe () 2)
+        (in-package :common-lisp-user)
+        (list (compat-one:same-name-probe) (compat-two:same-name-probe)))
+      """)
+
+    assert result == [1, 2]
+    assert_raise RuntimeError, ~r/Undefined function/, fn -> ExLisp.eval("(same-name-probe)") end
+  end
+
+  test "UIOP define-package supports use-reexport" do
+    ExLisp.Env.reset()
+
+    assert [symbol, :external] =
+             ExLisp.eval("""
+             (progn
+               (defpackage :uiop-source (:use :cl) (:export :shared))
+               (uiop:define-package :uiop-consumer
+                 (:use :cl)
+                 (:use-reexport :uiop-source))
+               (multiple-value-list
+                 (find-symbol "SHARED" "UIOP-CONSUMER")))
+             """)
+
+    assert symbol |> to_string() |> String.ends_with?(".shared")
+
+    assert ExLisp.Package.package_use_list("UIOP-CONSUMER")
+           |> Enum.map(& &1.name)
+           |> Enum.member?("UIOP-SOURCE")
+  end
+
   setup do
     ExLisp.Env.reset()
     :ok

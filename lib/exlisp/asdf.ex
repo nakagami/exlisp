@@ -628,7 +628,7 @@ defmodule ExLisp.ASDF do
 
       sys_name = system_info.name
 
-      if pkg = ExLisp.Package.find_package(sys_name) do
+      if pkg = ExLisp.Package.find_package(String.upcase(sys_name)) do
         ExLisp.Package.use_package(pkg.name, "COMMON-LISP-USER")
       end
 

@@ -125,10 +125,13 @@ defmodule BuiltinFunction do
     :subtypep => {:subtypep, :subtypep},
     :_cl_subtypep_ => {:subtypep, :subtypep},
     :upgraded_array_element_type => {:upgraded_array_element_type, :upgraded_array_element_type},
-    :_cl_upgraded_array_element_type_ => {:upgraded_array_element_type, :upgraded_array_element_type},
-    :"upgraded-array-element-type" => {:upgraded_array_element_type, :upgraded_array_element_type},
+    :_cl_upgraded_array_element_type_ =>
+      {:upgraded_array_element_type, :upgraded_array_element_type},
+    :"upgraded-array-element-type" =>
+      {:upgraded_array_element_type, :upgraded_array_element_type},
     :upgraded_complex_part_type => {:upgraded_complex_part_type, :upgraded_complex_part_type},
-    :_cl_upgraded_complex_part_type_ => {:upgraded_complex_part_type, :upgraded_complex_part_type},
+    :_cl_upgraded_complex_part_type_ =>
+      {:upgraded_complex_part_type, :upgraded_complex_part_type},
     :"upgraded-complex-part-type" => {:upgraded_complex_part_type, :upgraded_complex_part_type},
     :simple_string_p => {:simple_string_p, :simple_string_p},
     :_cl_simple_string_p_ => {:simple_string_p, :simple_string_p},
@@ -749,17 +752,24 @@ defmodule BuiltinFunction do
     :_cl_make_concatenated_stream_ => {:make_concatenated_stream, :make_concatenated_stream},
     :"make-concatenated-stream" => {:make_concatenated_stream, :make_concatenated_stream},
     :concatenated_stream_streams => {:concatenated_stream_streams, :concatenated_stream_streams},
-    :_cl_concatenated_stream_streams_ => {:concatenated_stream_streams, :concatenated_stream_streams},
-    :"concatenated-stream-streams" => {:concatenated_stream_streams, :concatenated_stream_streams},
+    :_cl_concatenated_stream_streams_ =>
+      {:concatenated_stream_streams, :concatenated_stream_streams},
+    :"concatenated-stream-streams" =>
+      {:concatenated_stream_streams, :concatenated_stream_streams},
     :make_two_way_stream => {:make_two_way_stream, :make_two_way_stream},
     :_cl_make_two_way_stream_ => {:make_two_way_stream, :make_two_way_stream},
     :"make-two-way-stream" => {:make_two_way_stream, :make_two_way_stream},
     :two_way_stream_input_stream => {:two_way_stream_input_stream, :two_way_stream_input_stream},
-    :_cl_two_way_stream_input_stream_ => {:two_way_stream_input_stream, :two_way_stream_input_stream},
-    :"two-way-stream-input-stream" => {:two_way_stream_input_stream, :two_way_stream_input_stream},
-    :two_way_stream_output_stream => {:two_way_stream_output_stream, :two_way_stream_output_stream},
-    :_cl_two_way_stream_output_stream_ => {:two_way_stream_output_stream, :two_way_stream_output_stream},
-    :"two-way-stream-output-stream" => {:two_way_stream_output_stream, :two_way_stream_output_stream},
+    :_cl_two_way_stream_input_stream_ =>
+      {:two_way_stream_input_stream, :two_way_stream_input_stream},
+    :"two-way-stream-input-stream" =>
+      {:two_way_stream_input_stream, :two_way_stream_input_stream},
+    :two_way_stream_output_stream =>
+      {:two_way_stream_output_stream, :two_way_stream_output_stream},
+    :_cl_two_way_stream_output_stream_ =>
+      {:two_way_stream_output_stream, :two_way_stream_output_stream},
+    :"two-way-stream-output-stream" =>
+      {:two_way_stream_output_stream, :two_way_stream_output_stream},
     :make_echo_stream => {:make_echo_stream, :make_echo_stream},
     :_cl_make_echo_stream_ => {:make_echo_stream, :make_echo_stream},
     :"make-echo-stream" => {:make_echo_stream, :make_echo_stream},
@@ -952,15 +962,24 @@ defmodule BuiltinFunction do
     :get_macro_character => {:get_macro_character, :get_macro_character},
     :_cl_get_macro_character_ => {:get_macro_character, :get_macro_character},
     :"get-macro-character" => {:get_macro_character, :get_macro_character},
-    :make_dispatch_macro_character => {:make_dispatch_macro_character, :make_dispatch_macro_character},
-    :_cl_make_dispatch_macro_character_ => {:make_dispatch_macro_character, :make_dispatch_macro_character},
-    :"make-dispatch-macro-character" => {:make_dispatch_macro_character, :make_dispatch_macro_character},
-    :set_dispatch_macro_character => {:set_dispatch_macro_character, :set_dispatch_macro_character},
-    :_cl_set_dispatch_macro_character_ => {:set_dispatch_macro_character, :set_dispatch_macro_character},
-    :"set-dispatch-macro-character" => {:set_dispatch_macro_character, :set_dispatch_macro_character},
-    :get_dispatch_macro_character => {:get_dispatch_macro_character, :get_dispatch_macro_character},
-    :_cl_get_dispatch_macro_character_ => {:get_dispatch_macro_character, :get_dispatch_macro_character},
-    :"get-dispatch-macro-character" => {:get_dispatch_macro_character, :get_dispatch_macro_character},
+    :make_dispatch_macro_character =>
+      {:make_dispatch_macro_character, :make_dispatch_macro_character},
+    :_cl_make_dispatch_macro_character_ =>
+      {:make_dispatch_macro_character, :make_dispatch_macro_character},
+    :"make-dispatch-macro-character" =>
+      {:make_dispatch_macro_character, :make_dispatch_macro_character},
+    :set_dispatch_macro_character =>
+      {:set_dispatch_macro_character, :set_dispatch_macro_character},
+    :_cl_set_dispatch_macro_character_ =>
+      {:set_dispatch_macro_character, :set_dispatch_macro_character},
+    :"set-dispatch-macro-character" =>
+      {:set_dispatch_macro_character, :set_dispatch_macro_character},
+    :get_dispatch_macro_character =>
+      {:get_dispatch_macro_character, :get_dispatch_macro_character},
+    :_cl_get_dispatch_macro_character_ =>
+      {:get_dispatch_macro_character, :get_dispatch_macro_character},
+    :"get-dispatch-macro-character" =>
+      {:get_dispatch_macro_character, :get_dispatch_macro_character},
     :set_syntax_from_char => {:set_syntax_from_char, :set_syntax_from_char},
     :_cl_set_syntax_from_char_ => {:set_syntax_from_char, :set_syntax_from_char},
     :"set-syntax-from-char" => {:set_syntax_from_char, :set_syntax_from_char},
@@ -1063,9 +1082,12 @@ defmodule BuiltinFunction do
     :invoke_restart => {:invoke_restart, :invoke_restart},
     :_cl_invoke_restart_ => {:invoke_restart, :invoke_restart},
     :"invoke-restart" => {:invoke_restart, :invoke_restart},
-    :invoke_restart_interactively => {:invoke_restart_interactively, :invoke_restart_interactively},
-    :_cl_invoke_restart_interactively_ => {:invoke_restart_interactively, :invoke_restart_interactively},
-    :"invoke-restart-interactively" => {:invoke_restart_interactively, :invoke_restart_interactively},
+    :invoke_restart_interactively =>
+      {:invoke_restart_interactively, :invoke_restart_interactively},
+    :_cl_invoke_restart_interactively_ =>
+      {:invoke_restart_interactively, :invoke_restart_interactively},
+    :"invoke-restart-interactively" =>
+      {:invoke_restart_interactively, :invoke_restart_interactively},
     :abort => {:abort, :abort},
     :_cl_abort_ => {:abort, :abort},
     :continue => {:continue, :continue},
@@ -1105,17 +1127,24 @@ defmodule BuiltinFunction do
     :_cl_package_error_package_ => {:package_error_package, :package_error_package},
     :"package-error-package" => {:package_error_package, :package_error_package},
     :arithmetic_error_operation => {:arithmetic_error_operation, :arithmetic_error_operation},
-    :_cl_arithmetic_error_operation_ => {:arithmetic_error_operation, :arithmetic_error_operation},
+    :_cl_arithmetic_error_operation_ =>
+      {:arithmetic_error_operation, :arithmetic_error_operation},
     :"arithmetic-error-operation" => {:arithmetic_error_operation, :arithmetic_error_operation},
     :arithmetic_error_operands => {:arithmetic_error_operands, :arithmetic_error_operands},
     :_cl_arithmetic_error_operands_ => {:arithmetic_error_operands, :arithmetic_error_operands},
     :"arithmetic-error-operands" => {:arithmetic_error_operands, :arithmetic_error_operands},
-    :simple_condition_format_control => {:simple_condition_format_control, :simple_condition_format_control},
-    :_cl_simple_condition_format_control_ => {:simple_condition_format_control, :simple_condition_format_control},
-    :"simple-condition-format-control" => {:simple_condition_format_control, :simple_condition_format_control},
-    :simple_condition_format_arguments => {:simple_condition_format_arguments, :simple_condition_format_arguments},
-    :_cl_simple_condition_format_arguments_ => {:simple_condition_format_arguments, :simple_condition_format_arguments},
-    :"simple-condition-format-arguments" => {:simple_condition_format_arguments, :simple_condition_format_arguments},
+    :simple_condition_format_control =>
+      {:simple_condition_format_control, :simple_condition_format_control},
+    :_cl_simple_condition_format_control_ =>
+      {:simple_condition_format_control, :simple_condition_format_control},
+    :"simple-condition-format-control" =>
+      {:simple_condition_format_control, :simple_condition_format_control},
+    :simple_condition_format_arguments =>
+      {:simple_condition_format_arguments, :simple_condition_format_arguments},
+    :_cl_simple_condition_format_arguments_ =>
+      {:simple_condition_format_arguments, :simple_condition_format_arguments},
+    :"simple-condition-format-arguments" =>
+      {:simple_condition_format_arguments, :simple_condition_format_arguments},
 
     # Property lists & macro expansion
     :getf => {:getf, :getf},
@@ -1186,13 +1215,19 @@ defmodule BuiltinFunction do
     :"asdf.find_system" => {:asdf_find_system, :asdf_find_system},
     :"asdf:find-system" => {:asdf_find_system, :asdf_find_system},
     :system_source_directory => {:asdf_system_source_directory, :asdf_system_source_directory},
-    :asdf_system_source_directory => {:asdf_system_source_directory, :asdf_system_source_directory},
-    :"asdf.system_source_directory" => {:asdf_system_source_directory, :asdf_system_source_directory},
-    :"asdf:system-source-directory" => {:asdf_system_source_directory, :asdf_system_source_directory},
+    :asdf_system_source_directory =>
+      {:asdf_system_source_directory, :asdf_system_source_directory},
+    :"asdf.system_source_directory" =>
+      {:asdf_system_source_directory, :asdf_system_source_directory},
+    :"asdf:system-source-directory" =>
+      {:asdf_system_source_directory, :asdf_system_source_directory},
     :system_relative_pathname => {:asdf_system_relative_pathname, :asdf_system_relative_pathname},
-    :asdf_system_relative_pathname => {:asdf_system_relative_pathname, :asdf_system_relative_pathname},
-    :"asdf.system_relative_pathname" => {:asdf_system_relative_pathname, :asdf_system_relative_pathname},
-    :"asdf:system-relative-pathname" => {:asdf_system_relative_pathname, :asdf_system_relative_pathname},
+    :asdf_system_relative_pathname =>
+      {:asdf_system_relative_pathname, :asdf_system_relative_pathname},
+    :"asdf.system_relative_pathname" =>
+      {:asdf_system_relative_pathname, :asdf_system_relative_pathname},
+    :"asdf:system-relative-pathname" =>
+      {:asdf_system_relative_pathname, :asdf_system_relative_pathname},
 
     # Hex.pm
     :hex_install => {:hex_install, :hex_install},
@@ -1348,8 +1383,7 @@ defmodule BuiltinFunction do
       {:logical_pathname_translations, :logical_pathname_translations},
     :load_logical_pathname_translations =>
       {:load_logical_pathname_translations, :load_logical_pathname_translations},
-    :translate_logical_pathname =>
-      {:translate_logical_pathname, :translate_logical_pathname},
+    :translate_logical_pathname => {:translate_logical_pathname, :translate_logical_pathname},
     :translate_pathname => {:translate_pathname, :translate_pathname},
     :change_class => {:change_class, :change_class},
     :initialize_instance => {:initialize_instance, :initialize_instance},
@@ -1361,8 +1395,7 @@ defmodule BuiltinFunction do
     :update_instance_for_redefined_class =>
       {:update_instance_for_redefined_class, :update_instance_for_redefined_class},
     :make_load_form => {:make_load_form, :make_load_form},
-    :make_load_form_saving_slots =>
-      {:make_load_form_saving_slots, :make_load_form_saving_slots},
+    :make_load_form_saving_slots => {:make_load_form_saving_slots, :make_load_form_saving_slots},
     :find_method => {:find_method, :find_method},
     :remove_method => {:remove_method, :remove_method},
     :add_method => {:add_method, :add_method},
@@ -1380,8 +1413,7 @@ defmodule BuiltinFunction do
     :constantp => {:constantp, :constantp},
     :compile_file_pathname => {:compile_file_pathname, :compile_file_pathname},
     :lisp_implementation_type => {:lisp_implementation_type, :lisp_implementation_type},
-    :lisp_implementation_version =>
-      {:lisp_implementation_version, :lisp_implementation_version},
+    :lisp_implementation_version => {:lisp_implementation_version, :lisp_implementation_version},
     :short_site_name => {:short_site_name, :short_site_name},
     :long_site_name => {:long_site_name, :long_site_name},
     :machine_type => {:machine_type, :machine_type},
@@ -1395,8 +1427,7 @@ defmodule BuiltinFunction do
     :step => {:step, :step},
     :disassemble => {:disassemble, :disassemble},
     :read_delimited_list => {:read_delimited_list, :read_delimited_list},
-    :read_preserving_whitespace =>
-      {:read_preserving_whitespace, :read_preserving_whitespace},
+    :read_preserving_whitespace => {:read_preserving_whitespace, :read_preserving_whitespace},
     :print_object => {:print_object, :print_object},
     :describe_object => {:describe_object, :describe_object},
     :call_method => {:call_method, :call_method},
@@ -1404,12 +1435,10 @@ defmodule BuiltinFunction do
     :print_not_readable_object => {:print_not_readable_object, :print_not_readable_object},
     :allocate_instance => {:allocate_instance, :allocate_instance},
     :copy_structure => {:copy_structure, :copy_structure},
-    :compute_applicable_methods =>
-      {:compute_applicable_methods, :compute_applicable_methods},
+    :compute_applicable_methods => {:compute_applicable_methods, :compute_applicable_methods},
     :float => {:float, :float},
     :hash_table_rehash_size => {:hash_table_rehash_size, :hash_table_rehash_size},
-    :hash_table_rehash_threshold =>
-      {:hash_table_rehash_threshold, :hash_table_rehash_threshold},
+    :hash_table_rehash_threshold => {:hash_table_rehash_threshold, :hash_table_rehash_threshold},
     :hash_table_size => {:hash_table_size, :hash_table_size},
     :hash_table_test => {:hash_table_test, :hash_table_test},
     :hash_table_iterator => {:hash_table_iterator, :hash_table_iterator},
@@ -1421,10 +1450,8 @@ defmodule BuiltinFunction do
     :ed => {:ed, :ed},
     :y_or_n_p => {:y_or_n_p, :y_or_n_p},
     :yes_or_no_p => {:yes_or_no_p, :yes_or_no_p},
-    :ensure_generic_function =>
-      {:ensure_generic_function, :ensure_generic_function},
-    :method_combination_error =>
-      {:method_combination_error, :method_combination_error},
+    :ensure_generic_function => {:ensure_generic_function, :ensure_generic_function},
+    :method_combination_error => {:method_combination_error, :method_combination_error},
     :invalid_method_error => {:invalid_method_error, :invalid_method_error},
     :no_applicable_method => {:no_applicable_method, :no_applicable_method},
     :no_next_method => {:no_next_method, :no_next_method},
@@ -1454,8 +1481,19 @@ defmodule BuiltinFunction do
   end
 
   @known_package_prefixes [
-    "cl", "common-lisp", "common_lisp", "sb-cl", "sb_cl",
-    "sb-thread", "sb_thread", "sb-ext", "sb_ext", "sb-posix", "sb_posix", "sb-sys", "sb_sys"
+    "cl",
+    "common-lisp",
+    "common_lisp",
+    "sb-cl",
+    "sb_cl",
+    "sb-thread",
+    "sb_thread",
+    "sb-ext",
+    "sb_ext",
+    "sb-posix",
+    "sb_posix",
+    "sb-sys",
+    "sb_sys"
   ]
 
   @doc """
@@ -1470,11 +1508,13 @@ defmodule BuiltinFunction do
         sym_atom = String.to_atom(sym)
 
         case Map.get(@builtin_mappings, sym_atom) do
-          {canonical, _} -> {:ok, canonical}
+          {canonical, _} ->
+            {:ok, canonical}
+
           nil ->
             case Map.get(@builtin_mappings, norm_atom) do
               {canonical, _} -> {:ok, canonical}
-              nil -> {:ok, norm_atom}
+              nil -> :error
             end
         end
 
@@ -1497,11 +1537,13 @@ defmodule BuiltinFunction do
             sym_atom = String.to_atom(sym)
 
             case Map.get(@builtin_mappings, sym_atom) do
-              {canonical, _} -> {:ok, canonical}
+              {canonical, _} ->
+                {:ok, canonical}
+
               nil ->
                 case Map.get(@builtin_mappings, norm_atom) do
                   {canonical, _} -> {:ok, canonical}
-                  nil -> {:ok, norm_atom}
+                  nil -> :error
                 end
             end
 
@@ -1510,7 +1552,9 @@ defmodule BuiltinFunction do
             norm_atom = str |> String.replace("-", "_") |> String.to_atom()
 
             case Map.get(@builtin_mappings, down_atom) do
-              {canonical, _} -> {:ok, canonical}
+              {canonical, _} ->
+                {:ok, canonical}
+
               nil ->
                 case Map.get(@builtin_mappings, norm_atom) do
                   {canonical, _} -> {:ok, canonical}
