@@ -105,8 +105,16 @@ defmodule ExLisp do
     ExLisp.Env.set_var(:"*load-pathname*", abs_path)
     ExLisp.Env.set_var(:"*load-truename*", abs_path)
     content = File.read!(path)
-    asts = ExLisp.LispParser.parse_multiple!(content)
-    res = LispBeam.evaluate_asts(asts)
+
+    res =
+      content
+      |> ExLisp.Reader.split_expressions()
+      |> Enum.reduce(nil, fn source, _result ->
+        source
+        |> ExLisp.LispParser.parse!()
+        |> LispBeam.evaluate_ast()
+      end)
+
     unwrap_primary_value(res)
   end
 

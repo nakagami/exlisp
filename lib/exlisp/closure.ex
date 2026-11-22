@@ -4,7 +4,17 @@ defmodule ExLisp.Closure do
   Wraps functions with lambda list keywords like &optional, &rest, &key,
   enabling accurate argument dispatch.
   """
-  defstruct [:fun, variadic: true, name: nil, ast: nil, env: nil, params: nil, body: nil, compiled: false]
+  defstruct [
+    :fun,
+    variadic: true,
+    name: nil,
+    package: nil,
+    ast: nil,
+    env: nil,
+    params: nil,
+    body: nil,
+    compiled: false
+  ]
 
   def new(fun, name \\ nil, opts \\ [])
 
@@ -17,6 +27,7 @@ defmodule ExLisp.Closure do
       fun: fun,
       variadic: true,
       name: name,
+      package: Keyword.get(opts, :package),
       ast: Keyword.get(opts, :ast),
       env: Keyword.get(opts, :env),
       params: Keyword.get(opts, :params),

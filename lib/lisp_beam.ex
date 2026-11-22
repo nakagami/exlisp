@@ -7117,7 +7117,13 @@ defmodule LispBeam do
           str = Enum.join(parts, ".") |> String.downcase()
 
           case BuiltinFunction.canonical_name(str) do
-            {:ok, canon} -> canon
+            {:ok, canon} ->
+              package = hd(parts) |> String.downcase()
+
+              if package in ["cl", "common-lisp", "common_lisp"],
+                do: canon,
+                else: String.to_atom(str)
+
             :error -> String.to_atom(str)
           end
         end

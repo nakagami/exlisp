@@ -523,7 +523,9 @@ defmodule CommonLispTest do
       # Iteration and escape (~{ ~} and ~^, ~:^)
       assert ExLisp.eval(~S'(format nil "~{~a~^, ~}" (list 1 2 3))') == "1, 2, 3"
       assert ExLisp.eval(~S'(format nil "~@{~a~^; ~}" 10 20 30)') == "10; 20; 30"
-      assert ExLisp.eval(~S'(format nil "~:{~a=~a~:^, ~}" (list (list "a" 1) (list "b" 2)))') == "a=1, b=2"
+
+      assert ExLisp.eval(~S'(format nil "~:{~a=~a~:^, ~}" (list (list "a" 1) (list "b" 2)))') ==
+               "a=1, b=2"
 
       # Conditionals (~[ ~])
       assert ExLisp.eval(~S'(format nil "~[zero~;one~;two~:;other~]" 1)') == "one"
@@ -546,7 +548,9 @@ defmodule CommonLispTest do
       assert ExLisp.eval(~S'(format nil "~@(~a~)" "hello world")') == "Hello world"
 
       # Indirection (~?) and arg jump (~*)
-      assert ExLisp.eval(~S'(format nil "~? is ~a" "<~a>" (list 42) "answer")') == "<42> is answer"
+      assert ExLisp.eval(~S'(format nil "~? is ~a" "<~a>" (list 42) "answer")') ==
+               "<42> is answer"
+
       assert ExLisp.eval(~S'(format nil "~a ~*~a" 1 2 3)') == "1 3"
 
       # Justification (~< ~>)
@@ -939,6 +943,30 @@ defmodule CommonLispTest do
       assert ExLisp.eval(code) == "Hello, World!"
     end
 
+    test "defmethod keyword parameters do not participate in dispatch arity" do
+      assert ExLisp.eval("""
+             (progn
+               (defgeneric describe-item (item &key prefix))
+               (defmethod describe-item ((item integer) &key (prefix "n"))
+                 (format nil "~a~a" prefix item))
+               (describe-item 7 :prefix "item-"))
+             """) == "item-7"
+    end
+
+    test "defstruct custom constructors support positional arguments" do
+      assert ExLisp.eval("""
+             (progn
+               (defstruct (point
+                            (:constructor make-point-at (x y))
+                            (:constructor make-origin nil))
+                 (x 0)
+                 (y 0))
+               (let ((p (make-point-at 3 4))
+                     (o (make-origin)))
+                 (list (point-x p) (point-y p) (point-x o) (point-y o))))
+             """) == [3, 4, 0, 0]
+    end
+
     test "CLOS class inheritance, slot initform, initarg, and accessors" do
       code = """
       (progn
@@ -989,7 +1017,16 @@ defmodule CommonLispTest do
           (list val (reverse *trace-log*))))
       """
 
-      assert ExLisp.eval(code) == [120, ["around-enter", "before-integer", "primary-integer", "after-integer", "around-exit"]]
+      assert ExLisp.eval(code) == [
+               120,
+               [
+                 "around-enter",
+                 "before-integer",
+                 "primary-integer",
+                 "after-integer",
+                 "around-exit"
+               ]
+             ]
     end
 
     test "CLOS call-next-method in class hierarchy and next-method-p" do
@@ -1030,7 +1067,11 @@ defmodule CommonLispTest do
               (handle-event :other 42)))
       """
 
-      assert ExLisp.eval(code) == ["Starting with Engine", "Stopping: All", "Unknown event OTHER: 42"]
+      assert ExLisp.eval(code) == [
+               "Starting with Engine",
+               "Stopping: All",
+               "Unknown event OTHER: 42"
+             ]
     end
 
     test "CLOS multiple inheritance and slot existence / makunbound / reflection" do
@@ -1085,7 +1126,12 @@ defmodule CommonLispTest do
                 (collide s s))))
       """
 
-      assert ExLisp.eval(code) == ["circle-circle", "circle-square", "square-circle", "generic-shapes"]
+      assert ExLisp.eval(code) == [
+               "circle-circle",
+               "circle-square",
+               "square-circle",
+               "generic-shapes"
+             ]
     end
   end
 
@@ -1131,6 +1177,7 @@ defmodule CommonLispTest do
           (error 'my-calc-error :val 42)
           (my-calc-error (c) (my-val c))))
       """
+
       assert ExLisp.eval(code) == 42
     end
 
@@ -1141,18 +1188,21 @@ defmodule CommonLispTest do
           (return-zero () 0)
           (use-val (v) v)))
       """
+
       ExLisp.eval(code)
 
       handle_zero = """
       (handler-bind ((error (lambda (c) (invoke-restart 'return-zero))))
         (divide 10 0))
       """
+
       assert ExLisp.eval(handle_zero) == 0
 
       handle_custom = """
       (handler-bind ((error (lambda (c) (invoke-restart 'use-val 99))))
         (divide 10 0))
       """
+
       assert ExLisp.eval(handle_custom) == 99
     end
 
@@ -1162,6 +1212,7 @@ defmodule CommonLispTest do
         (cerror "Ignore and proceed" "Division alert")
         :resumed)
       """
+
       assert ExLisp.eval(code) == :resumed
     end
   end
@@ -1225,7 +1276,10 @@ defmodule CommonLispTest do
     test "intern, find-symbol, defpackage, in-package" do
       assert ExLisp.eval("(intern \"MY-NEW-SYM\")") == :my_new_sym
       assert ExLisp.eval("(find-symbol \"MY-NEW-SYM\")") == :my_new_sym
-      assert ExLisp.eval("(package-name (defpackage :my-pkg (:use :cl) (:export :my-func)))") == "MY-PKG"
+
+      assert ExLisp.eval("(package-name (defpackage :my-pkg (:use :cl) (:export :my-func)))") ==
+               "MY-PKG"
+
       assert ExLisp.eval("(package-name (in-package :my-pkg))") == "MY-PKG"
       assert ExLisp.eval("(package-name (find-package :my-pkg))") == "MY-PKG"
       assert ExLisp.eval("(packagep (find-package :my-pkg))") == :t
@@ -1243,6 +1297,7 @@ defmodule CommonLispTest do
           (export 'math-pkg::extra-sym :math-pkg)
           (multiple-value-list (find-symbol "CALC-ADD" :math-pkg))))
       """
+
       res = ExLisp.eval(code)
       assert hd(res) == "MATH-PKG"
       assert List.last(res) == [:calc_add, :external]
@@ -1257,6 +1312,7 @@ defmodule CommonLispTest do
         (shadow 'another-sym :shadow-test-pkg)
         (package-shadowing-symbols :shadow-test-pkg))
       """
+
       shadows = ExLisp.eval(code)
       assert :my_shadow_sym in shadows
       assert :another_sym in shadows
@@ -1473,6 +1529,7 @@ defmodule CommonLispTest do
               (readtablep nil)
               (readtable-case rt)))
       """
+
       assert ExLisp.eval(code) == [:t, nil, :upcase]
     end
 
@@ -1487,6 +1544,7 @@ defmodule CommonLispTest do
                 (functionp (first paren-info))
                 (second paren-info))))
       """
+
       assert ExLisp.eval(code) == [:t, nil, :t, nil]
     end
 
@@ -1499,6 +1557,7 @@ defmodule CommonLispTest do
           (list (functionp handler)
                 (get-dispatch-macro-character #\\? #\\z rt))))
       """
+
       assert ExLisp.eval(code) == [:t, nil]
     end
 
@@ -1511,6 +1570,7 @@ defmodule CommonLispTest do
           (list (functionp (first semi-info))
                 (functionp (first bang-info)))))
       """
+
       assert ExLisp.eval(code) == [:t, :t]
     end
   end

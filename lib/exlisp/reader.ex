@@ -77,6 +77,10 @@ defmodule ExLisp.Reader do
     if chunk != "", do: Enum.reverse([chunk | acc]), else: Enum.reverse(acc)
   end
 
+  defp scan([?#, ?\\, char | rest], stack, false, false, 0, current, acc) do
+    scan(rest, stack, false, false, 0, [char, ?\\, ?# | current], acc)
+  end
+
   # Block comment handling (supports nested #| ... |#)
   defp scan([?#, ?| | rest], stack, false, false, block_cmt_depth, current, acc) do
     scan(rest, stack, false, false, block_cmt_depth + 1, current, acc)
@@ -164,7 +168,12 @@ defmodule ExLisp.Reader do
 
     if stack == [] do
       chunk = new_current |> Enum.reverse() |> List.to_string() |> String.trim()
-      scan(rest, [], false, false, 0, [], [chunk | acc])
+
+      if incomplete_prefix?(chunk) do
+        scan(rest, [], false, false, 0, new_current, acc)
+      else
+        scan(rest, [], false, false, 0, [], [chunk | acc])
+      end
     else
       scan(rest, stack, false, false, 0, new_current, acc)
     end
@@ -197,8 +206,11 @@ defmodule ExLisp.Reader do
         true
 
       String.starts_with?(str, "#+") or String.starts_with?(str, "#-") ->
-        parts = String.split(str, [" ", "\t", "\n", "\r"], trim: true)
-        length(parts) < 2
+        str
+        |> String.slice(2..-1//1)
+        |> split_expressions()
+        |> length()
+        |> Kernel.<(2)
 
       true ->
         false

@@ -100,7 +100,7 @@ defmodule ExLisp.LispParser do
   end
 
   # Whitespace characters
-  defp tokenize_chars([c | rest], line, acc) when c in [?\s, ?\t, ?\r] do
+  defp tokenize_chars([c | rest], line, acc) when c in [?\s, ?\t, ?\r, ?\f] do
     tokenize_chars(rest, line, acc)
   end
 
@@ -252,6 +252,9 @@ defmodule ExLisp.LispParser do
 
       [?* | after_star] ->
         read_sized_bit_vector(after_star, n, line, acc)
+
+      [?@ | after_array] ->
+        tokenize_chars(after_array, line, [{:sized_array_elements, line, n} | acc])
 
       _ ->
         {:error, "invalid dispatch macro ##{n} at line #{line}"}
@@ -416,7 +419,7 @@ defmodule ExLisp.LispParser do
   end
 
   defp read_char_literal([c | rest], line, acc)
-       when c in [?(, ?), ?[, ?], ?{, ?}, ?\", ?;, ?\s, ?\t, ?\n, ?\r, ?', ?`, ?,] do
+       when c in [?(, ?), ?[, ?], ?{, ?}, ?\", ?;, ?\s, ?\t, ?\n, ?\r, ?\f, ?', ?`, ?,] do
     tokenize_chars(rest, line, [{:char, line, c} | acc])
   end
 
@@ -528,7 +531,7 @@ defmodule ExLisp.LispParser do
   end
 
   defp read_token_chars([c | _] = chars, acc)
-       when c in [?\s, ?\t, ?\n, ?\r, ?(, ?), ?[, ?], ?{, ?}, ?\", ?;, ?`, ?,] do
+       when c in [?\s, ?\t, ?\n, ?\r, ?\f, ?(, ?), ?[, ?], ?{, ?}, ?\", ?;, ?`, ?,] do
     {Enum.reverse(acc), chars}
   end
 
@@ -964,6 +967,44 @@ defmodule ExLisp.LispParser do
     {:ok, {:reader_macro, line, ast}, rest}
   end
 
+  defp parse_expr([{:sized_array_elements, line, bits} | rest]) do
+    case parse_expr(rest) do
+      {:ok, contents_expr, rem} ->
+        contents =
+          case contents_expr do
+            {:list, _, [{:id, _, ["quote"]}, value]} -> value
+            {:list, _, _} -> contents_expr
+            _ -> {:list, line, [contents_expr]}
+          end
+
+        dimensions =
+          case contents do
+            {:list, _, elements} -> length(elements)
+            _ -> 1
+          end
+
+        ast =
+          {:list, line,
+           [
+             {:id, line, ["make_array"]},
+             {:lit, dimensions},
+             {:keyword, line, :element_type},
+             {:list, line,
+              [
+                {:id, line, ["quote"]},
+                {:list, line, [{:id, line, ["unsigned_byte"]}, {:lit, bits}]}
+              ]},
+             {:keyword, line, :initial_contents},
+             {:list, line, [{:id, line, ["quote"]}, contents]}
+           ]}
+
+        {:ok, {:reader_macro, line, ast}, rem}
+
+      err ->
+        err
+    end
+  end
+
   # Array literal (#nA(...) or #A(...))
   defp parse_expr([{:array_rank, line, rank} | rest]) do
     case parse_expr(rest) do
@@ -1271,14 +1312,13 @@ defmodule ExLisp.LispParser do
   """
   def feature_matches?(feature_expr) do
     case feature_expr do
-      {:list, _pos, [{:id, _, ["or"]} | subs]} ->
-        Enum.any?(subs, &feature_matches?/1)
-
-      {:list, _pos, [{:id, _, ["and"]} | subs]} ->
-        Enum.all?(subs, &feature_matches?/1)
-
-      {:list, _pos, [{:id, _, ["not"]}, sub]} ->
-        not feature_matches?(sub)
+      {:list, _pos, [op | subs]} ->
+        case LispBeam.extract_symbol_name(op) |> to_string() |> String.downcase() do
+          "or" -> Enum.any?(subs, &feature_matches?/1)
+          "and" -> Enum.all?(subs, &feature_matches?/1)
+          "not" -> subs |> List.first() |> feature_matches?() |> Kernel.not()
+          _ -> false
+        end
 
       {:id, _pos, [name]} ->
         check_feature_name(name)

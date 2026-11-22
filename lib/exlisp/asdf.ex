@@ -175,7 +175,17 @@ defmodule ExLisp.ASDF do
 
     if op_name in [:defsystem, :"asdf.defsystem", :"asdf:defsystem"] do
       sys_name = normalize_name(name_node)
-      opts = parse_defsystem_options(rest_args)
+      previous = Process.get(:exlisp_asdf_backend_system)
+      Process.put(:exlisp_asdf_backend_system, sys_name)
+
+      opts =
+        try do
+          parse_defsystem_options(rest_args)
+        after
+          if previous,
+            do: Process.put(:exlisp_asdf_backend_system, previous),
+            else: Process.delete(:exlisp_asdf_backend_system)
+        end
 
       sys_info = %{
         name: sys_name,
@@ -389,7 +399,7 @@ defmodule ExLisp.ASDF do
     path_name = opts[:pathname] || name
 
     if Map.has_key?(opts, :if_feature) and
-         not ExLisp.LispParser.feature_matches?(opts[:if_feature]) do
+         not asdf_feature_matches?(opts[:if_feature]) do
       []
     else
       cond do
@@ -420,6 +430,24 @@ defmodule ExLisp.ASDF do
   end
 
   defp parse_single_component(_), do: []
+
+  defp asdf_feature_matches?(feature) do
+    ExLisp.LispParser.feature_matches?(feature) or
+      (Process.get(:exlisp_asdf_backend_system) in [
+         "bordeaux-threads",
+         "bordeaux_threads",
+         "bordeaux-threads/test",
+         "bordeaux_threads/test"
+       ] and feature_includes_sbcl?(feature))
+  end
+
+  defp feature_includes_sbcl?({:id, _pos, names}),
+    do: Enum.any?(names, &(String.downcase(to_string(&1)) in ["sbcl", ":sbcl"]))
+
+  defp feature_includes_sbcl?({:lit, atom}),
+    do: String.downcase(to_string(atom)) in ["sbcl", ":sbcl"]
+
+  defp feature_includes_sbcl?(_), do: false
 
   defp parse_component_opts(opts_list) do
     parse_component_opts_kv(opts_list, %{depends_on: [], components: []})
@@ -606,7 +634,14 @@ defmodule ExLisp.ASDF do
             local_candidates =
               Enum.filter(candidates, &(Path.dirname(&1) == Path.dirname(node.id)))
 
-            if local_candidates == [], do: candidates, else: local_candidates
+            exact_candidates =
+              Enum.filter(local_candidates, &(Path.basename(&1) == normalize_component_name(dep)))
+
+            cond do
+              exact_candidates != [] -> exact_candidates
+              local_candidates != [] -> local_candidates
+              true -> candidates
+            end
           end)
           |> Enum.filter(&Map.has_key?(index, &1))
 
@@ -666,20 +701,22 @@ defmodule ExLisp.ASDF do
     files = get_load_order(system_info)
 
     try do
-      Enum.each(files, fn rel_file ->
-        full_path = Path.join(base_dir, rel_file)
+      with_system_load_features(system_info, fn ->
+        Enum.each(files, fn rel_file ->
+          full_path = Path.join(base_dir, rel_file)
 
-        if File.exists?(full_path) do
-          load_lisp_file(full_path)
-        else
-          alt_path = Path.join(base_dir, String.replace_suffix(rel_file, ".lisp", ""))
-
-          if File.exists?(alt_path) do
-            load_lisp_file(alt_path)
+          if File.exists?(full_path) do
+            load_lisp_file(full_path)
           else
-            raise "ASDF component file not found: #{full_path}"
+            alt_path = Path.join(base_dir, String.replace_suffix(rel_file, ".lisp", ""))
+
+            if File.exists?(alt_path) do
+              load_lisp_file(alt_path)
+            else
+              raise "ASDF component file not found: #{full_path}"
+            end
           end
-        end
+        end)
       end)
 
       sys_name = system_info.name
@@ -692,6 +729,22 @@ defmodule ExLisp.ASDF do
     after
       ExLisp.Package.set_current_package(prev_pkg)
     end
+  end
+
+  defp with_system_load_features(system_info, fun) do
+    if normalize_system_family(system_info.name) in [
+         "bordeaux-threads",
+         "trivial-garbage"
+       ] do
+      features = ExLisp.Env.get_var(:features)
+      ExLisp.Env.with_special_bindings([features: Enum.uniq(features ++ [:sbcl])], fun)
+    else
+      fun.()
+    end
+  end
+
+  defp normalize_system_family(name) do
+    name |> String.replace("_", "-") |> String.downcase()
   end
 
   @doc """

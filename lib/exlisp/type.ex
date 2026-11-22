@@ -374,6 +374,18 @@ defmodule ExLisp.Type do
   end
 
   defp do_typep(val, :pathname), do: match?(%ExLisp.Pathname{}, val)
+  defp do_typep(%ExLisp.Thread{}, type)
+       when type in [:thread, :"sb-thread.thread", :"sb_thread.thread"],
+       do: true
+
+  defp do_typep(%ExLisp.Mutex{}, type)
+       when type in [:mutex, :"sb-thread.mutex", :"sb_thread.mutex"],
+       do: true
+
+  defp do_typep(%ExLisp.Semaphore{}, type)
+       when type in [:semaphore, :"sb-thread.semaphore", :"sb_thread.semaphore"],
+       do: true
+
   defp do_typep(%ExLisp.Pathname{host: h}, :logical_pathname) do
     h not in [nil, :unspecific, ""]
   end

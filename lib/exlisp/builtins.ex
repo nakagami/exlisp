@@ -243,9 +243,21 @@ defmodule ExLisp.Builtins do
     fn_val.(unwrap_mv_primary(a), unwrap_mv_primary(b), unwrap_mv_primary(c))
   end
 
-  def invoke_fn(%ExLisp.Closure{fun: fun}, args) do
+  def invoke_fn(%ExLisp.Closure{fun: fun, package: package}, args) do
     norm_args = args |> normalize_raw_args() |> Enum.map(&unwrap_mv_primary/1)
-    fun.(norm_args)
+
+    if package do
+      previous = ExLisp.Package.current_package()
+
+      try do
+        ExLisp.Package.set_current_package(package)
+        fun.(norm_args)
+      after
+        ExLisp.Package.set_current_package(previous)
+      end
+    else
+      fun.(norm_args)
+    end
   end
 
   def invoke_fn(fn_val, args) when is_function(fn_val) do
@@ -1882,6 +1894,8 @@ defmodule ExLisp.Builtins do
   def eq({:__keyword__, x}, y), do: eq(x, y)
   def eq(x, {:__keyword__, y}), do: eq(x, y)
   def eq(x, y) when is_binary(x) and is_binary(y), do: :erts_debug.same(x, y) |> lisp_bool()
+  def eq({:__keyword__, value}, other), do: eq(value, other)
+  def eq(other, {:__keyword__, value}), do: eq(other, value)
 
   def eq(%ExLisp.Package{id: xid, name: x}, %ExLisp.Package{id: yid, name: y}),
     do: ((xid != nil and xid == yid) or x == y) |> lisp_bool()
@@ -1896,6 +1910,8 @@ defmodule ExLisp.Builtins do
 
   def eql(x, y) when x in [nil, [], nil] and y in [nil, [], nil], do: :t
   def eql(x, y) when is_binary(x) and is_binary(y), do: :erts_debug.same(x, y) |> lisp_bool()
+  def eql({:__keyword__, value}, other), do: eql(value, other)
+  def eql(other, {:__keyword__, value}), do: eql(other, value)
 
   def eql(%ExLisp.Package{id: xid, name: x}, %ExLisp.Package{id: yid, name: y}),
     do: ((xid != nil and xid == yid) or x == y) |> lisp_bool()
@@ -2268,7 +2284,7 @@ defmodule ExLisp.Builtins do
 
   def fboundp(sym) do
     norm = normalize_sym_prop(sym)
-    (ExLisp.Env.has_fun?(norm) or BuiltinFunction.builtin?(norm)) |> lisp_bool()
+    (ExLisp.Env.has_fun?(norm) or BuiltinFunction.visible_builtin?(norm)) |> lisp_bool()
   end
 
   defp normalize_type_spec(spec) do
@@ -4009,7 +4025,7 @@ defmodule ExLisp.Builtins do
   end
 
   def coerce_list_to_type(list, type_spec) do
-    norm = normalize_type_spec(type_spec)
+    norm = ExLisp.Type.expand_type(type_spec) |> normalize_type_spec()
 
     cond do
       norm == :sequence ->
@@ -8115,8 +8131,18 @@ defmodule ExLisp.Builtins do
   def coerce(object, result_type) do
     norm = ExLisp.Type.expand_type(result_type) |> normalize_type_spec()
 
+    array_result? =
+      norm in [:array, :simple_array, :vector, :simple_vector] or
+        (is_list(norm) and hd(norm) in [:array, :simple_array, :vector, :simple_vector])
+
+    already_coerced? =
+      ExLisp.Type.typep(object, result_type) and
+        (not array_result? or
+           (match?({:array, _, _}, object) or is_binary(object) or
+              match?({:bit_vector, _}, object)))
+
     cond do
-      ExLisp.Type.typep(object, result_type) ->
+      already_coerced? ->
         object
 
       # Coerce to character

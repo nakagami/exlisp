@@ -168,6 +168,19 @@ defmodule QuicklispTest do
     assert systems["generated/impl/two"].components == [{:file, "two", []}]
   end
 
+  test "source loading evaluates read-time forms in source order" do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "exlisp-read-time-#{System.unique_integer([:positive])}.lisp"
+      )
+
+    on_exit(fn -> File.rm(path) end)
+    File.write!(path, "(defparameter *load-order-value* 42)\n#.*load-order-value*")
+
+    assert ExLisp.load_file(path) == 42
+  end
+
   test "reader syntax: block comments, vectors, reader conditionals, uninterned symbols" do
     # Nested block comments #| ... |#
     assert ExLisp.eval("#| block comment |# (+ 1 2)") == 3
@@ -176,6 +189,9 @@ defmodule QuicklispTest do
     # Vector literal #( ... )
     assert ExLisp.eval("(vectorp #(1 2 3))") == :t
     assert ExLisp.eval("(svref #(10 20 30) 1)") == 20
+
+    assert ExLisp.eval("(list (aref #32@(#x1 #x2) 0) (aref #32@(#x1 #x2) 1))") ==
+             [1, 2]
 
     # Reader conditionals #+ and #-
     assert ExLisp.eval("#+exlisp 42 #-exlisp 99") == 42

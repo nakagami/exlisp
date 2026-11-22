@@ -1538,7 +1538,13 @@ defmodule ExLisp.Evaluator do
   end
 
   defp normalize_qualified_op(op) when is_atom(op) do
-    op
+    case String.split(Atom.to_string(op), ~r/[:.]/, parts: 2) do
+      [package, name] when package in ["cl", "common-lisp", "common_lisp"] ->
+        name |> String.replace("-", "_") |> String.to_atom()
+
+      _ ->
+        op
+    end
   end
 
   defp normalize_qualified_op(op), do: op
@@ -1650,7 +1656,7 @@ defmodule ExLisp.Evaluator do
             if Env.has_fun?(op) do
               Env.get_fun(op) |> Builtins.invoke_fn(args)
             else
-              case BuiltinFunction.canonical_name(op) do
+              case BuiltinFunction.visible_canonical_name(op) do
                 {:ok, canonical} ->
                   Builtins.dispatch_builtin(canonical, args)
 
@@ -1704,7 +1710,10 @@ defmodule ExLisp.Evaluator do
   end
 
   defp eval_when_executes?({:list, _, situations}) do
-    Enum.any?(situations, &(LispBeam.extract_symbol_name(&1) == :execute))
+    Enum.any?(
+      situations,
+      &(LispBeam.extract_symbol_name(&1) in [:execute, :load, :load_toplevel])
+    )
   end
 
   defp eval_when_executes?(_), do: false
@@ -3723,10 +3732,14 @@ defmodule ExLisp.Evaluator do
   # --- CLOS & Structs ---
 
   defp eval_defstruct([name_spec | slot_specs], env) do
-    struct_name =
+    {struct_name, constructor_specs} =
       case name_spec do
-        {:list, _pos, [name | _]} -> LispBeam.extract_symbol_name(name)
-        _ -> LispBeam.extract_symbol_name(name_spec)
+        {:list, _pos, [name | options]} ->
+          {LispBeam.extract_symbol_name(name),
+           Enum.filter(options, &defstruct_constructor_option?/1)}
+
+        _ ->
+          {LispBeam.extract_symbol_name(name_spec), []}
       end
 
     parsed_slots =
@@ -3738,12 +3751,17 @@ defmodule ExLisp.Evaluator do
           {LispBeam.extract_symbol_name(slot_name), nil}
       end)
 
-    # make-<struct>
-    make_fn = fn passed_args ->
-      Builtins.make_struct(struct_name, parsed_slots, passed_args)
-    end
+    if constructor_specs == [] do
+      make_fn = fn passed_args ->
+        Builtins.make_struct(struct_name, parsed_slots, passed_args)
+      end
 
-    Env.put_fun(:"make_#{struct_name}", ExLisp.Closure.new(make_fn, :"make_#{struct_name}"))
+      Env.put_fun(:"make_#{struct_name}", ExLisp.Closure.new(make_fn, :"make_#{struct_name}"))
+    else
+      Enum.each(constructor_specs, fn spec ->
+        define_struct_constructor(struct_name, parsed_slots, spec)
+      end)
+    end
 
     # <struct>-p
     p_fn = fn [s | _] ->
@@ -3770,6 +3788,45 @@ defmodule ExLisp.Evaluator do
     end)
 
     struct_name
+  end
+
+  defp defstruct_constructor_option?({:list, _, [option | _]}) do
+    LispBeam.extract_symbol_name(option) == :constructor
+  end
+
+  defp defstruct_constructor_option?(_), do: false
+
+  defp define_struct_constructor(_struct_name, _slots, {:list, _, [_option, nil]}), do: :ok
+
+  defp define_struct_constructor(struct_name, slots, {:list, _, [_option, name_node | params]}) do
+    constructor_name = LispBeam.extract_symbol_name(name_node)
+
+    parameter_nodes =
+      case params do
+        [{:list, _, parameter_list}] -> parameter_list
+        [{:lit, nil}] -> []
+        [nil] -> []
+        [] -> Enum.map(slots, &elem(&1, 0))
+        _ -> params
+      end
+
+    constructor_names = Enum.map(parameter_nodes, &LispBeam.extract_symbol_name/1)
+
+    constructor = fn passed_args ->
+      positional =
+        constructor_names
+        |> Enum.zip(passed_args)
+        |> Enum.flat_map(fn {name, value} ->
+          [String.replace(to_string(name), "_", "-") |> String.to_atom(), value]
+        end)
+
+      Builtins.make_struct(struct_name, slots, positional)
+    end
+
+    Env.put_fun(
+      constructor_name,
+      ExLisp.Closure.new(constructor, constructor_name)
+    )
   end
 
   defp eval_defclass([name_node, superclasses_node | rest], _env) do
@@ -3819,10 +3876,9 @@ defmodule ExLisp.Evaluator do
       Enum.flat_map(generic_options, fn
         {:list, _, [key_node, value_node | _]} ->
           key = LispBeam.extract_symbol_name(key_node)
-          value = LispBeam.extract_symbol_name(value_node)
 
           if Atom.to_string(key) |> String.ends_with?("method_combination") do
-            [{:method_combination, value}]
+            [{:method_combination, LispBeam.extract_symbol_name(value_node)}]
           else
             []
           end
@@ -3855,29 +3911,17 @@ defmodule ExLisp.Evaluator do
         _ -> []
       end
 
-    {param_names, raw_specializers} = parse_method_params(param_list, env)
+    {_param_names, raw_specializers} = parse_method_params(param_list, env)
 
-    method_fun = fn passed_args ->
-      norm_args = normalize_raw_args(passed_args)
-      padded = norm_args ++ List.duplicate(nil, max(0, length(param_names) - length(norm_args)))
+    method_closure =
+      create_closure(clean_method_params(params_node), body_nodes, env, method_name)
 
-      call_env =
-        Enum.zip(param_names, padded)
-        |> Enum.reduce(env, fn {var, val}, acc ->
-          ref = make_ref()
-          :erlang.put(ref, val)
-          Map.put(acc, var, {:box, ref})
-        end)
-
-      tag = {:block, method_name, make_ref()}
-      block_env = Map.put(call_env, {:block, method_name}, tag)
-
-      try do
-        eval_progn(body_nodes, block_env)
-      catch
-        {:block_return, ^tag, val} -> val
-      end
-    end
+    method_fun =
+      ExLisp.Closure.new(
+        fn passed_args -> Builtins.invoke_fn(method_closure, passed_args) end,
+        method_name,
+        package: ExLisp.Package.current_package()
+      )
 
     ExLisp.CLOS.register_method(method_name, qualifier, raw_specializers, method_fun)
     ExLisp.CLOS.generic_function_methods(method_name) |> List.first()
@@ -3919,7 +3963,18 @@ defmodule ExLisp.Evaluator do
   end
 
   defp parse_method_params(param_list, env) do
-    Enum.map(param_list, fn
+    param_list
+    |> Enum.take_while(fn node ->
+      LispBeam.extract_symbol_name(node)
+      |> case do
+        marker when marker in [:"&optional", :"&rest", :"&key", :"&aux", :"&allow_other_keys"] ->
+          false
+
+        _ ->
+          true
+      end
+    end)
+    |> Enum.map(fn
       {:list, _pos, [p, {:list, _, [{:id, _, [eql_name]}, val_node]} | _]}
       when eql_name in ["eql", "EQL"] ->
         p_name = LispBeam.extract_symbol_name(p)
@@ -3939,6 +3994,35 @@ defmodule ExLisp.Evaluator do
       {p_acc ++ [p_name], raw_acc ++ [raw_spec]}
     end)
   end
+
+  defp clean_method_params({:list, pos, params}) do
+    {cleaned, _required} =
+      Enum.reduce(params, {[], true}, fn parameter, {acc, required?} ->
+        marker =
+          LispBeam.extract_symbol_name(parameter) in [
+            :"&optional",
+            :"&rest",
+            :"&key",
+            :"&aux",
+            :"&allow_other_keys"
+          ]
+
+        cleaned =
+          case {required?, parameter} do
+            {true, {:list, _parameter_pos, [parameter_node, _specializer | _]}} ->
+              parameter_node
+
+            _ ->
+              parameter
+          end
+
+        {[cleaned | acc], required? and not marker}
+      end)
+
+    {:list, pos, Enum.reverse(cleaned)}
+  end
+
+  defp clean_method_params(params), do: params
 
   defp extract_deftype_params({:list, _pos, elems}),
     do: Enum.map(elems, &extract_symbol_or_spec/1)

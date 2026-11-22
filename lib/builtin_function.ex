@@ -1501,6 +1501,42 @@ defmodule BuiltinFunction do
     "sb_sys"
   ]
 
+  @sb_thread_builtins MapSet.new([
+                        :make_thread,
+                        :join_thread,
+                        :thread_alive_p,
+                        :thread_p,
+                        :current_thread,
+                        :thread_name,
+                        :list_all_threads,
+                        :destroy_thread,
+                        :thread_yield,
+                        :make_mutex,
+                        :mutex_p,
+                        :grab_mutex,
+                        :release_mutex,
+                        :mutex_name,
+                        :mutex_value,
+                        :make_semaphore,
+                        :semaphore_p,
+                        :wait_on_semaphore,
+                        :signal_semaphore
+                      ])
+  @sb_ext_builtins MapSet.new([
+                     :quit,
+                     :posix_getenv,
+                     :run_program,
+                     :process_exit_code,
+                     :process_p,
+                     :process_kill,
+                     :process_wait,
+                     :process_close,
+                     :sb_ext_gc,
+                     :bytes_consed_between_gcs,
+                     :get_time_of_day
+                   ])
+  @sb_posix_builtins MapSet.new([:sb_posix_setenv, :sb_posix_unsetenv])
+
   @doc """
   Returns the canonicalized atom name for the given operator.
   """
@@ -1572,6 +1608,48 @@ defmodule BuiltinFunction do
 
   def canonical_name(_), do: :error
 
+  def visible_canonical_name(op) do
+    case canonical_name(op) do
+      {:ok, canonical} ->
+        if extension_builtin_visible?(op, canonical), do: {:ok, canonical}, else: :error
+
+      error ->
+        error
+    end
+  end
+
+  defp extension_builtin_visible?(op, canonical) do
+    package =
+      op
+      |> to_string()
+      |> String.split(~r/[:.]/, parts: 2)
+      |> case do
+        [package, _name] -> package |> String.replace("_", "-") |> String.upcase()
+        _ -> nil
+      end
+
+    current =
+      try do
+        ExLisp.Package.current_package()
+      rescue
+        _ -> "COMMON-LISP-USER"
+      end
+
+    cond do
+      MapSet.member?(@sb_thread_builtins, canonical) ->
+        package == "SB-THREAD" or (is_nil(package) and current == "SB-THREAD")
+
+      MapSet.member?(@sb_ext_builtins, canonical) ->
+        package == "SB-EXT" or (is_nil(package) and current == "SB-EXT")
+
+      MapSet.member?(@sb_posix_builtins, canonical) ->
+        package == "SB-POSIX" or (is_nil(package) and current == "SB-POSIX")
+
+      true ->
+        true
+    end
+  end
+
   @doc """
   Determines whether the given operator is a built-in function.
   Returns `{:ok, atom_name}` if it is a built-in function, `:error` otherwise.
@@ -1612,6 +1690,13 @@ defmodule BuiltinFunction do
   """
   def builtin?(op) do
     case lookup(op) do
+      {:ok, _} -> true
+      :error -> false
+    end
+  end
+
+  def visible_builtin?(op) do
+    case visible_canonical_name(op) do
       {:ok, _} -> true
       :error -> false
     end

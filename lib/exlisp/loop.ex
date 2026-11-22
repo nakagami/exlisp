@@ -447,11 +447,12 @@ defmodule ExLisp.Loop do
             {{:in, var_node, {:list, {1, 1}, [symbol_node(:_cl_external_symbols_list_), src]},
               nil}, final_rem}
 
-          k when k in [:present_symbol, :present_symbols, :"present-symbol", :"present-symbols"] ->
+          k
+          when k in [:present_symbol, :present_symbols, :"present-symbol", :"present-symbols"] ->
             src = source_node || symbol_node(:"*package*")
 
-            {{:in, var_node, {:list, {1, 1}, [symbol_node(:_cl_present_symbols_list_), src]}, nil},
-             final_rem}
+            {{:in, var_node, {:list, {1, 1}, [symbol_node(:_cl_present_symbols_list_), src]},
+              nil}, final_rem}
 
           _ ->
             raise ArgumentError, "Unknown being clause: #{inspect(what_node)}"
@@ -1176,8 +1177,13 @@ defmodule ExLisp.Loop do
           {:equals_always, var_node, expr} ->
             var_bindings = destructure_var_spec(var_node, expr)
 
+            initial_bindings =
+              Enum.map(var_bindings, fn {var, value} ->
+                {:list, {1, 1}, [var, value]}
+              end)
+
             {
-              inits_acc,
+              inits_acc ++ initial_bindings,
               params_acc,
               inits_val_acc,
               steps_acc,
@@ -1374,7 +1380,9 @@ defmodule ExLisp.Loop do
         _ -> []
       end)
 
-    all_vars = Enum.reject(with_vars ++ for_vars ++ body_vars, &is_nil/1)
+    binding_vars = Enum.reject(with_vars ++ for_vars, &is_nil/1)
+    accumulation_vars = body_vars |> Enum.reject(&is_nil/1) |> Enum.uniq()
+    all_vars = binding_vars ++ accumulation_vars
 
     Enum.reduce(all_vars, MapSet.new(), fn var, seen ->
       if MapSet.member?(seen, var) do

@@ -438,6 +438,13 @@ defmodule ExLisp.Env do
                 :"sb-ext.*posix_argv*"
               ]
 
+              current_thread_names = [
+                :"sb-thread:*current-thread*",
+                :"sb-thread.*current-thread*",
+                :"sb_thread:*current_thread*",
+                :"sb_thread.*current_thread*"
+              ]
+
               cond do
                 var_name == :"*readtable*" or var_name == :readtable or
                     Enum.any?(cands, &(&1 == :"*readtable*")) ->
@@ -445,6 +452,10 @@ defmodule ExLisp.Env do
 
                 var_name in posix_argv_names or Enum.any?(cands, &(&1 in posix_argv_names)) ->
                   ["exlisp" | System.argv()]
+
+                var_name in current_thread_names or
+                    Enum.any?(cands, &(&1 in current_thread_names)) ->
+                  ExLisp.SBCLCompat.current_thread()
 
                 var_name in [:"*random-state*", :"*random_state*"] ->
                   ExLisp.Builtins.make_random_state()
@@ -568,8 +579,19 @@ defmodule ExLisp.Env do
         :"sb-ext.*posix_argv*"
       ]
 
+      current_thread_names = [
+        :"sb-thread:*current-thread*",
+        :"sb-thread.*current-thread*",
+        :"sb_thread:*current_thread*",
+        :"sb_thread.*current_thread*"
+      ]
+
       cond do
         var_name in posix_argv_names or Enum.any?(cands, &(&1 in posix_argv_names)) ->
+          true
+
+        var_name in current_thread_names or
+            Enum.any?(cands, &(&1 in current_thread_names)) ->
           true
 
         Map.has_key?(@predefined_vars, var_name) or
@@ -616,6 +638,7 @@ defmodule ExLisp.Env do
     ensure_env()
     fun_name = normalize_name(name)
     key = {:exlisp_fun, fun_name}
+    fun = attach_definition_package(fun, fun_name)
 
     name_str = Atom.to_string(fun_name)
     h_name = String.replace(name_str, "_", "-") |> String.to_atom()
@@ -649,6 +672,29 @@ defmodule ExLisp.Env do
     fun_name
   end
 
+  defp attach_definition_package(fun, name) do
+    package = ExLisp.Package.current_package()
+
+    if package in ["COMMON-LISP", "COMMON-LISP-USER"] do
+      fun
+    else
+      case fun do
+        %ExLisp.Closure{package: nil} = closure ->
+          %{closure | package: package}
+
+        %ExLisp.Closure{} ->
+          fun
+
+        raw_fun when is_function(raw_fun) ->
+          ExLisp.Closure.new(
+            fn args -> ExLisp.Builtins.invoke_fn(raw_fun, args) end,
+            name,
+            package: package
+          )
+      end
+    end
+  end
+
   @doc """
   Gets a registered function.
   """
@@ -677,7 +723,7 @@ defmodule ExLisp.Env do
                  end) do
               nil ->
                 case Enum.find_value(candidates, fn cand ->
-                       case BuiltinFunction.lookup(cand) do
+                       case BuiltinFunction.visible_canonical_name(cand) do
                          {:ok, canonical} ->
                            ExLisp.Closure.new(
                              fn args -> ExLisp.Builtins.dispatch_builtin(canonical, args) end,
@@ -780,7 +826,7 @@ defmodule ExLisp.Env do
         else
           case lookup_global_module_fun(cand) do
             {:ok, _} -> true
-            :error -> BuiltinFunction.builtin?(cand)
+            :error -> BuiltinFunction.visible_builtin?(cand)
           end
         end
       end)

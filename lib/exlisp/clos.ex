@@ -411,7 +411,15 @@ defmodule ExLisp.CLOS do
               Map.update!(acc, :writers, &[w_name | &1])
 
             "type" ->
-              Map.put(acc, :type, normalize_name(val))
+              type_spec =
+                case val do
+                  {:list, _, _} -> ExLisp.Macro.ast_to_lisp_data(val)
+                  {:lit, _} -> normalize_name(val)
+                  {:id, _, _} -> normalize_name(val)
+                  _ -> val
+                end
+
+              Map.put(acc, :type, type_spec)
 
             "allocation" ->
               Map.put(acc, :allocation, normalize_name(val))
@@ -762,7 +770,11 @@ defmodule ExLisp.CLOS do
     normalized = class_name(class)
 
     if normalized do
-      :persistent_term.put({:exlisp_clos_obsolete, normalized}, System.unique_integer([:positive]))
+      :persistent_term.put(
+        {:exlisp_clos_obsolete, normalized},
+        System.unique_integer([:positive])
+      )
+
       normalized
     else
       nil
@@ -1195,7 +1207,8 @@ defmodule ExLisp.CLOS do
   fun is (args -> result).
   """
   def register_method(name, qualifier, specializers, fun)
-      when is_atom(name) and is_list(specializers) and is_function(fun) do
+      when is_atom(name) and is_list(specializers) and
+             (is_function(fun) or is_struct(fun, ExLisp.Closure)) do
     ensure_tables()
     gen_name = normalize_name(name)
     norm_qualifier = normalize_qualifier(qualifier)
@@ -1278,10 +1291,10 @@ defmodule ExLisp.CLOS do
 
     if method_combination_type(generic_function_method_combination(gen_name)) == :list do
       selected =
-            case Enum.filter(applicable, &(&1.qualifier == :list)) do
-              [] -> Enum.filter(applicable, &(&1.qualifier == :primary))
-              methods -> methods
-            end
+        case Enum.filter(applicable, &(&1.qualifier == :list)) do
+          [] -> Enum.filter(applicable, &(&1.qualifier == :primary))
+          methods -> methods
+        end
 
       Enum.map(selected, &invoke_method(&1, args, []))
     else
@@ -1546,9 +1559,7 @@ defmodule ExLisp.CLOS do
   defp extract_keyword_names({:list, _, elements}),
     do:
       elements
-      |> Enum.drop_while(
-        &(LispBeam.extract_symbol_name(&1) not in [:"&", :"&key"])
-      )
+      |> Enum.drop_while(&(LispBeam.extract_symbol_name(&1) not in [:&, :"&key"]))
       |> extract_keyword_names()
 
   defp extract_keyword_names(elements) when is_list(elements) do
@@ -1670,7 +1681,7 @@ defmodule ExLisp.CLOS do
   end
 
   defp method_applicable?(specializers, args) do
-    length(specializers) == length(args) and
+    length(specializers) <= length(args) and
       Enum.zip(specializers, args)
       |> Enum.all?(fn {spec, arg} -> specializer_matches?(spec, arg) end)
   end
