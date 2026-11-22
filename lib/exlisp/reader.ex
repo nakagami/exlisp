@@ -81,6 +81,10 @@ defmodule ExLisp.Reader do
     scan(rest, stack, false, false, 0, [char, ?\\, ?# | current], acc)
   end
 
+  defp scan([?\\, char | rest], stack, false, false, 0, current, acc) do
+    scan(rest, stack, false, false, 0, [char, ?\\ | current], acc)
+  end
+
   # Block comment handling (supports nested #| ... |#)
   defp scan([?#, ?| | rest], stack, false, false, block_cmt_depth, current, acc) do
     scan(rest, stack, false, false, block_cmt_depth + 1, current, acc)

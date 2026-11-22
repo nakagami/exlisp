@@ -1177,10 +1177,19 @@ defmodule ExLisp.Loop do
           {:equals_always, var_node, expr} ->
             var_bindings = destructure_var_spec(var_node, expr)
 
+            prior_vars =
+              (params_acc ++ Enum.map(bindings_acc, &elem(&1, 0)))
+              |> Enum.map(&LispBeam.extract_symbol_name/1)
+              |> MapSet.new()
+
             initial_bindings =
-              Enum.map(var_bindings, fn {var, value} ->
-                {:list, {1, 1}, [var, value]}
-              end)
+              if ast_references_any?(expr, prior_vars) do
+                []
+              else
+                Enum.map(var_bindings, fn {var, value} ->
+                  {:list, {1, 1}, [var, value]}
+                end)
+              end
 
             {
               inits_acc ++ initial_bindings,
@@ -1208,6 +1217,18 @@ defmodule ExLisp.Loop do
       end
     )
   end
+
+  defp ast_references_any?({:id, _, _} = node, variables) do
+    MapSet.member?(variables, LispBeam.extract_symbol_name(node))
+  end
+
+  defp ast_references_any?({_, _, elements}, variables) when is_list(elements),
+    do: Enum.any?(elements, &ast_references_any?(&1, variables))
+
+  defp ast_references_any?(elements, variables) when is_list(elements),
+    do: Enum.any?(elements, &ast_references_any?(&1, variables))
+
+  defp ast_references_any?(_node, _variables), do: false
 
   # --- Destructuring and Variable Helpers ---
 

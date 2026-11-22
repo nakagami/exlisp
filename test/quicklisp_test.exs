@@ -181,6 +181,12 @@ defmodule QuicklispTest do
     assert ExLisp.load_file(path) == 42
   end
 
+  test "reader keeps single-escaped delimiters inside symbols" do
+    source = "(let ((\\(-pos 1) (\\)-pos 2)) (+ \\(-pos \\)-pos))"
+    assert ExLisp.Reader.split_expressions(source) == [source]
+    assert ExLisp.eval(source) == 3
+  end
+
   test "reader syntax: block comments, vectors, reader conditionals, uninterned symbols" do
     # Nested block comments #| ... |#
     assert ExLisp.eval("#| block comment |# (+ 1 2)") == 3

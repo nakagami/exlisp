@@ -655,12 +655,20 @@ defmodule ExLisp.Env do
       end
 
       if curr_pkg != nil and unqualified? do
-        pkg_name = to_string(curr_pkg) |> String.downcase()
-        pkg_h = String.replace(pkg_name, "_", "-")
-        :persistent_term.put({:exlisp_fun, :"#{pkg_name}.#{fun_name}"}, fun)
-        :persistent_term.put({:exlisp_fun, :"#{pkg_name}:#{fun_name}"}, fun)
-        :persistent_term.put({:exlisp_fun, :"#{pkg_h}.#{h_name}"}, fun)
-        :persistent_term.put({:exlisp_fun, :"#{pkg_h}:#{h_name}"}, fun)
+        package_names =
+          case ExLisp.Package.find_package(curr_pkg) do
+            %ExLisp.Package{name: name, nicknames: nicknames} -> [name | nicknames]
+            nil -> [curr_pkg]
+          end
+
+        Enum.each(package_names, fn package_name ->
+          pkg_name = to_string(package_name) |> String.downcase()
+          pkg_h = String.replace(pkg_name, "_", "-")
+          :persistent_term.put({:exlisp_fun, :"#{pkg_name}.#{fun_name}"}, fun)
+          :persistent_term.put({:exlisp_fun, :"#{pkg_name}:#{fun_name}"}, fun)
+          :persistent_term.put({:exlisp_fun, :"#{pkg_h}.#{h_name}"}, fun)
+          :persistent_term.put({:exlisp_fun, :"#{pkg_h}:#{h_name}"}, fun)
+        end)
       end
     rescue
       _ ->
@@ -931,12 +939,20 @@ defmodule ExLisp.Env do
       end
 
       if curr_pkg != nil and unqualified? do
-        pkg_name = to_string(curr_pkg) |> String.downcase()
-        pkg_h = String.replace(pkg_name, "_", "-")
-        :persistent_term.put({:exlisp_macro, :"#{pkg_name}.#{macro_name}"}, macro_fun)
-        :persistent_term.put({:exlisp_macro, :"#{pkg_name}:#{macro_name}"}, macro_fun)
-        :persistent_term.put({:exlisp_macro, :"#{pkg_h}.#{h_name}"}, macro_fun)
-        :persistent_term.put({:exlisp_macro, :"#{pkg_h}:#{h_name}"}, macro_fun)
+        package_names =
+          case ExLisp.Package.find_package(curr_pkg) do
+            %ExLisp.Package{name: name, nicknames: nicknames} -> [name | nicknames]
+            nil -> [curr_pkg]
+          end
+
+        Enum.each(package_names, fn package_name ->
+          pkg_name = to_string(package_name) |> String.downcase()
+          pkg_h = String.replace(pkg_name, "_", "-")
+          :persistent_term.put({:exlisp_macro, :"#{pkg_name}.#{macro_name}"}, macro_fun)
+          :persistent_term.put({:exlisp_macro, :"#{pkg_name}:#{macro_name}"}, macro_fun)
+          :persistent_term.put({:exlisp_macro, :"#{pkg_h}.#{h_name}"}, macro_fun)
+          :persistent_term.put({:exlisp_macro, :"#{pkg_h}:#{h_name}"}, macro_fun)
+        end)
       end
     rescue
       _ ->
