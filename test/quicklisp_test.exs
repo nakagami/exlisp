@@ -60,6 +60,84 @@ defmodule QuicklispTest do
     assert ExLisp.Package.current_package() == previous
   end
 
+  test "ASDF infers secondary systems from package-inferred definitions" do
+    dir =
+      Path.join(System.tmp_dir!(), "exlisp-asdf-inferred-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf!(dir) end)
+
+    File.write!(
+      Path.join(dir, "demo.asd"),
+      """
+      (defsystem :demo
+        :class :package-inferred-system
+        :depends-on (:demo/main))
+      """
+    )
+
+    File.write!(
+      Path.join(dir, "main.lisp"),
+      """
+      (uiop:define-package :demo
+        (:use :cl)
+        (:use-reexport :demo/helpers)
+        (:import-from :alexandria :clamp)
+        (:export :run))
+      """
+    )
+
+    File.write!(Path.join(dir, "helpers.lisp"), "(defpackage :demo/helpers (:use :cl))")
+
+    systems = ExLisp.ASDF.parse_asd(Path.join(dir, "demo.asd"))
+
+    assert systems["demo/main"].depends_on == ["demo/helpers", "alexandria"]
+    assert systems["demo/main"].components == [{:file, "main", []}]
+    assert systems["demo/helpers"].components == [{:file, "helpers", []}]
+  end
+
+  test "ASDF orders components by explicit and serial dependencies" do
+    explicit_system = %{
+      components: [
+        {:file, "runtime", ["support"]},
+        {:file, "support", []},
+        {:module, "module-a",
+         [
+           {:file, "first", []},
+           {:file, "second", ["first"]}
+         ], []}
+      ],
+      serial: false,
+      pathname: "src"
+    }
+
+    assert ExLisp.ASDF.get_load_order(explicit_system) == [
+             "src/support.lisp",
+             "src/runtime.lisp",
+             "src/module-a/first.lisp",
+             "src/module-a/second.lisp"
+           ]
+
+    serial_system = %{
+      components: [{:file, "first", []}, {:file, "second", []}],
+      serial: true
+    }
+
+    assert ExLisp.ASDF.get_load_order(serial_system) == ["first.lisp", "second.lisp"]
+  end
+
+  test "ASDF detects component dependency cycles" do
+    system = %{
+      components: [{:file, "a", ["b"]}, {:file, "b", ["a"]}],
+      serial: false,
+      pathname: nil
+    }
+
+    assert_raise RuntimeError, ~r/dependency cycle/, fn ->
+      ExLisp.ASDF.get_load_order(system)
+    end
+  end
+
   test "reader syntax: block comments, vectors, reader conditionals, uninterned symbols" do
     # Nested block comments #| ... |#
     assert ExLisp.eval("#| block comment |# (+ 1 2)") == 3

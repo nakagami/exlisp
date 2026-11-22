@@ -117,6 +117,7 @@ defmodule ExLisp.Quicklisp do
 
           %{prefix: prefix} ->
             path = Path.join(software_dir(), prefix)
+
             if File.dir?(path) do
               File.rm_rf!(path)
             end
@@ -181,11 +182,13 @@ defmodule ExLisp.Quicklisp do
             end
 
           # 3. Recursively load defsystem dependencies and regular dependencies
-          defsys_deps = (primary_sys_def[:defsystem_depends_on] || []) |> Enum.reject(&skip_dependency?/1)
+          defsys_deps =
+            (primary_sys_def[:defsystem_depends_on] || []) |> Enum.reject(&skip_dependency?/1)
+
           deps = primary_sys_def.depends_on |> Enum.reject(&skip_dependency?/1)
 
           Enum.each(defsys_deps ++ deps, fn dep_sys ->
-            do_quickload(dep_sys, systems_map, releases_map, opts)
+            load_dependency(dep_sys, sys_defs, asd_path, systems_map, releases_map, opts)
           end)
 
           # 4. Load component files
@@ -231,17 +234,45 @@ defmodule ExLisp.Quicklisp do
           found
       end
 
-    defsys_deps = (primary_sys_def[:defsystem_depends_on] || []) |> Enum.reject(&skip_dependency?/1)
+    defsys_deps =
+      (primary_sys_def[:defsystem_depends_on] || []) |> Enum.reject(&skip_dependency?/1)
+
     deps = primary_sys_def.depends_on |> Enum.reject(&skip_dependency?/1)
 
     Enum.each(defsys_deps ++ deps, fn dep_sys ->
-      do_quickload(dep_sys, systems_map, releases_map, opts)
+      load_dependency(dep_sys, sys_defs, asd_path, systems_map, releases_map, opts)
     end)
 
     asd_dir = Path.dirname(asd_path)
     ExLisp.ASDF.load_system(primary_sys_def, asd_dir)
     mark_system_loaded(sys_name)
     [sys_name]
+  end
+
+  defp load_dependency(dep_sys, sys_defs, asd_path, systems_map, releases_map, opts) do
+    normalized = normalize_system_name(dep_sys)
+
+    case lookup_sys_def(sys_defs, normalized, normalized) do
+      nil ->
+        do_quickload(normalized, systems_map, releases_map, opts)
+
+      system_info ->
+        if is_system_loaded?(normalized) and not Keyword.get(opts, :force, false) do
+          [normalized]
+        else
+          dependencies =
+            (system_info[:defsystem_depends_on] || []) ++
+              (system_info[:depends_on] || [])
+
+          dependencies
+          |> Enum.reject(&skip_dependency?/1)
+          |> Enum.each(&load_dependency(&1, sys_defs, asd_path, systems_map, releases_map, opts))
+
+          ExLisp.ASDF.load_system(system_info, Path.dirname(asd_path))
+          mark_system_loaded(normalized)
+          [normalized]
+        end
+    end
   end
 
   defp lookup_system_entry(systems_map, sys_name) do

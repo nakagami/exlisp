@@ -13,17 +13,112 @@ defmodule ExLisp.ASDF do
 
     case ExLisp.LispParser.parse_multiple(content) do
       {:ok, asts} ->
-        Enum.reduce(asts, %{}, fn ast, acc ->
-          case extract_defsystem(ast) do
-            {:ok, sys_info} -> Map.put(acc, sys_info.name, sys_info)
-            :error -> acc
-          end
-        end)
+        defs =
+          Enum.reduce(asts, %{}, fn ast, acc ->
+            case extract_defsystem(ast) do
+              {:ok, sys_info} -> Map.put(acc, sys_info.name, sys_info)
+              :error -> acc
+            end
+          end)
 
-      _ ->
-        %{}
+        add_package_inferred_systems(defs, Path.dirname(asd_path))
+
+      {:error, reason} ->
+        raise SyntaxError, description: inspect(reason), file: asd_path, line: 1
     end
   end
+
+  defp add_package_inferred_systems(defs, base_dir) do
+    Enum.reduce(defs, defs, fn {name, system}, acc ->
+      if system.package_inferred do
+        infer_package_systems(acc, name, system, base_dir)
+      else
+        acc
+      end
+    end)
+  end
+
+  defp infer_package_systems(defs, parent_name, parent, base_dir) do
+    candidates =
+      Path.wildcard(Path.join(base_dir, "*.lisp")) ++
+        Path.wildcard(Path.join([base_dir, "*", "*.lisp"]))
+
+    Enum.reduce(candidates, defs, fn path, acc ->
+      relative = Path.relative_to(path, base_dir) |> String.replace_suffix(".lisp", "")
+
+      if valid_inferred_component?(relative) do
+        system_name = "#{parent_name}/#{relative}"
+        dependencies = infer_package_dependencies(path)
+
+        system = %{
+          name: system_name,
+          version: parent.version,
+          depends_on: dependencies,
+          defsystem_depends_on: [],
+          components: [{:file, relative, []}],
+          pathname: nil,
+          serial: false,
+          package_inferred: true
+        }
+
+        Map.put_new(acc, system_name, system)
+      else
+        acc
+      end
+    end)
+  end
+
+  defp valid_inferred_component?(relative) do
+    parts = Path.split(relative)
+    length(parts) <= 2 and not Enum.any?(parts, &(&1 in ["test", "tests", "contrib", "vendor"]))
+  end
+
+  defp infer_package_dependencies(path) do
+    case ExLisp.LispParser.parse_multiple(File.read!(path)) do
+      {:ok, asts} ->
+        asts
+        |> Enum.find_value([], &package_dependency_form/1)
+
+      {:error, reason} ->
+        raise SyntaxError, description: inspect(reason), file: path, line: 1
+    end
+  end
+
+  defp package_dependency_form({:list, _, [op | options]}) do
+    op = LispBeam.extract_symbol_name(op)
+
+    if op in [:defpackage, :define_package, :"uiop:define-package", :"uiop.define-package"] do
+      options
+      |> Enum.flat_map(fn
+        {:list, _, [kind | names]} ->
+          key = LispBeam.extract_symbol_name(kind)
+
+          cond do
+            key in [:use, :use_reexport, :"use-reexport"] ->
+              extract_list_of_names(names)
+
+            key in [
+              :import_from,
+              :"import-from",
+              :shadowing_import_from,
+              :"shadowing-import-from"
+            ] ->
+              extract_list_of_names(Enum.take(names, 1))
+
+            true ->
+              []
+          end
+
+        _ ->
+          []
+      end)
+      |> Enum.reject(&(&1 in ["common_lisp", "common-lisp", "cl"]))
+    else
+      []
+    end
+  end
+
+  defp package_dependency_form(_), do: []
 
   defp extract_defsystem({:list, _pos, [op_node, name_node | rest_args]}) do
     op_name = LispBeam.extract_symbol_name(op_node)
@@ -39,7 +134,14 @@ defmodule ExLisp.ASDF do
         defsystem_depends_on: opts[:defsystem_depends_on] || [],
         components: opts[:components] || [],
         pathname: opts[:pathname],
-        serial: opts[:serial] || false
+        serial: opts[:serial] || false,
+        package_inferred:
+          opts[:class] in [
+            "package-inferred-system",
+            "package_inferred_system",
+            "asdf:package-inferred-system",
+            "asdf:package_inferred_system"
+          ]
       }
 
       {:ok, sys_info}
@@ -56,7 +158,8 @@ defmodule ExLisp.ASDF do
       defsystem_depends_on: [],
       components: [],
       serial: false,
-      pathname: nil
+      pathname: nil,
+      class: nil
     })
   end
 
@@ -86,6 +189,9 @@ defmodule ExLisp.ASDF do
       :pathname ->
         path_str = normalize_name(v_node)
         parse_options_kv(rest, Map.put(acc, :pathname, path_str))
+
+      :class ->
+        parse_options_kv(rest, Map.put(acc, :class, normalize_name(v_node)))
 
       :serial ->
         serial_val = v_node in [{:lit, :t}, {:lit, true}, :t, true]
@@ -189,8 +295,12 @@ defmodule ExLisp.ASDF do
     normalize_name(first)
   end
 
-  defp normalize_name({:id, _pos, [name]}), do: String.downcase(name)
-  defp normalize_name({:id, _pos, parts}), do: Enum.join(parts, ".") |> String.downcase()
+  defp normalize_name({:id, _pos, names}),
+    do:
+      Enum.map_join(names, ".", &to_string/1)
+      |> String.replace(~r/^#:UNINTERNED_\d+_/i, "")
+      |> String.downcase()
+
   defp normalize_name({:lit, val}) when is_atom(val), do: Atom.to_string(val) |> String.downcase()
   defp normalize_name({:lit, val}) when is_binary(val), do: String.downcase(val)
   defp normalize_name(val) when is_atom(val), do: Atom.to_string(val) |> String.downcase()
@@ -237,7 +347,14 @@ defmodule ExLisp.ASDF do
           [{:file, path_name, opts[:depends_on] || []}]
 
         type_str in ["module", "asdf:module"] ->
-          sub_comps = opts[:components] || []
+          sub_comps =
+            opts[:components]
+            |> then(fn components ->
+              if opts[:serial],
+                do: add_serial_component_dependencies(components),
+                else: components
+            end)
+
           [{:module, path_name, sub_comps, opts[:depends_on] || []}]
 
         true ->
@@ -278,6 +395,10 @@ defmodule ExLisp.ASDF do
         comps = parse_components(v_node)
         parse_component_opts_kv(rest, Map.put(acc, :components, comps))
 
+      :serial ->
+        serial_val = v_node in [{:lit, :t}, {:lit, true}, :t, true]
+        parse_component_opts_kv(rest, Map.put(acc, :serial, serial_val))
+
       _ ->
         parse_component_opts_kv(rest, acc)
     end
@@ -285,32 +406,200 @@ defmodule ExLisp.ASDF do
 
   defp parse_component_opts_kv([_ | rest], acc), do: parse_component_opts_kv(rest, acc)
 
+  defp add_serial_component_dependencies(components) do
+    components
+    |> Enum.reduce({[], nil}, fn component, {result, previous_name} ->
+      component =
+        if previous_name do
+          case component do
+            {:file, name, deps} ->
+              {:file, name, Enum.uniq(deps ++ [previous_name])}
+
+            {:module, name, subcomponents, deps} ->
+              {:module, name, subcomponents, Enum.uniq(deps ++ [previous_name])}
+          end
+        else
+          component
+        end
+
+      {result ++ [component], component |> normalize_component_name()}
+    end)
+    |> elem(0)
+  end
+
   @doc """
   Returns an ordered list of `.lisp` file paths to load from system definition and base directory.
   """
   def get_load_order(system_info) do
-    components = system_info.components
     prefix = system_info[:pathname] || ""
-    flatten_components(components, prefix)
+
+    {nodes, aliases} =
+      collect_component_nodes(
+        system_info.components,
+        prefix,
+        Map.get(system_info, :serial, false)
+      )
+
+    topological_component_order(nodes, aliases)
   end
 
-  defp flatten_components(components, prefix) do
-    Enum.flat_map(components, fn
-      {:file, name, _deps} ->
-        file_name =
-          if String.ends_with?(name, ".lisp") or String.ends_with?(name, ".lsp") do
-            name
-          else
-            "#{name}.lisp"
-          end
+  defp collect_component_nodes(components, prefix, serial) do
+    {groups, aliases} =
+      Enum.map_reduce(components, %{}, fn component, aliases ->
+        {nodes, aliases, name_ids} =
+          collect_single_component(component, prefix, aliases)
 
-        rel_path = if prefix == "", do: file_name, else: Path.join(prefix, file_name)
-        [rel_path]
+        aliases =
+          Map.update(
+            aliases,
+            normalize_component_name(component),
+            name_ids,
+            &Enum.uniq(&1 ++ name_ids)
+          )
 
-      {:module, mod_name, sub_comps, _deps} ->
-        new_prefix = if prefix == "", do: mod_name, else: Path.join(prefix, mod_name)
-        flatten_components(sub_comps, new_prefix)
+        {{nodes, name_ids}, aliases}
+      end)
+
+    groups = add_serial_dependencies(groups, serial)
+    {Enum.flat_map(groups, &elem(&1, 0)), aliases}
+  end
+
+  defp collect_single_component({:file, name, deps}, prefix, aliases) do
+    file_name =
+      if String.ends_with?(name, ".lisp") or String.ends_with?(name, ".lsp"),
+        do: name,
+        else: "#{name}.lisp"
+
+    path = if prefix == "", do: file_name, else: Path.join(prefix, file_name)
+    id = normalize_component_name(path)
+    node = %{id: id, path: path, deps: Enum.map(deps, &normalize_name/1)}
+    {[node], aliases, [id]}
+  end
+
+  defp collect_single_component(
+         {:module, name, sub_components, deps},
+         prefix,
+         aliases
+       ) do
+    module_prefix = if prefix == "", do: name, else: Path.join(prefix, name)
+    {nodes, child_aliases} = collect_component_nodes(sub_components, module_prefix, false)
+
+    aliases =
+      Map.merge(aliases, child_aliases, fn _key, left, right -> Enum.uniq(left ++ right) end)
+
+    ids = Enum.map(nodes, & &1.id)
+    dependencies = Enum.map(deps, &normalize_name/1)
+
+    nodes =
+      case nodes do
+        [first | rest] ->
+          first = %{first | deps: Enum.uniq(first.deps ++ dependencies)}
+          [first | rest]
+
+        [] ->
+          []
+      end
+
+    {nodes, aliases, ids}
+  end
+
+  defp add_serial_dependencies(groups, false), do: groups
+
+  defp add_serial_dependencies(groups, true) do
+    groups
+    |> Enum.reduce({[], []}, fn {nodes, ids}, {out, previous_ids} ->
+      nodes =
+        case nodes do
+          [first | rest] ->
+            [%{first | deps: Enum.uniq(first.deps ++ previous_ids)} | rest]
+
+          [] ->
+            []
+        end
+
+      {out ++ [{nodes, ids}], ids}
     end)
+    |> elem(0)
+  end
+
+  defp normalize_component_name({:file, name, _deps}), do: normalize_component_name(name)
+
+  defp normalize_component_name({:module, name, _components, _deps}),
+    do: normalize_component_name(name)
+
+  defp normalize_component_name(name) do
+    name
+    |> normalize_name()
+    |> to_string()
+    |> String.replace(".lisp", "")
+    |> String.replace(".lsp", "")
+  end
+
+  defp topological_component_order(nodes, aliases) do
+    index = Map.new(nodes, &{&1.id, &1})
+
+    deps_by_id =
+      Map.new(nodes, fn node ->
+        deps =
+          Enum.flat_map(node.deps, fn dep ->
+            candidates =
+              Map.get(aliases, normalize_component_name(dep), [
+                normalize_component_name(dep)
+              ])
+
+            local_candidates =
+              Enum.filter(candidates, &(Path.dirname(&1) == Path.dirname(node.id)))
+
+            if local_candidates == [], do: candidates, else: local_candidates
+          end)
+          |> Enum.filter(&Map.has_key?(index, &1))
+
+        {node.id, Enum.uniq(deps)}
+      end)
+
+    topo_component_visit(
+      Enum.map(nodes, & &1.id),
+      deps_by_id,
+      index,
+      [],
+      MapSet.new(),
+      MapSet.new()
+    )
+    |> Enum.reverse()
+    |> Enum.map(&index[&1].path)
+  end
+
+  defp topo_component_visit([], _deps, _index, order, _visiting, _visited), do: order
+
+  defp topo_component_visit([id | rest], deps, index, order, visiting, visited) do
+    if MapSet.member?(visited, id) do
+      topo_component_visit(rest, deps, index, order, visiting, visited)
+    else
+      {order, visiting, visited} =
+        topo_component_visit_one(id, deps, index, order, visiting, visited)
+
+      topo_component_visit(rest, deps, index, order, visiting, visited)
+    end
+  end
+
+  defp topo_component_visit_one(id, deps, index, order, visiting, visited) do
+    cond do
+      MapSet.member?(visited, id) ->
+        {order, visiting, visited}
+
+      MapSet.member?(visiting, id) ->
+        raise "ASDF component dependency cycle involving #{inspect(id)}"
+
+      true ->
+        visiting = MapSet.put(visiting, id)
+
+        {order, visiting, visited} =
+          Enum.reduce(Map.get(deps, id, []), {order, visiting, visited}, fn dep, {o, v, d} ->
+            topo_component_visit_one(dep, deps, index, o, v, d)
+          end)
+
+        {[id | order], MapSet.delete(visiting, id), MapSet.put(visited, id)}
+    end
   end
 
   @doc """
