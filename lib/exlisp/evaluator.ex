@@ -641,6 +641,7 @@ defmodule ExLisp.Evaluator do
               end
 
             if doc_str, do: Builtins.set_documentation(var_sym, :variable, doc_str)
+            Env.proclaim_special(var_sym)
 
             if not Env.has_var?(var_sym) and val_node != nil do
               val = eval(val_node, env) |> Builtins.unwrap_mv_primary()
@@ -669,6 +670,7 @@ defmodule ExLisp.Evaluator do
             if doc_str, do: Builtins.set_documentation(var_sym, :variable, doc_str)
             val = eval(val_node, env) |> Builtins.unwrap_mv_primary()
             Env.put_var(var_sym, val)
+            if op in [:defparameter, :_cl_defparameter_], do: Env.proclaim_special(var_sym)
             var_sym
 
           _ ->
@@ -1679,7 +1681,7 @@ defmodule ExLisp.Evaluator do
       {:list, _, key_list} ->
         keys = Enum.map(key_list, &eval_quote_node/1)
 
-        if Enum.any?(keys, &(Builtins.eql(key_val, &1) == :t)) do
+        if Enum.any?(keys, &(Builtins.case_eql(key_val, &1) == :t)) do
           {:matched, eval_progn(body_nodes, env)}
         else
           nil
@@ -1694,7 +1696,7 @@ defmodule ExLisp.Evaluator do
             {:matched, eval_progn(body_nodes, env)}
 
           k ->
-            if Builtins.eql(key_val, k) == :t do
+            if Builtins.case_eql(key_val, k) == :t do
               {:matched, eval_progn(body_nodes, env)}
             else
               nil
@@ -1786,7 +1788,7 @@ defmodule ExLisp.Evaluator do
     bindings = LispBeam.extract_bindings(bindings_node)
 
     {special_bindings, lexical_bindings} =
-      Enum.split_with(bindings, fn {var, _} -> var in specials or special_earmuff?(var) end)
+      Enum.split_with(bindings, fn {var, _} -> var in specials or Env.specialp(var) end)
 
     evaluated_lexical =
       Enum.map(lexical_bindings, fn {var, init_node} ->
@@ -1833,7 +1835,7 @@ defmodule ExLisp.Evaluator do
   defp do_eval_let_star([{var, init_node} | rest], actual_body, env, specials) do
     val = eval(init_node, env) |> Builtins.unwrap_mv_primary()
 
-    if var in specials or special_earmuff?(var) do
+    if var in specials or Env.specialp(var) do
       new_env = Map.delete(env, var)
       Env.with_special_bindings([{var, val}], fn ->
         do_eval_let_star(rest, actual_body, new_env, specials)
@@ -3707,6 +3709,12 @@ defmodule ExLisp.Evaluator do
     {method_options, generic_options} =
       Enum.split_with(options, fn
         {:list, _, [{:id, _, [option]} | _]} -> String.downcase(option) == "method"
+        {:list, _, [{:keyword, _, option} | _]} ->
+          option |> Atom.to_string() |> String.trim_leading(":") |> String.downcase() == "method"
+
+        {:list, _, [{:lit, option} | _]} ->
+          option |> Atom.to_string() |> String.trim_leading(":") |> String.downcase() == "method"
+
         _ -> false
       end)
 
@@ -4191,7 +4199,7 @@ defmodule ExLisp.Evaluator do
       true ->
         case BuiltinFunction.canonical_name(fn_sym) do
           {:ok, c} ->
-            c
+            builtin_function_object(c)
 
           :error ->
             if Env.has_fun?(fn_sym) do
@@ -4200,6 +4208,26 @@ defmodule ExLisp.Evaluator do
               fn_sym
             end
         end
+    end
+  end
+
+  defp builtin_function_object(name) do
+    key = {:exlisp_builtin_function_object, name}
+
+    case :persistent_term.get(key, nil) do
+      nil ->
+        function =
+          ExLisp.Closure.new(
+            fn args -> Builtins.invoke_fn(name, args) end,
+            name,
+            compiled: true
+          )
+
+        :persistent_term.put(key, function)
+        function
+
+      function ->
+        function
     end
   end
 

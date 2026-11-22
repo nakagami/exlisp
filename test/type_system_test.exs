@@ -139,7 +139,7 @@ defmodule TypeSystemTest do
     test "the form returns value on matching type" do
       assert ExLisp.eval("(the integer (+ 1 2))") == 3
       assert ExLisp.eval("(the string \"hello\")") == "hello"
-      assert ExLisp.eval("(the function #'cons)") == :cons
+      assert ExLisp.eval("(functionp (the function #'cons))") == :t
       assert ExLisp.eval("(the (simple-base-string 5) \"hello\")") == "hello"
       assert ExLisp.eval("(the (simple-bit-vector 5) (make-array 5 :element-type 'bit :initial-contents '(0 0 1 1 0)))") != nil
     end

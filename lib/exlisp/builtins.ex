@@ -37,6 +37,12 @@ defmodule ExLisp.Builtins do
     val != nil and val != false and val != []
   end
 
+  defp stable_binary_copy(binary) do
+    binary
+    |> :binary.copy(2)
+    |> :binary.part(0, Kernel.byte_size(binary))
+  end
+
   @doc """
   Converts an Elixir boolean into a Lisp boolean (:t or nil).
   """
@@ -383,6 +389,7 @@ defmodule ExLisp.Builtins do
       :cons -> cons(unwrap_mv_primary(a), unwrap_mv_primary(b))
       :eq -> eq(unwrap_mv_primary(a), unwrap_mv_primary(b))
       :eql -> eql(unwrap_mv_primary(a), unwrap_mv_primary(b))
+      :case_eql -> case_eql(unwrap_mv_primary(a), unwrap_mv_primary(b))
       :equal -> equal(unwrap_mv_primary(a), unwrap_mv_primary(b))
       :equalp -> equalp(unwrap_mv_primary(a), unwrap_mv_primary(b))
       :aref -> aref(unwrap_mv_primary(a), unwrap_mv_primary(b))
@@ -1835,7 +1842,7 @@ defmodule ExLisp.Builtins do
   def eq(%ExLisp.Package{id: xid, name: x}, %ExLisp.Package{id: yid, name: y}),
     do: ((xid != nil and xid == yid) or x == y) |> lisp_bool()
   def eq(x, y) when is_atom(x) and is_atom(y), do: (x === y) |> lisp_bool()
-  def eq(x, y), do: (x === y) |> lisp_bool()
+  def eq(x, y), do: :erts_debug.same(x, y) |> lisp_bool()
   def eqt(x, y), do: eq(x, y)
 
   def eql(x, y) when x in [nil, [], nil] and y in [nil, [], nil], do: :t
@@ -1850,12 +1857,18 @@ defmodule ExLisp.Builtins do
 
   def eql(%ExLisp.Ratio{} = x, %ExLisp.Ratio{} = y), do: (x == y) |> lisp_bool()
 
+  def eql(%ExLisp.Character{code: x}, %ExLisp.Character{code: y}),
+    do: (x == y) |> lisp_bool()
+
   def eql({:complex, r1, i1}, {:complex, r2, i2}) do
     (eql(r1, r2) == :t and eql(i1, i2) == :t) |> lisp_bool()
   end
 
-  def eql(x, y), do: (x === y) |> lisp_bool()
+  def eql(x, y), do: :erts_debug.same(x, y) |> lisp_bool()
   def eqlt(x, y), do: eql(x, y)
+
+  def case_eql(x, y) when is_list(x) and is_list(y), do: equal(x, y)
+  def case_eql(x, y), do: eql(x, y)
 
   def equal([:vector | elems1], [:vector | elems2]), do: equal(elems1, elems2)
   def equal(%ExLisp.Package{id: xid, name: x}, %ExLisp.Package{id: yid, name: y}),
@@ -2060,7 +2073,8 @@ defmodule ExLisp.Builtins do
   end
 
   def symbolp(x) do
-    (is_atom(x) or is_struct(x, ExLisp.Symbol) or x == []) |> lisp_bool()
+    (x != :standard_io and (is_atom(x) or is_struct(x, ExLisp.Symbol) or x == []))
+    |> lisp_bool()
   end
 
   def keywordp(nil), do: nil
@@ -3216,14 +3230,19 @@ defmodule ExLisp.Builtins do
 
   def copy_list(args) when is_list(args) do
     case args do
-      [list] when is_list(list) -> Enum.to_list(list)
+      [list] when is_list(list) -> copy_list_cells(list)
       [other] -> other
       _ -> raise ArgumentError, "copy-list requires 1 argument"
     end
   end
 
-  def copy_list(list) when is_list(list), do: Enum.to_list(list)
+  def copy_list(list) when is_list(list), do: copy_list_cells(list)
   def copy_list(other), do: other
+
+  defp copy_list_cells([]), do: []
+  defp copy_list_cells([head | tail]) when is_list(tail), do: [head | copy_list_cells(tail)]
+  defp copy_list_cells([head | tail]),
+    do: List.foldr([head], tail, fn item, copied -> [item | copied] end)
 
   def copy_alist(args) when is_list(args) do
     case args do
@@ -4870,6 +4889,45 @@ defmodule ExLisp.Builtins do
     end
   end
 
+  defp put_array_displacement(tid, target, offset) do
+    :ets.insert(tid, {:__displaced__, target, offset})
+    :erlang.put({:lisp_array_displacement, tid}, {target, offset})
+  end
+
+  defp get_array_displacement(tid) do
+    case :erlang.get({:lisp_array_displacement, tid}) do
+      {target, offset} ->
+        {target, offset}
+
+      :undefined ->
+        case :ets.lookup(tid, :__displaced__) do
+          [{:__displaced__, target, offset}] -> {target, offset}
+          _ -> nil
+        end
+    end
+  end
+
+  defp normalize_array_value(tid, value) when is_integer(value) do
+    case :ets.lookup(tid, :__meta__) do
+      [{:__meta__, %{element_type: element_type}}]
+      when element_type in [
+             :character,
+             :base_char,
+             :standard_char,
+             :extended_char,
+             :"base-char",
+             :"standard-char",
+             :"extended-char"
+           ] ->
+        ExLisp.Character.new(value)
+
+      _ ->
+        value
+    end
+  end
+
+  defp normalize_array_value(_tid, value), do: value
+
   def remove(item, seq), do: remove([item, seq])
   def delete(args) when is_list(args), do: remove(args)
   def delete(item, seq), do: remove([item, seq])
@@ -5754,7 +5812,7 @@ defmodule ExLisp.Builtins do
         Enum.to_list(seq)
 
       is_binary(seq) ->
-        seq
+        stable_binary_copy(seq)
 
       match?({:array, _, _}, seq) ->
         list = seq_to_list(seq)
@@ -6096,10 +6154,10 @@ defmodule ExLisp.Builtins do
         end
 
       {[c1 | t1], [c2 | t2]} ->
-        code1 = char_code(c1)
-        code2 = char_code(c2)
-        u1 = if case_fold, do: char_code(char_upcase(c1)), else: code1
-        u2 = if case_fold, do: char_code(char_upcase(c2)), else: code2
+        code1 = raw_char_code(c1)
+        code2 = raw_char_code(c2)
+        u1 = if case_fold, do: raw_char_code(char_upcase(as_character(c1))), else: code1
+        u2 = if case_fold, do: raw_char_code(char_upcase(as_character(c2))), else: code2
 
         if u1 == u2 do
           run_string_compare(t1, t2, i1 + 1, comparison, case_fold)
@@ -6205,7 +6263,7 @@ defmodule ExLisp.Builtins do
           |> Enum.with_index()
           |> Enum.map(fn {c, idx} ->
             if idx >= start_idx and idx < end_idx do
-              char_code(char_upcase(c))
+              raw_char_code(char_upcase(as_character(c)))
             else
               c
             end
@@ -6235,7 +6293,7 @@ defmodule ExLisp.Builtins do
           |> Enum.with_index()
           |> Enum.map(fn {c, idx} ->
             if idx >= start_idx and idx < end_idx do
-              char_code(char_downcase(c))
+              raw_char_code(char_downcase(as_character(c)))
             else
               c
             end
@@ -6265,9 +6323,9 @@ defmodule ExLisp.Builtins do
             if idx >= start_idx and idx < end_idx do
               if alphanumeric_code?(c) do
                 if in_word do
-                  {[char_code(char_downcase(c)) | acc], true}
+                  {[raw_char_code(char_downcase(as_character(c))) | acc], true}
                 else
-                  {[char_code(char_upcase(c)) | acc], true}
+                  {[raw_char_code(char_upcase(as_character(c))) | acc], true}
                 end
               else
                 {[c | acc], false}
@@ -6296,13 +6354,15 @@ defmodule ExLisp.Builtins do
 
         for i <- start_idx..(end_idx - 1)//1 do
           c = aref([arr, i])
-          if is_integer(c) or match?(%ExLisp.Character{}, c), do: set_aref(arr, i, char_upcase(c))
+          if is_integer(c) or match?(%ExLisp.Character{}, c),
+            do: set_aref(arr, i, char_upcase(as_character(c)))
         end
 
         arr
 
       [s | _] when is_binary(s) ->
-        string_upcase(args)
+        transformed = string_upcase(args)
+        if transformed == s, do: s, else: transformed
 
       _ ->
         raise ArgumentError, "nstring-upcase requires at least 1 argument"
@@ -6323,13 +6383,14 @@ defmodule ExLisp.Builtins do
           c = aref([arr, i])
 
           if is_integer(c) or match?(%ExLisp.Character{}, c),
-            do: set_aref(arr, i, char_downcase(c))
+            do: set_aref(arr, i, char_downcase(as_character(c)))
         end
 
         arr
 
       [s | _] when is_binary(s) ->
-        string_downcase(args)
+        transformed = string_downcase(args)
+        if transformed == s, do: s, else: transformed
 
       _ ->
         raise ArgumentError, "nstring-downcase requires at least 1 argument"
@@ -6351,12 +6412,12 @@ defmodule ExLisp.Builtins do
             c = aref([arr, i])
 
             if (is_integer(c) or match?(%ExLisp.Character{}, c)) and
-                 alphanumeric_code?(char_code(c)) do
+                 alphanumeric_code?(raw_char_code(c)) do
               if in_w do
-                set_aref(arr, i, char_downcase(c))
+                set_aref(arr, i, char_downcase(as_character(c)))
                 true
               else
-                set_aref(arr, i, char_upcase(c))
+                set_aref(arr, i, char_upcase(as_character(c)))
                 true
               end
             else
@@ -6368,7 +6429,8 @@ defmodule ExLisp.Builtins do
         arr
 
       [s | _] when is_binary(s) ->
-        string_capitalize(args)
+        transformed = string_capitalize(args)
+        if transformed == s, do: s, else: transformed
 
       _ ->
         raise ArgumentError, "nstring-capitalize requires at least 1 argument"
@@ -6453,7 +6515,9 @@ defmodule ExLisp.Builtins do
     List.to_string(trimmed)
   end
 
-  def string(x), do: string_designator_to_string(x)
+  def string(x) do
+    if stringp(x) == :t, do: x, else: string_designator_to_string(x)
+  end
 
   def to_string_val(val) when is_binary(val), do: val
   def to_string_val(%ExLisp.Symbol{} = sym), do: symbol_name(sym)
@@ -6559,7 +6623,10 @@ defmodule ExLisp.Builtins do
     case seq do
       {:array, [len], _} ->
         if not is_integer(idx) or idx < 0 or idx >= len do
-          raise ArgumentError, "Index #{inspect(idx)} out of bounds for array of length #{len}"
+          ExLisp.Condition.error(:type_error,
+            datum: idx,
+            expected_type: [:integer, 0, len - 1]
+          )
         end
 
         set_aref(seq, idx, val)
@@ -6573,7 +6640,10 @@ defmodule ExLisp.Builtins do
         len = length(seq)
 
         if not is_integer(idx) or idx < 0 or idx >= len do
-          raise ArgumentError, "Index #{inspect(idx)} out of bounds for list of length #{len}"
+          ExLisp.Condition.error(:type_error,
+            datum: idx,
+            expected_type: [:integer, 0, len - 1]
+          )
         end
 
         List.replace_at(seq, idx, val)
@@ -6582,13 +6652,16 @@ defmodule ExLisp.Builtins do
         len = String.length(seq)
 
         if not is_integer(idx) or idx < 0 or idx >= len do
-          raise ArgumentError, "Index #{inspect(idx)} out of bounds for string of length #{len}"
+          ExLisp.Condition.error(:type_error,
+            datum: idx,
+            expected_type: [:integer, 0, len - 1]
+          )
         end
 
         set_char_update_seq(seq, idx, val)
 
       _ ->
-        raise ArgumentError, "setf elt requires a sequence, got: #{inspect(seq)}"
+        ExLisp.Condition.error(:type_error, datum: seq, expected_type: :sequence)
     end
   end
 
@@ -6721,20 +6794,13 @@ defmodule ExLisp.Builtins do
   def char_code(%ExLisp.Character{code: code}), do: code
 
   def char_code(ch) do
-    cond do
-      is_integer(ch) and ch >= 0 and ch <= 0x10FFFF ->
-        ch
-
-      is_binary(ch) ->
-        case String.to_charlist(ch) do
-          [c] -> c
-          _ -> raise ArgumentError, "Not a character: #{inspect(ch)}"
-        end
-
-      true ->
-        raise ArgumentError, "Not a character: #{inspect(ch)}"
-    end
+    ExLisp.Condition.error(:type_error, datum: ch, expected_type: :character)
   end
+
+  defp raw_char_code(%ExLisp.Character{code: code}), do: code
+  defp raw_char_code(code) when is_integer(code), do: code
+  defp as_character(%ExLisp.Character{} = char), do: char
+  defp as_character(code) when is_integer(code), do: ExLisp.Character.new(code)
 
   def code_char(code) when is_integer(code) and code >= 0 and code <= 0x10FFFF do
     if code in 0xD800..0xDFFF do
@@ -6758,7 +6824,7 @@ defmodule ExLisp.Builtins do
     ExLisp.Character.new(down)
   end
 
-  def char_equal([]), do: raise(ArgumentError, "char-equal requires at least 1 argument")
+  def char_equal([]), do: arity_program_error("char-equal")
   def char_equal([_]), do: :t
 
   def char_equal([first | rest]) do
@@ -6769,7 +6835,7 @@ defmodule ExLisp.Builtins do
   def char_equal(_c), do: :t
   def char_equal(c1, c2), do: char_equal([c1, c2])
 
-  def char_not_equal([]), do: raise(ArgumentError, "char-not-equal requires at least 1 argument")
+  def char_not_equal([]), do: arity_program_error("char-not-equal")
   def char_not_equal([_]), do: :t
 
   def char_not_equal(args) when is_list(args) do
@@ -6780,7 +6846,7 @@ defmodule ExLisp.Builtins do
   def char_not_equal(_c), do: :t
   def char_not_equal(c1, c2), do: char_not_equal([c1, c2])
 
-  def char_lessp([]), do: raise(ArgumentError, "char-lessp requires at least 1 argument")
+  def char_lessp([]), do: arity_program_error("char-lessp")
   def char_lessp([_]), do: :t
 
   def char_lessp(args) when is_list(args) do
@@ -6794,7 +6860,7 @@ defmodule ExLisp.Builtins do
   def char_lessp(_c), do: :t
   def char_lessp(c1, c2), do: char_lessp([c1, c2])
 
-  def char_greaterp([]), do: raise(ArgumentError, "char-greaterp requires at least 1 argument")
+  def char_greaterp([]), do: arity_program_error("char-greaterp")
   def char_greaterp([_]), do: :t
 
   def char_greaterp(args) when is_list(args) do
@@ -6808,8 +6874,7 @@ defmodule ExLisp.Builtins do
   def char_greaterp(_c), do: :t
   def char_greaterp(c1, c2), do: char_greaterp([c1, c2])
 
-  def char_not_greaterp([]),
-    do: raise(ArgumentError, "char-not-greaterp requires at least 1 argument")
+  def char_not_greaterp([]), do: arity_program_error("char-not-greaterp")
 
   def char_not_greaterp([_]), do: :t
 
@@ -6824,7 +6889,7 @@ defmodule ExLisp.Builtins do
   def char_not_greaterp(_c), do: :t
   def char_not_greaterp(c1, c2), do: char_not_greaterp([c1, c2])
 
-  def char_not_lessp([]), do: raise(ArgumentError, "char-not-lessp requires at least 1 argument")
+  def char_not_lessp([]), do: arity_program_error("char-not-lessp")
   def char_not_lessp([_]), do: :t
 
   def char_not_lessp(args) when is_list(args) do
@@ -6893,7 +6958,7 @@ defmodule ExLisp.Builtins do
     alpha_char_p(c)
   end
 
-  def char_eq([]), do: raise(ArgumentError, "char= requires at least 1 argument")
+  def char_eq([]), do: arity_program_error("char=")
   def char_eq([_]), do: :t
 
   def char_eq([first | rest]) do
@@ -6904,7 +6969,7 @@ defmodule ExLisp.Builtins do
   def char_eq(_c), do: :t
   def char_eq(c1, c2), do: char_eq([c1, c2])
 
-  def char_neq([]), do: raise(ArgumentError, "char/= requires at least 1 argument")
+  def char_neq([]), do: arity_program_error("char/=")
   def char_neq([_]), do: :t
 
   def char_neq(args) when is_list(args) do
@@ -6915,7 +6980,7 @@ defmodule ExLisp.Builtins do
   def char_neq(_c), do: :t
   def char_neq(c1, c2), do: char_neq([c1, c2])
 
-  def char_lt([]), do: raise(ArgumentError, "char< requires at least 1 argument")
+  def char_lt([]), do: arity_program_error("char<")
   def char_lt([_]), do: :t
 
   def char_lt(args) when is_list(args) do
@@ -6929,7 +6994,7 @@ defmodule ExLisp.Builtins do
   def char_lt(_c), do: :t
   def char_lt(c1, c2), do: char_lt([c1, c2])
 
-  def char_lte([]), do: raise(ArgumentError, "char<= requires at least 1 argument")
+  def char_lte([]), do: arity_program_error("char<=")
   def char_lte([_]), do: :t
 
   def char_lte(args) when is_list(args) do
@@ -6943,7 +7008,7 @@ defmodule ExLisp.Builtins do
   def char_lte(_c), do: :t
   def char_lte(c1, c2), do: char_lte([c1, c2])
 
-  def char_gt([]), do: raise(ArgumentError, "char> requires at least 1 argument")
+  def char_gt([]), do: arity_program_error("char>")
   def char_gt([_]), do: :t
 
   def char_gt(args) when is_list(args) do
@@ -6957,7 +7022,7 @@ defmodule ExLisp.Builtins do
   def char_gt(_c), do: :t
   def char_gt(c1, c2), do: char_gt([c1, c2])
 
-  def char_gte([]), do: raise(ArgumentError, "char>= requires at least 1 argument")
+  def char_gte([]), do: arity_program_error("char>=")
   def char_gte([_]), do: :t
 
   def char_gte(args) when is_list(args) do
@@ -6970,6 +7035,10 @@ defmodule ExLisp.Builtins do
 
   def char_gte(_c), do: :t
   def char_gte(c1, c2), do: char_gte([c1, c2])
+
+  defp arity_program_error(name) do
+    ExLisp.Condition.error(:program_error, "#{name} requires at least 1 argument")
+  end
 
   # --- Hash tables ---
 
@@ -7158,7 +7227,7 @@ defmodule ExLisp.Builtins do
         end
 
         if displaced_to != nil do
-          :ets.insert(tid, {:__displaced__, displaced_to, displaced_offset})
+          put_array_displacement(tid, displaced_to, displaced_offset)
         end
 
         :ets.insert(
@@ -7282,11 +7351,11 @@ defmodule ExLisp.Builtins do
   def aref({:array, [_dim], tid}, idx) when is_integer(idx) do
     case :ets.lookup(tid, idx) do
       [{_, val}] ->
-        val
+        normalize_array_value(tid, val)
 
       _ ->
-        case :ets.lookup(tid, :__displaced__) do
-          [{_, target, offset}] ->
+        case get_array_displacement(tid) do
+          {target, offset} ->
             row_major_aref(target, offset + idx)
 
           _ ->
@@ -7332,14 +7401,14 @@ defmodule ExLisp.Builtins do
 
         case :ets.lookup(tid, flat_idx) do
           [{^flat_idx, val}] ->
-            val
+            normalize_array_value(tid, val)
 
           [] ->
-            case :ets.lookup(tid, :__displaced__) do
-              [{:__displaced__, target, offset}] ->
+            case get_array_displacement(tid) do
+              {target, offset} ->
                 row_major_aref(target, offset + flat_idx)
 
-              [] ->
+              nil ->
                 case :ets.lookup(tid, :__init__) do
                   [{:__init__, default}] ->
                     default
@@ -7362,8 +7431,8 @@ defmodule ExLisp.Builtins do
   end
 
   def set_aref({:array, [_single_dim], tid}, index, val) when is_integer(index) do
-    case :ets.lookup(tid, :__displaced__) do
-      [{:__displaced__, {:array, _, _} = target, offset}] ->
+    case get_array_displacement(tid) do
+      {{:array, _, _} = target, offset} ->
         set_aref(target, offset + index, val)
 
       _ ->
@@ -7401,8 +7470,8 @@ defmodule ExLisp.Builtins do
               compute_flat_index(dims, idx_list)
           end
 
-        case :ets.lookup(tid, :__displaced__) do
-          [{:__displaced__, {:array, _, _} = target, offset}] ->
+        case get_array_displacement(tid) do
+          {{:array, _, _} = target, offset} ->
             set_aref(target, offset + flat_idx, val)
 
           _ ->
@@ -7460,7 +7529,10 @@ defmodule ExLisp.Builtins do
     len = length(arr)
 
     if index < 0 or index >= len do
-      raise RuntimeError, "Index #{index} out of bounds for #{inspect(arr)}"
+      ExLisp.Condition.error(:type_error,
+        datum: index,
+        expected_type: [:integer, 0, len - 1]
+      )
     else
       aref([arr, index])
     end
@@ -7468,7 +7540,10 @@ defmodule ExLisp.Builtins do
 
   def elt(list, index) when is_list(list) and is_integer(index) do
     if index < 0 or index >= Kernel.length(list) do
-      raise RuntimeError, "Index #{index} out of bounds for #{inspect(list)}"
+      ExLisp.Condition.error(:type_error,
+        datum: index,
+        expected_type: [:integer, 0, Kernel.length(list) - 1]
+      )
     else
       Enum.at(list, index)
     end
@@ -7478,21 +7553,30 @@ defmodule ExLisp.Builtins do
     chars = String.to_charlist(str)
 
     if index < 0 or index >= Kernel.length(chars) do
-      raise RuntimeError, "Index #{index} out of bounds for string"
+      ExLisp.Condition.error(:type_error,
+        datum: index,
+        expected_type: [:integer, 0, Kernel.length(chars) - 1]
+      )
     else
       ExLisp.Character.new(Enum.at(chars, index))
     end
   end
 
-  def elt(seq, index) do
-    raise RuntimeError, "Invalid sequence or index for elt: #{inspect(seq)}, #{inspect(index)}"
+  def elt(_seq, index) do
+    ExLisp.Condition.error(:type_error,
+      datum: index,
+      expected_type: :valid_sequence_index
+    )
   end
 
   def set_elt({:array, _dims, _tid} = arr, index, val) when is_integer(index) do
     len = length(arr)
 
     if index < 0 or index >= len do
-      raise RuntimeError, "Index #{index} out of bounds for #{inspect(arr)}"
+      ExLisp.Condition.error(:type_error,
+        datum: index,
+        expected_type: [:integer, 0, len - 1]
+      )
     else
       set_aref(arr, index, val)
     end
@@ -7500,7 +7584,10 @@ defmodule ExLisp.Builtins do
 
   def set_elt(list, index, val) when is_list(list) and is_integer(index) do
     if index < 0 or index >= Kernel.length(list) do
-      raise RuntimeError, "Index #{index} out of bounds for #{inspect(list)}"
+      ExLisp.Condition.error(:type_error,
+        datum: index,
+        expected_type: [:integer, 0, Kernel.length(list) - 1]
+      )
     else
       List.replace_at(list, index, val)
     end
@@ -7510,7 +7597,10 @@ defmodule ExLisp.Builtins do
     chars = String.to_charlist(str)
 
     if index < 0 or index >= Kernel.length(chars) do
-      raise RuntimeError, "Index #{index} out of bounds for string"
+      ExLisp.Condition.error(:type_error,
+        datum: index,
+        expected_type: [:integer, 0, Kernel.length(chars) - 1]
+      )
     else
       char_code =
         case val do
@@ -7652,14 +7742,14 @@ defmodule ExLisp.Builtins do
   def row_major_aref({:array, _dims, tid} = _arr, idx) when is_integer(idx) do
     case :ets.lookup(tid, idx) do
       [{^idx, val}] ->
-        val
+        normalize_array_value(tid, val)
 
       [] ->
-        case :ets.lookup(tid, :__displaced__) do
-          [{:__displaced__, target, offset}] ->
+        case get_array_displacement(tid) do
+          {target, offset} ->
             row_major_aref(target, offset + idx)
 
-          [] ->
+          nil ->
             case :ets.lookup(tid, :__init__) do
               [{:__init__, default}] ->
                 default
@@ -7681,8 +7771,8 @@ defmodule ExLisp.Builtins do
   def row_major_aref([arr, idx]), do: row_major_aref(arr, idx)
 
   def set_row_major_aref({:array, _dims, tid} = _arr, idx, val) when is_integer(idx) do
-    case :ets.lookup(tid, :__displaced__) do
-      [{:__displaced__, {:array, _, _} = target, offset}] ->
+    case get_array_displacement(tid) do
+      {{:array, _, _} = target, offset} ->
         set_aref(target, offset + idx, val)
 
       _ ->
@@ -7705,9 +7795,8 @@ defmodule ExLisp.Builtins do
   def array_element_type(_), do: :t
 
   def array_displacement({:array, _, tid}) do
-    case :ets.lookup(tid, :__meta__) do
-      [{:__meta__, %{displaced_to: target, displaced_index_offset: offset}}]
-      when not is_nil(target) ->
+    case get_array_displacement(tid) do
+      {target, offset} ->
         [:_values_, [target, offset || 0]]
 
       _ ->
@@ -7767,6 +7856,7 @@ defmodule ExLisp.Builtins do
 
             :ets.select_delete(tid, [{{:"$1", :_}, [{:is_integer, :"$1"}], [true]}])
             :ets.delete(tid, :__displaced__)
+            :erlang.erase({:lisp_array_displacement, tid})
             Enum.each(old_values, fn {index, value} -> :ets.insert(tid, {index, value}) end)
             :ets.insert(tid, {fp, val})
 
@@ -7880,11 +7970,12 @@ defmodule ExLisp.Builtins do
 
     :ets.select_delete(new_tid, [{{:"$1", :_}, [{:is_integer, :"$1"}], [true]}])
     :ets.delete(new_tid, :__displaced__)
+    :erlang.erase({:lisp_array_displacement, new_tid})
     :ets.insert(new_tid, {:__init__, initial_element})
 
     cond do
       displaced_to != nil ->
-        :ets.insert(new_tid, {:__displaced__, displaced_to, displaced_offset})
+        put_array_displacement(new_tid, displaced_to, displaced_offset)
 
       initial_contents != nil ->
         initial_contents
@@ -8338,7 +8429,7 @@ defmodule ExLisp.Builtins do
 
     Enum.each(default_slots, fn {slot, default_val} ->
       val = Keyword.get(opts, slot, default_val)
-      :ets.insert(tid, {slot, val})
+      put_struct_slot(tid, slot, val)
     end)
 
     {:struct, struct_name, tid}
@@ -8358,9 +8449,15 @@ defmodule ExLisp.Builtins do
           slot_name
       end
 
-    case :ets.lookup(tid, norm_slot) do
-      [{^norm_slot, val}] -> val
-      _ -> nil
+    case :erlang.get({:lisp_struct_slot, tid, norm_slot}) do
+      nil ->
+        case :ets.lookup(tid, norm_slot) do
+          [{^norm_slot, val}] -> val
+          _ -> nil
+        end
+
+      val ->
+        val
     end
   end
 
@@ -8380,7 +8477,7 @@ defmodule ExLisp.Builtins do
           slot_name
       end
 
-    :ets.insert(tid, {norm_slot, val})
+    put_struct_slot(tid, norm_slot, val)
     val
   end
 
@@ -8388,11 +8485,18 @@ defmodule ExLisp.Builtins do
 
   def copy_struct({:struct, name, tid}) do
     new_tid = :ets.new(:lisp_struct, [:set, :public])
-    :ets.foldl(fn {k, v}, _acc -> :ets.insert(new_tid, {k, v}) end, nil, tid)
+    :ets.foldl(fn {k, _v}, _acc ->
+      put_struct_slot(new_tid, k, get_struct_slot({:struct, name, tid}, k))
+    end, nil, tid)
     {:struct, name, new_tid}
   end
 
   def copy_struct(other), do: other
+
+  defp put_struct_slot(tid, slot, val) do
+    :ets.insert(tid, {slot, val})
+    :erlang.put({:lisp_struct_slot, tid, slot}, val)
+  end
 
   def make_instance(args) when is_list(args) do
     case args do
@@ -8559,7 +8663,23 @@ defmodule ExLisp.Builtins do
           end
 
         if read_suppressed do
-          values(nil, start + String.length(str))
+          source_chars = String.to_charlist(str)
+
+          case scan_first_expr(source_chars, 0, [], false, false, 0, []) do
+            {:ok, _expression, consumed_count} ->
+              consumed_count =
+                if not preserve_whitespace and
+                     Enum.at(source_chars, consumed_count) in [?\s, ?\t, ?\n, ?\r] do
+                  consumed_count + 1
+                else
+                  consumed_count
+                end
+
+              values(nil, start + consumed_count)
+
+            :eof ->
+              values(nil, start + String.length(str))
+          end
         else
         readtable =
           try do
@@ -8891,15 +9011,24 @@ defmodule ExLisp.Builtins do
 
   # Opening bracket
   defp scan_first_expr([open | rest], consumed, stack, false, false, 0, current)
-       when open in [?(, ?[, ?{] and current == [] do
-    close =
-      case open do
-        ?( -> ?)
-        ?[ -> ?]
-        ?{ -> ?}
-      end
+       when open == ?( and current == [] do
+    scan_first_expr(rest, consumed + 1, [?) | stack], false, false, 0, [open | current])
+  end
 
-    scan_first_expr(rest, consumed + 1, [close | stack], false, false, 0, [open | current])
+  defp scan_first_expr([open | rest], consumed, [], false, false, 0, current)
+       when open == ?( and current != [] do
+    prefix = current |> Enum.reverse() |> List.to_string()
+
+    if String.starts_with?(prefix, "#") do
+      scan_first_expr(rest, consumed + 1, [?)], false, false, 0, [open | current])
+    else
+      {:ok, prefix, consumed}
+    end
+  end
+
+  defp scan_first_expr([open | rest], consumed, stack, false, false, 0, current)
+       when open == ?( and stack != [] do
+    scan_first_expr(rest, consumed + 1, [?) | stack], false, false, 0, [open | current])
   end
 
   # Closing bracket
@@ -8924,7 +9053,7 @@ defmodule ExLisp.Builtins do
 
   # Delimiter when stack is empty and we already have token characters
   defp scan_first_expr([delim | _rest], consumed, [], false, false, 0, current)
-       when delim in [?\s, ?\t, ?\n, ?\r, ?;, ?(, ?), ?[, ?], ?{, ?}] and
+       when delim in [?\s, ?\t, ?\n, ?\r, ?;, ?(, ?)] and
               current != [] do
     {:ok, current |> Enum.reverse() |> List.to_string(), consumed}
   end
@@ -8944,7 +9073,6 @@ defmodule ExLisp.Builtins do
 
   defp parse_read_expr(str) do
     Process.put(:exlisp_reader_mode, true)
-
     try do
       case ExLisp.LispParser.parse(str) do
         {:ok, ast} -> ast_to_lisp_val(ast)
@@ -9150,6 +9278,8 @@ defmodule ExLisp.Builtins do
   end
 
   defp normalize_sym_prop(item) do
+    item = LispBeam.extract_symbol_name(item)
+
     cond do
       is_atom(item) ->
         item
@@ -12475,7 +12605,11 @@ defmodule ExLisp.Builtins do
 
   def copy_structure({:struct, _name, tid} = structure) do
     clone = :ets.new(:lisp_struct, [:set, :public])
-    :ets.tab2list(tid) |> Enum.each(&:ets.insert(clone, &1))
+    :ets.tab2list(tid)
+    |> Enum.each(fn {slot, _val} ->
+      put_struct_slot(clone, slot, get_struct_slot(structure, slot))
+    end)
+
     put_elem(structure, 2, clone)
   end
 

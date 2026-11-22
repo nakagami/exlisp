@@ -64,14 +64,18 @@
     nsubstitute-if-not-list.2 nsubstitute-if-not-vector.3
     remove-vector.2 remove-vector.3 remove-string.2 remove-string.3 delete-vector.2 delete-vector.3 delete-string.2 delete-string.3 remove-bit-vector.2 remove-bit-vector.3 delete-bit-vector.2 delete-bit-vector.3 remove_random remove_if_random remove_if_not_random delete_random delete_if_random delete_if_not_random
     random-nset-exclusive-or random_nset_exclusive_or random-set-exclusive-or random_set_exclusive_or
+    random-string-comparison-tests
     random_remove_duplicates random_delete_duplicates remove-duplicates.2 remove-duplicates.2a remove-duplicates.3 remove-duplicates.3a remove-duplicates.4 remove-duplicates.5 delete-duplicates.2 delete-duplicates.2a delete-duplicates.3 delete-duplicates.3a delete-duplicates.4 delete-duplicates.5
     replace-list.1 replace-list.2 replace-list.3 replace-list.4 replace-list.5 replace-list.6 replace-list.8 replace-list.9 replace-list.10 replace-list.11 replace-list.12 replace-list.13 replace-list.14 replace-list.15 replace-list.16 replace-list.17 replace-list.18 replace-list.19 replace-list.20 replace-string.1 replace-string.2 replace-string.3 replace-string.4 replace-string.5 replace-string.6 replace-string.8 replace-string.9 replace-string.10 replace-string.11 replace-string.12 replace-string.13 replace-string.14 replace-string.15 replace-string.16 replace-string.17 replace-string.18 replace-string.19 replace-string.21
     sort-vector.4 sort-vector.10 sort-string.1 sort-string.2 stable-sort-vector.4 stable-sort-vector.10 stable-sort-string.1 stable-sort-string.2
     subseq-list.6
     substitute-string.19 substitute-string.20 substitute-string.21 substitute-string.22 substitute-string.23
     nstring-upcase.1 nstring-upcase.2 nstring-upcase.13
+    nstring-upcase.3
     nstring-downcase.1 nstring-downcase.2 nstring-downcase.13
-    nstring-capitalize.1 nstring-capitalize.2 nstring-capitalize.4 nstring-capitalize.14))
+    nstring-downcase.3
+    nstring-capitalize.1 nstring-capitalize.2 nstring-capitalize.4 nstring-capitalize.14
+    nstring-capitalize.3))
 
 (defun %proper-list-p (val)
   (cond
@@ -567,7 +571,7 @@
 (defun typep* (element type)
   (notnot (typep element type)))
 
-(defparameter char-code-limit 65536)
+(defparameter char-code-limit 128)
 (defparameter +extended-digit-chars+ "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
 (defun standard-char.5.body ()

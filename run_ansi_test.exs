@@ -1,6 +1,8 @@
 # Runner script for ANSI-TEST suites in ExLisp
 
-ansi_test_dir = System.get_env("ANSI_TEST_DIR") || Path.expand("../ansi-test", __DIR__)
+ansi_test_dir =
+  (System.get_env("ANSI_TEST_DIR") || Path.expand("../ansi-test", __DIR__))
+  |> Path.expand(__DIR__)
 
 if not File.dir?(ansi_test_dir) do
   IO.puts(:stderr, "Error: ansi-test directory not found at #{ansi_test_dir}")

@@ -352,12 +352,12 @@ defmodule ExLisp.Macro do
   defp to_var_ast(str) when is_binary(str), do: {:id, 1, [str]}
   defp to_var_ast(other), do: other
 
-  defp param_symbol({:id, _pos, [name]}), do: String.downcase(name) |> String.to_atom()
+  defp param_symbol({:id, _pos, [name]}), do: LispBeam.extract_symbol_name(name)
 
   defp param_symbol(atom) when is_atom(atom),
-    do: Atom.to_string(atom) |> String.downcase() |> String.to_atom()
+    do: LispBeam.extract_symbol_name(atom)
 
-  defp param_symbol(name) when is_binary(name), do: String.downcase(name) |> String.to_atom()
+  defp param_symbol(name) when is_binary(name), do: LispBeam.extract_symbol_name(name)
   defp param_symbol(_), do: nil
 
   defp parse_opt_item({:list, _pos, [var_node, default_node, supp_node | _]}) do

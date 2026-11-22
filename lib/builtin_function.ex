@@ -95,6 +95,7 @@ defmodule BuiltinFunction do
     :eq => {:eq, :eq},
     :eqt => {:eq, :eq},
     :eql => {:eql, :eql},
+    :case_eql => {:case_eql, :case_eql},
     :eqlt => {:eql, :eql},
     :equal => {:equal, :equal},
     :equalt => {:equal, :equal},

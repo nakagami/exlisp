@@ -595,12 +595,7 @@ defmodule LispBeam do
   end
 
   defp compile_var_lookup(var_name, local_env) do
-    var_atom =
-      if is_atom(var_name) do
-        var_name
-      else
-        var_name |> String.downcase() |> String.to_atom()
-      end
+    var_atom = extract_symbol_name(var_name)
 
     renamed =
       Enum.find_value(local_env, fn
@@ -2101,7 +2096,9 @@ defmodule LispBeam do
 
                   k ->
                     {:list, 1,
-                     [{:id, 1, ["eql"]}, key_var_ast, {:list, 1, [{:id, 1, ["quote"]}, k]}]}
+                     [{:id, 1, ["case-eql"]},
+                      key_var_ast,
+                      {:list, 1, [{:id, 1, ["quote"]}, k]}]}
                 end)
 
               case_test =
@@ -2123,7 +2120,7 @@ defmodule LispBeam do
               case_test =
                 {:list, 1,
                  [
-                   {:id, 1, ["eql"]},
+                   {:id, 1, ["case-eql"]},
                    key_var_ast,
                    {:list, 1, [{:id, 1, ["quote"]}, single_key]}
                  ]}

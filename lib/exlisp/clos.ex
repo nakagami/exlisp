@@ -1243,6 +1243,7 @@ defmodule ExLisp.CLOS do
   defp normalize_qualifier(_), do: :primary
 
   defp normalize_specializer({:eql, val}), do: {:eql, val}
+  defp normalize_specializer(%{name: name}), do: normalize_name(name)
   defp normalize_specializer(s) when is_atom(s) or is_binary(s), do: normalize_name(s)
   defp normalize_specializer(other), do: other
 

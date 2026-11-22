@@ -92,6 +92,7 @@ defmodule ExLisp.Env do
           :exlisp_fun_ast,
           :exlisp_symbol_macro,
           :exlisp_compiler_macro,
+          :exlisp_special,
           :exlisp_trace_original,
           :exlisp_trace_traced
         ] do
@@ -128,6 +129,42 @@ defmodule ExLisp.Env do
         :erlang.put({:"$special$", var_name}, value)
         value
     end
+  end
+
+  def proclaim_special(name) do
+    :persistent_term.put({:exlisp_special, normalize_name(name)}, true)
+    name
+  end
+
+  def specialp(name) do
+    normalized = normalize_name(name)
+    atom_text = Atom.to_string(normalized)
+    predefined_specials =
+      [
+        :standard_input,
+        :standard_output,
+        :"*standard-input*",
+        :"*standard_input*",
+        :"*standard-output*",
+        :"*standard_output*",
+        :"*error-output*",
+        :"*error_output*",
+        :"*trace-output*",
+        :"*trace_output*",
+        :"*debug-io*",
+        :"*debug_io*",
+        :"*query-io*",
+        :"*query_io*",
+        :"*terminal-io*",
+        :"*terminal_io*",
+        :"*read-suppress*",
+        :"*read_suppress*"
+      ]
+
+    :persistent_term.get({:exlisp_special, normalized}, false) or
+      (String.starts_with?(atom_text, "*") and String.ends_with?(atom_text, "*") and
+         (normalized in predefined_specials or
+            :persistent_term.get({:exlisp_var, normalized}, :__not_found__) != :__not_found__))
   end
 
   @doc """
@@ -209,6 +246,8 @@ defmodule ExLisp.Env do
     :"*query_io*" => :standard_io,
     :"*terminal-io*" => :standard_io,
     :"*terminal_io*" => :standard_io,
+    :"*read-suppress*" => nil,
+    :"*read_suppress*" => nil,
     :features => [
       :exlisp,
       :cl,

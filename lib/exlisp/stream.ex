@@ -338,7 +338,7 @@ defmodule ExLisp.Stream do
   def make_synonym_stream(symbol) do
     sym_atom =
       cond do
-        is_atom(symbol) -> symbol
+        is_atom(symbol) -> LispBeam.extract_symbol_name(symbol)
         is_binary(symbol) -> String.to_atom(symbol)
         match?(%ExLisp.Symbol{}, symbol) -> String.to_atom(symbol.name)
         true -> :":*standard-input*:"
@@ -1353,7 +1353,7 @@ defmodule ExLisp.Stream do
 
     s = resolve_output_stream(stream)
     write_string(string, s, opts)
-    write_char(?\n, s)
+    write_char(ExLisp.Character.new(?\n), s)
     string
   end
 
@@ -1391,7 +1391,7 @@ defmodule ExLisp.Stream do
           write_byte(elem, s)
 
         is_integer(elem) ->
-          write_char(elem, s)
+          write_char(ExLisp.Character.new(elem), s)
 
         true ->
           write_string(ExLisp.Builtins.to_string_val(elem), s)
@@ -1524,7 +1524,11 @@ defmodule ExLisp.Stream do
     norm_sym =
       cond do
         is_atom(sym) ->
-          sym |> Atom.to_string() |> String.trim(":") |> String.to_atom()
+          sym
+          |> LispBeam.extract_symbol_name()
+          |> Atom.to_string()
+          |> String.trim(":")
+          |> String.to_atom()
 
         is_binary(sym) ->
           sym |> String.trim(":") |> String.to_atom()

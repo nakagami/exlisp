@@ -330,9 +330,13 @@ defmodule ExLisp.Type do
   defp do_typep(val, :symbol), do: is_atom(val) or match?(%ExLisp.Symbol{}, val)
   defp do_typep(val, :keyword), do: is_atom(val) and ExLisp.Env.keyword?(val)
 
-  defp do_typep(val, type) when type in [:character, :base_char, :standard_char, :extended_char] do
-    match?(%ExLisp.Character{}, val)
-  end
+  defp do_typep(val, :character), do: match?(%ExLisp.Character{}, val)
+  defp do_typep(val, :base_char), do: match?(%ExLisp.Character{}, val)
+
+  defp do_typep(val, :standard_char),
+    do: ExLisp.Builtins.standard_char_p(val) == :t
+
+  defp do_typep(_val, :extended_char), do: false
 
   defp do_typep(val, :number) do
     is_number(val) or match?(%ExLisp.Ratio{}, val) or match?({:complex, _, _}, val)
