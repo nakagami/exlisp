@@ -515,6 +515,8 @@ Enum.each(aux_files, fn f ->
   end
 end)
 
+ExLisp.eval("(defmacro expand-in-current-env (form) form)")
+
 ExLisp.Env.put_fun(:safely_delete_package, fn package ->
   if found = ExLisp.Package.find_package(package) do
     Enum.each(found.used_by_list, fn using_name ->
@@ -599,8 +601,19 @@ total_failed =
   Enum.reduce(target_suites, 0, fn {name, rel_path}, acc ->
     full_path = if Path.type(rel_path) == :absolute, do: rel_path, else: Path.join(ansi_test_dir, rel_path)
     IO.puts("Loading #{name} (#{full_path})...")
+    ExLisp.MutableCons.reset()
     ExLisp.eval("(reset-test-stats)")
-    File.cd!(Path.join(ansi_test_dir, "sandbox"), fn -> ExLisp.load_file(full_path) end)
+
+    File.cd!(Path.join(ansi_test_dir, "sandbox"), fn ->
+      full_path
+      |> File.read!()
+      |> ExLisp.Reader.split_expressions()
+      |> Enum.each(fn source ->
+        ExLisp.MutableCons.reset()
+        source |> ExLisp.LispParser.parse!() |> LispBeam.evaluate_ast()
+      end)
+    end)
+
     ExLisp.eval("(print-test-summary \"#{name}\")")
     failed = ExLisp.eval("*test-failed-count*")
     acc + (if is_integer(failed), do: failed, else: 0)

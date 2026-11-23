@@ -552,7 +552,7 @@ defmodule ExLisp.Env do
   defp lookup_global_module_var(var_name) do
     mod = ExLisp.Global
 
-    if Code.ensure_loaded?(mod) and function_exported?(mod, :has_var, 1) and
+    if global_module_loaded?(mod) and function_exported?(mod, :has_var, 1) and
          apply(mod, :has_var, [var_name]) do
       {:ok, apply(mod, :get_var, [var_name])}
     else
@@ -611,7 +611,7 @@ defmodule ExLisp.Env do
         true ->
           mod = ExLisp.Global
 
-          Code.ensure_loaded?(mod) and function_exported?(mod, :has_var, 1) and
+          global_module_loaded?(mod) and function_exported?(mod, :has_var, 1) and
             apply(mod, :has_var, [var_name])
       end
     end
@@ -767,7 +767,7 @@ defmodule ExLisp.Env do
   defp lookup_global_module_fun(fun_name) do
     mod = ExLisp.Global
 
-    if Code.ensure_loaded?(mod) and function_exported?(mod, :__funs__, 0) do
+    if global_module_loaded?(mod) and function_exported?(mod, :__funs__, 0) do
       funs = apply(mod, :__funs__, [])
 
       case Enum.find(funs, fn {name, _arity} -> name == fun_name end) do
@@ -780,6 +780,10 @@ defmodule ExLisp.Env do
     else
       :error
     end
+  end
+
+  defp global_module_loaded?(mod) do
+    match?({:file, _}, :code.is_loaded(mod))
   end
 
   @doc """
