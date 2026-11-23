@@ -11132,6 +11132,17 @@ defmodule ExLisp.Builtins do
 
   def asdf_find_system(system), do: ExLisp.ASDF.find_system(system)
 
+  def asdf_component_pathname([system]), do: asdf_component_pathname(system)
+
+  def asdf_component_pathname(system) do
+    case system do
+      %{source_directory: path} -> ExLisp.Pathname.pathname(path)
+      %{pathname: path} when not is_nil(path) -> ExLisp.Pathname.pathname(path)
+      %{name: name} -> name |> asdf_system_source_directory() |> ExLisp.Pathname.pathname()
+      _ -> system |> asdf_system_source_directory() |> ExLisp.Pathname.pathname()
+    end
+  end
+
   def asdf_system_source_directory(args) when is_list(args) do
     case args do
       [system | _] -> ExLisp.ASDF.system_source_directory(system)

@@ -1,5 +1,6 @@
 defmodule ExLisp.LispParser do
   @escaped_marker 0xE000
+  @reader_labels_key :exlisp_reader_labels
 
   @moduledoc """
   Custom S-expression parser for ExLisp.
@@ -22,7 +23,7 @@ defmodule ExLisp.LispParser do
           {:ok, {:lit, nil}}
 
         {:ok, tokens} ->
-          parse_tokens(tokens)
+          with_reader_labels(fn -> parse_tokens(tokens) end)
 
         {:error, reason} ->
           {:error, reason}
@@ -58,7 +59,7 @@ defmodule ExLisp.LispParser do
           {:ok, []}
 
         {:ok, tokens} ->
-          parse_all_top_level(tokens, [])
+          with_reader_labels(fn -> parse_all_top_level(tokens, []) end)
 
         {:error, reason} ->
           {:error, reason}
@@ -246,6 +247,12 @@ defmodule ExLisp.LispParser do
     n = List.to_string(num_digits) |> String.to_integer()
 
     case after_num do
+      [?= | after_equals] ->
+        tokenize_chars(after_equals, line, [{:label_define, line, n} | acc])
+
+      [?# | after_hash] ->
+        tokenize_chars(after_hash, line, [{:label_ref, line, n} | acc])
+
       [a | after_a] when a in [?a, ?A] ->
         tokenize_chars(after_a, line, [{:array_rank, line, n} | acc])
 
@@ -1101,6 +1108,44 @@ defmodule ExLisp.LispParser do
     end
   end
 
+  defp parse_expr([{:label_define, line, label} | rest]) do
+    labels = Process.get(@reader_labels_key, %{})
+
+    if Map.has_key?(labels, label) do
+      {:error, "reader label ##{label} is already defined at line #{line}"}
+    else
+      id = System.unique_integer([:positive, :monotonic])
+      Process.put(@reader_labels_key, Map.put(labels, label, {id, :pending}))
+
+      case parse_expr(rest) do
+        {:ok, inner, rem} ->
+          Process.put(
+            @reader_labels_key,
+            Map.put(Process.get(@reader_labels_key), label, {id, inner})
+          )
+
+          {:ok, {:reader_object, id, inner}, rem}
+
+        error ->
+          error
+      end
+    end
+  end
+
+  defp parse_expr([{:label_ref, line, label} | rest]) do
+    case Process.get(@reader_labels_key, %{}) |> Map.get(label) do
+      {_id, :pending} ->
+        {:error,
+         "reader label ##{label} is referenced before its object is complete at line #{line}"}
+
+      {id, inner} ->
+        {:ok, {:reader_object, id, inner}, rest}
+
+      nil ->
+        {:error, "undefined reader label ##{label} at line #{line}"}
+    end
+  end
+
   # Complex number (#c(real imag))
   defp parse_expr([{:complex_lparen, line} | rest]) do
     case parse_list(rest, line, :rparen, []) do
@@ -1383,6 +1428,20 @@ defmodule ExLisp.LispParser do
     case parse_expr(tokens) do
       {:ok, _ast, rest} -> {:ok, rest}
       err -> err
+    end
+  end
+
+  defp with_reader_labels(fun) do
+    previous = Process.get(@reader_labels_key, :undefined)
+    Process.put(@reader_labels_key, %{})
+
+    try do
+      fun.()
+    after
+      case previous do
+        :undefined -> Process.delete(@reader_labels_key)
+        value -> Process.put(@reader_labels_key, value)
+      end
     end
   end
 

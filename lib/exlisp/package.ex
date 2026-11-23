@@ -1143,6 +1143,23 @@ defmodule ExLisp.Package do
       internal_symbols: MapSet.new()
     }
 
+    asdf_pkg = %ExLisp.Package{
+      name: "ASDF",
+      nicknames: [],
+      use_list: ["COMMON-LISP"],
+      used_by_list: [],
+      external_symbols:
+        MapSet.new([
+          "LOAD-SYSTEM",
+          "FIND-SYSTEM",
+          "COMPONENT-PATHNAME",
+          "SYSTEM-SOURCE-DIRECTORY",
+          "SYSTEM-RELATIVE-PATHNAME",
+          "REGISTER-SYSTEM-PACKAGES"
+        ]),
+      internal_symbols: MapSet.new()
+    }
+
     uiop_image_pkg = %ExLisp.Package{
       name: "UIOP/IMAGE",
       nicknames: ["UIOP.IMAGE"],
@@ -1400,6 +1417,7 @@ defmodule ExLisp.Package do
     save_package(cl_user_pkg)
     save_package(kw_pkg)
     save_package(uiop_pkg)
+    save_package(asdf_pkg)
     save_package(uiop_image_pkg)
     save_package(swank_pkg)
     save_package(ppcre_pkg)
@@ -2717,8 +2735,17 @@ defmodule ExLisp.Package do
       {:id, _, [n]} when is_binary(n) ->
         n |> clean_uninterned() |> string_symbol_name()
 
-      {:id, _, n} when is_binary(n) ->
-        n |> clean_uninterned() |> string_symbol_name()
+      {:id, _, [n]} when is_atom(n) ->
+        n |> Atom.to_string() |> clean_uninterned() |> string_symbol_name()
+
+      {:id, _, parts} when is_list(parts) ->
+        parts
+        |> Enum.map_join(".", fn
+          part when is_atom(part) -> Atom.to_string(part)
+          part -> to_string(part)
+        end)
+        |> clean_uninterned()
+        |> string_symbol_name()
 
       {:keyword, _, kw} when is_atom(kw) ->
         atom_symbol_name(kw)

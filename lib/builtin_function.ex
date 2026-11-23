@@ -1252,6 +1252,8 @@ defmodule BuiltinFunction do
     :asdf_find_system => {:asdf_find_system, :asdf_find_system},
     :"asdf.find_system" => {:asdf_find_system, :asdf_find_system},
     :"asdf:find-system" => {:asdf_find_system, :asdf_find_system},
+    :"asdf.component-pathname" => {:asdf_component_pathname, :asdf_component_pathname},
+    :"asdf:component-pathname" => {:asdf_component_pathname, :asdf_component_pathname},
     :system_source_directory => {:asdf_system_source_directory, :asdf_system_source_directory},
     :asdf_system_source_directory =>
       {:asdf_system_source_directory, :asdf_system_source_directory},

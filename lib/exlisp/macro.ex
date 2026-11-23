@@ -621,6 +621,9 @@ defmodule ExLisp.Macro do
   """
   def ast_to_lisp_data(ast) do
     case ast do
+      {:reader_object, id, inner} ->
+        ExLisp.Reader.shared_object(id, ast_to_lisp_data(inner))
+
       {:keyword, _pos, val} ->
         {:__keyword__, val}
 

@@ -4,6 +4,7 @@ defmodule ExLisp.Reader do
   """
 
   @incomplete_prefixes MapSet.new(["'", "#'", "`", ",", ",@", "#.", "#+", "#-"])
+  @shared_objects_key :exlisp_shared_reader_objects
 
   @doc """
   Splits a Lisp string containing multiple expressions into a list of expression strings.
@@ -38,6 +39,20 @@ defmodule ExLisp.Reader do
       ExLisp.Builtins.read([stream, eof_error_p, eof_value])
     after
       Process.delete(:exlisp_preserve_whitespace)
+    end
+  end
+
+  @doc false
+  def shared_object(id, value) do
+    objects = Process.get(@shared_objects_key, %{})
+
+    case Map.fetch(objects, id) do
+      {:ok, existing} ->
+        existing
+
+      :error ->
+        Process.put(@shared_objects_key, Map.put(objects, id, value))
+        value
     end
   end
 
@@ -215,6 +230,9 @@ defmodule ExLisp.Reader do
         |> split_expressions()
         |> length()
         |> Kernel.<(2)
+
+      Regex.match?(~r/^#\d+=$/, str) ->
+        true
 
       true ->
         false

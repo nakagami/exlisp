@@ -20,6 +20,19 @@ defmodule ExLisp.LispParserTest do
       assert {:ok, [{:int, 1, 255}]} = LispParser.tokenize("#xFF")
     end
 
+    test "tokenizes shared reader labels" do
+      assert {:ok,
+              [
+                {:lparen, 1},
+                {:label_define, 1, 1},
+                {:lparen, 1},
+                {:symbol, 1, "a"},
+                {:rparen, 1},
+                {:label_ref, 1, 1},
+                {:rparen, 1}
+              ]} = LispParser.tokenize("(#1=(a) #1#)")
+    end
+
     test "tokenizes character literals (#\\...)" do
       assert {:ok, [{:char, 1, ?a}]} = LispParser.tokenize("#\\a")
       assert {:ok, [{:char, 1, ?\n}]} = LispParser.tokenize("#\\Newline")
@@ -119,6 +132,21 @@ defmodule ExLisp.LispParserTest do
     test "parses bracketed vectors / quoted lists" do
       assert {:ok, {:quoted, 1, [{:lit, 1}, {:lit, 2}, {:lit, 3}]}} =
                LispParser.parse("[1 2 3]")
+    end
+
+    test "parses shared reader labels as one logical object" do
+      assert {:ok,
+              {:list, 1,
+               [
+                 {:reader_object, id, {:list, 1, [{:id, 1, ["a"]}]}},
+                 {:reader_object, id, {:list, 1, [{:id, 1, ["a"]}]}}
+               ]}} = LispParser.parse("(#1=(a) #1#)")
+
+      assert is_integer(id)
+      assert {:error, "undefined reader label #2 at line 1"} = LispParser.parse("#2#")
+
+      assert {:error, "reader label #1 is already defined" <> _} =
+               LispParser.parse("(#1=a #1=b)")
     end
 
     test "parses unparenthesized top-level function calls" do

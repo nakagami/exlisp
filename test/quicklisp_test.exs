@@ -187,6 +187,12 @@ defmodule QuicklispTest do
     assert ExLisp.eval(source) == 3
   end
 
+  test "uninterned symbols work as operator and package option values" do
+    assert ExLisp.eval("(eval-when (:execute) (+ 1 2))") == 3
+    assert ExLisp.eval("(packagep (defpackage #:uninterned-package (:use #:cl)))") == :t
+    assert ExLisp.Package.find_package("UNINTERNED-PACKAGE") != nil
+  end
+
   test "reader syntax: block comments, vectors, reader conditionals, uninterned symbols" do
     # Nested block comments #| ... |#
     assert ExLisp.eval("#| block comment |# (+ 1 2)") == 3
@@ -224,6 +230,13 @@ defmodule QuicklispTest do
 
     ExLisp.eval("(set-dispatch-macro-character #\\# #\\N #'number-array-reader)")
     assert ExLisp.eval("(arrayp #8N(1 2 3))") == :t
+  end
+
+  test "reader preserves shared label values in quoted data" do
+    assert ExLisp.eval("""
+           (let ((value '(#1=(a) #1#)))
+             (eq (first value) (second value)))
+           """) == :t
   end
 
   test "UIOP filesystem and temporary file helpers" do

@@ -133,6 +133,12 @@ defmodule LispBeam do
   defp eval_quote_node(%ExLisp.Ratio{} = val), do: {:ok, val}
   defp eval_quote_node({:keyword, _pos, kw}), do: {:ok, kw}
 
+  defp eval_quote_node({:reader_object, id, inner}) do
+    with {:ok, value} <- eval_quote_node(inner) do
+      {:ok, ExLisp.Reader.shared_object(id, value)}
+    end
+  end
+
   defp eval_quote_node({:vector, _pos, elements}) do
     with {:ok, elem_vals} <- eval_quoted_elements(elements) do
       {:ok, ExLisp.Builtins.vector(elem_vals)}
@@ -392,6 +398,10 @@ defmodule LispBeam do
   def compile_expr({nil, _line} = erl_ast, _local_env), do: erl_ast
 
   def compile_expr({:reader_macro, _line, inner}, local_env) do
+    compile_expr(inner, local_env)
+  end
+
+  def compile_expr({:reader_object, _id, inner}, local_env) do
     compile_expr(inner, local_env)
   end
 
@@ -1704,6 +1714,10 @@ defmodule LispBeam do
 
   def compile_quote(ast) do
     case ast do
+      {:reader_object, id, inner} ->
+        {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Reader}, {:atom, 1, :shared_object}},
+         [{:integer, 1, id}, compile_quote(inner)]}
+
       {:lit, %ExLisp.Character{code: code}} ->
         {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Character}, {:atom, 1, :new}},
          [{:integer, 1, code}]}
@@ -7094,14 +7108,21 @@ defmodule LispBeam do
   def extract_op_name({:id, _pos, parts}) when is_list(parts) do
     case parts do
       [name] ->
-        down = String.downcase(name)
+        name_string =
+          cond do
+            is_binary(name) -> name
+            is_atom(name) -> Atom.to_string(name)
+            true -> to_string(name)
+          end
+
+        down = String.downcase(name_string)
 
         case BuiltinFunction.canonical_name(down) do
           {:ok, canon} ->
             canon
 
           :error ->
-            if String.contains?(name, ":") do
+            if String.contains?(name_string, ":") do
               nil
             else
               String.to_atom(down)
@@ -7109,16 +7130,17 @@ defmodule LispBeam do
         end
 
       _ ->
-        mod = Enum.drop(parts, -1) |> build_module_atom()
+        string_parts = Enum.map(parts, &to_string/1)
+        mod = Enum.drop(string_parts, -1) |> build_module_atom()
 
         if valid_remote_module?(mod) do
           nil
         else
-          str = Enum.join(parts, ".") |> String.downcase()
+          str = Enum.join(string_parts, ".") |> String.downcase()
 
           case BuiltinFunction.canonical_name(str) do
             {:ok, canon} ->
-              package = hd(parts) |> String.downcase()
+              package = hd(string_parts) |> String.downcase()
 
               if package in ["cl", "common-lisp", "common_lisp"],
                 do: canon,

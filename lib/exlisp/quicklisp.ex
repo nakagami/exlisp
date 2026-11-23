@@ -236,6 +236,9 @@ defmodule ExLisp.Quicklisp do
             asd_dir = Path.dirname(asd_path)
             ExLisp.ASDF.load_system(primary_sys_def, asd_dir)
 
+            if String.replace(sys_name, "_", "-") == "local-time",
+              do: ExLisp.LocalTimeCompat.install()
+
             # Record as loaded
             mark_system_loaded(sys_name)
             [sys_name]
@@ -310,6 +313,10 @@ defmodule ExLisp.Quicklisp do
           |> Enum.each(&load_dependency(&1, sys_defs, asd_path, systems_map, releases_map, opts))
 
           ExLisp.ASDF.load_system(system_info, Path.dirname(asd_path))
+
+          if String.replace(normalized, "_", "-") == "local-time",
+            do: ExLisp.LocalTimeCompat.install()
+
           mark_system_loaded(normalized)
           [normalized]
         end

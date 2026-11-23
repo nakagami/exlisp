@@ -32,6 +32,7 @@ defmodule ExLisp.Evaluator do
   def eval(%ExLisp.Ratio{} = val, _env), do: val
   def eval(%ExLisp.Character{} = val, _env), do: val
   def eval({:reader_macro, _pos, inner}, env), do: eval(inner, env)
+  def eval({:reader_object, _id, inner}, env), do: eval(inner, env)
 
   def eval({:keyword, _pos, kw}, _env),
     do: ExLisp.Package.remember_symbol_package(kw, "KEYWORD")
@@ -3844,31 +3845,35 @@ defmodule ExLisp.Evaluator do
   # --- CLOS & Structs ---
 
   defp eval_defstruct([name_spec | slot_specs], env) do
-    {struct_name, constructor_specs} =
+    {struct_name, constructor_specs, conc_name} =
       case name_spec do
         {:list, _pos, [name | options]} ->
-          {LispBeam.extract_symbol_name(name),
-           Enum.filter(options, &defstruct_constructor_option?/1)}
+          struct_name = LispBeam.extract_symbol_name(name)
+
+          {struct_name, Enum.filter(options, &defstruct_constructor_option?/1),
+           defstruct_conc_name(options, :"#{struct_name}_")}
 
         _ ->
-          {LispBeam.extract_symbol_name(name_spec), []}
+          struct_name = LispBeam.extract_symbol_name(name_spec)
+          {struct_name, [], :"#{struct_name}_"}
       end
 
     parsed_slots =
       Enum.map(slot_specs, fn
         {:list, _pos, [slot_name]} ->
-          {LispBeam.extract_symbol_name(slot_name), nil}
+          {LispBeam.extract_symbol_name(slot_name), {:lit, nil}}
 
         {:list, _pos, [slot_name, default_val | _]} ->
-          {LispBeam.extract_symbol_name(slot_name), eval(default_val, env)}
+          {LispBeam.extract_symbol_name(slot_name), default_val}
 
         slot_name ->
-          {LispBeam.extract_symbol_name(slot_name), nil}
+          {LispBeam.extract_symbol_name(slot_name), {:lit, nil}}
       end)
 
     if constructor_specs == [] do
       make_fn = fn passed_args ->
-        Builtins.make_struct(struct_name, parsed_slots, passed_args)
+        defaults = materialize_struct_defaults(parsed_slots, passed_args, env)
+        Builtins.make_struct(struct_name, defaults, passed_args)
       end
 
       Env.put_fun(:"make_#{struct_name}", ExLisp.Closure.new(make_fn, :"make_#{struct_name}"))
@@ -3896,13 +3901,28 @@ defmodule ExLisp.Evaluator do
     Enum.each(parsed_slots, fn {slot, _} ->
       acc_fn = fn [s | _] -> Builtins.get_struct_slot(s, slot) end
 
-      Env.put_fun(
-        :"#{struct_name}_#{slot}",
-        ExLisp.Closure.new(acc_fn, :"#{struct_name}_#{slot}")
-      )
+      if conc_name != nil do
+        accessor_name = :"#{conc_name}#{slot}"
+        Env.put_fun(accessor_name, ExLisp.Closure.new(acc_fn, accessor_name))
+      end
     end)
 
     struct_name
+  end
+
+  defp materialize_struct_defaults(slots, passed_args, env) do
+    supplied = passed_args |> Builtins.parse_lisp_keywords() |> Keyword.keys() |> MapSet.new()
+
+    Enum.map(slots, fn {slot, default_node} ->
+      value =
+        if MapSet.member?(supplied, slot) do
+          nil
+        else
+          eval(default_node, env)
+        end
+
+      {slot, value}
+    end)
   end
 
   defp defstruct_constructor_option?({:list, _, [option | _]}) do
@@ -3911,8 +3931,44 @@ defmodule ExLisp.Evaluator do
 
   defp defstruct_constructor_option?(_), do: false
 
+  defp defstruct_conc_name(options, default) do
+    case Enum.find(options, fn
+           {:list, _, [option | _]} ->
+             LispBeam.extract_symbol_name(option) == :conc_name
+
+           _ ->
+             false
+         end) do
+      {:list, _, [_option, prefix]} ->
+        case LispBeam.extract_symbol_name(prefix) do
+          nil -> nil
+          name -> name
+        end
+
+      nil ->
+        default
+    end
+  end
+
+  defp define_struct_constructor(
+         struct_name,
+         slots,
+         {:list, _, [_option]},
+         env
+       ) do
+    define_struct_constructor_name(struct_name, slots, :"make_#{struct_name}", :keyword, env)
+  end
+
   defp define_struct_constructor(_struct_name, _slots, {:list, _, [_option, nil]}, _env),
     do: :ok
+
+  defp define_struct_constructor(
+         _struct_name,
+         _slots,
+         {:list, _, [_option, {:lit, nil}]},
+         _env
+       ),
+       do: :ok
 
   defp define_struct_constructor(
          struct_name,
@@ -3931,10 +3987,23 @@ defmodule ExLisp.Evaluator do
         _ -> params
       end
 
+    define_struct_constructor_name(struct_name, slots, constructor_name, parameter_nodes, env)
+  end
+
+  defp define_struct_constructor_name(
+         struct_name,
+         slots,
+         constructor_name,
+         parameter_nodes,
+         env
+       ) do
     constructor =
       case parameter_nodes do
         :keyword ->
-          fn passed_args -> Builtins.make_struct(struct_name, slots, passed_args) end
+          fn passed_args ->
+            defaults = materialize_struct_defaults(slots, passed_args, env)
+            Builtins.make_struct(struct_name, defaults, passed_args)
+          end
 
         nodes ->
           {required, keyword, aux} = parse_constructor_parameters(nodes)
@@ -3973,7 +4042,8 @@ defmodule ExLisp.Evaluator do
                 [name, value]
               end)
 
-            Builtins.make_struct(struct_name, slots, kwargs)
+            defaults = materialize_struct_defaults(slots, kwargs, env)
+            Builtins.make_struct(struct_name, defaults, kwargs)
           end
       end
 
@@ -5081,6 +5151,10 @@ defmodule ExLisp.Evaluator do
   defp eval_quote_node(%ExLisp.Ratio{} = val), do: val
   defp eval_quote_node(%ExLisp.Character{} = val), do: val
   defp eval_quote_node({:keyword, _pos, kw}), do: kw
+
+  defp eval_quote_node({:reader_object, id, inner}),
+    do: ExLisp.Reader.shared_object(id, eval_quote_node(inner))
+
   defp eval_quote_node({:reader_macro, _pos, inner}), do: LispBeam.evaluate_ast(inner)
 
   defp eval_quote_node({:vector, _pos, elements}) do

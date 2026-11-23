@@ -967,6 +967,36 @@ defmodule CommonLispTest do
              """) == [3, 4, 0, 0]
     end
 
+    test "defstruct defaults are evaluated only for omitted slots" do
+      assert ExLisp.eval("""
+             (progn
+               (defstruct (required-pair
+                           (:constructor make-required-pair (left right)))
+                 (left (error "left is required"))
+                 (right (error "right is required")))
+               (let ((pair (make-required-pair 1 2)))
+                 (list (required-pair-left pair)
+                       (required-pair-right pair))))
+             """) == [1, 2]
+    end
+
+    test "defstruct conc-name controls generated accessors" do
+      assert ExLisp.eval("""
+             (progn
+               (defstruct (endpoint (:conc-name endpoint-of-))
+                 host)
+               (endpoint-of-host (make-endpoint :host "example.test")))
+             """) == "example.test"
+    end
+
+    test "defstruct constructor option without a name uses the default constructor" do
+      assert ExLisp.eval("""
+             (progn
+               (defstruct (container (:constructor)) value)
+               (container-value (make-container :value 7)))
+             """) == 7
+    end
+
     test "CLOS class inheritance, slot initform, initarg, and accessors" do
       code = """
       (progn
