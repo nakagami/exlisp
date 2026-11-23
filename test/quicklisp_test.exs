@@ -251,6 +251,21 @@ defmodule QuicklispTest do
     File.rm!(path)
   end
 
+  test "Local-Time timestamp components and arithmetic work" do
+    assert ExLisp.eval("(ql:quickload :local-time)") != nil
+
+    assert ExLisp.eval("""
+           (let* ((stamp (local-time:encode-timestamp 0 2 3 4 5 6 2026))
+                (next (local-time:timestamp+ stamp 1 :hour)))
+             (list (local-time:timestamp-year stamp)
+                   (local-time:timestamp-month stamp)
+                   (local-time:timestamp-day stamp)
+                   (local-time:timestamp-hour next)
+                   (local-time:timestamp< stamp next)
+                   (local-time:timestamp-difference next stamp)))
+           """) == [2026, 6, 5, 5, :t, 3600.0]
+  end
+
   test "special forms: typecase, etypecase, check-type" do
     assert ExLisp.eval("(typecase 42 (string :str) (integer :int) (t :other))") == :int
     assert ExLisp.eval("(typecase \"hello\" (number :num) (string :str))") == :str
@@ -312,19 +327,90 @@ defmodule QuicklispTest do
              (babel:string-to-octets "héllo"))
            """) == "héllo"
 
+    assert ExLisp.eval("(babel:string-size-in-octets \"héllo\")") == 6
+    assert ExLisp.eval("(babel:encodable-character-p #\\é :encoding :latin-1)") == :t
+    assert ExLisp.eval("(babel:encodable-character-p #\\λ :encoding :ascii)") == nil
+
+    assert ExLisp.eval(
+             "(babel:octets-to-string (babel:concatenate-strings-to-octets \"ab\" \"cd\"))"
+           ) == "abcd"
+
+    assert ExLisp.eval("""
+           (babel:octets-to-string
+             (babel:string-to-octets "olá" :encoding :latin-1)
+             :encoding :latin-1)
+           """) == "olá"
+
     assert ExLisp.eval("(ql:quickload :cl-ppcre)") != nil
 
     assert ExLisp.eval("(multiple-value-list (cl-ppcre:scan \"a+\" \"caaad\"))") ==
              [1, 4, [], []]
 
+    assert ExLisp.eval("(cl-ppcre:count-matches \"a+\" \"caaada\")") == 2
+    assert ExLisp.eval("(cl-ppcre:all-matches \"a+\" \"caaada\")") == [1, 4, 5, 6]
+
+    assert ExLisp.eval("(cl-ppcre:all-matches-as-strings \"a+\" \"caaada\")") ==
+             ["aaa", "a"]
+
     assert ExLisp.eval("(ql:quickload :quri)") != nil
     assert ExLisp.eval("(quri:url-encode \"a b\")") == "a%20b"
+
+    assert ExLisp.eval("""
+           (let ((uri (quri:make-uri :scheme "https"
+                                     :host "example.test"
+                                     :path "/docs"
+                                     :query "x=1")))
+             (list (quri:uri-p uri)
+                   (quri:uri-authority uri)
+                   (quri:render-uri uri)
+                   (quri:uri-query-params uri)))
+           """) == [:t, "example.test", "https://example.test/docs?x=1", [["x" | "1"]]]
+
+    assert ExLisp.eval("(quri:render-uri (quri:make-uri-https :host \"example.test\"))") ==
+             "https://example.test"
 
     assert ExLisp.eval("(ql:quickload :ironclad)") != nil
 
     assert String.length(
              ExLisp.eval("(ironclad:byte-array-to-hex-string (ironclad:random-data 4))")
            ) == 8
+
+    assert ExLisp.eval("(ironclad:digest-supported-p :sha256)") == :t
+
+    assert ExLisp.eval(
+             "(ironclad:byte-array-to-hex-string (ironclad:digest-sequence :sha256 \"abc\"))"
+           ) ==
+             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+
+    assert ExLisp.eval("""
+           (let ((digest (ironclad:make-digest :sha256)))
+             (ironclad:byte-array-to-hex-string
+               (ironclad:produce-digest
+                 (ironclad:update-digest digest "abc"))))
+           """) ==
+             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+
+    assert ExLisp.eval("""
+           (let ((hmac (ironclad:make-hmac "key" :sha256)))
+             (ironclad:byte-array-to-hex-string
+               (ironclad:hmac-digest
+                 (ironclad:update-hmac hmac "data"))))
+           """) ==
+             "5031fe3d989c6d1537a013fa6e739da23463fdaec3b70137d828e36ace221bd0"
+
+    assert ExLisp.eval("""
+           (ironclad:octets-to-integer
+             (ironclad:integer-to-octets 65535 :n-bits 32))
+           """) == 65_535
+
+    assert ExLisp.eval("""
+           (let ((values
+                   (multiple-value-list
+                     (ironclad:pbkdf2-hash-password "password"
+                                                    :salt "salt"
+                                                    :iterations 1))))
+             (list (length (first values)) (length (second values))))
+           """) == [32, 4]
 
     assert ExLisp.eval("(ql:quickload :ningle)") != nil
     assert ExLisp.eval("(ql:quickload :clack)") != nil

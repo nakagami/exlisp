@@ -12,7 +12,10 @@ defmodule ExLisp.CLPPCRE do
       regex_replace: &regex_replace/1,
       regex_replace_all: &regex_replace_all/1,
       quote_meta_chars: &quote_meta_chars/1,
-      create_scanner: &create_scanner/1
+      create_scanner: &create_scanner/1,
+      count_matches: &count_matches/1,
+      all_matches: &all_matches/1,
+      all_matches_as_strings: &all_matches_as_strings/1
     }
 
     Enum.each(functions, fn {name, function} ->
@@ -45,8 +48,8 @@ defmodule ExLisp.CLPPCRE do
       [match | captures] ->
         offset = Keyword.get(opts, :start, 0)
         {start, length} = match
-        starts = Enum.map(captures, fn {index, _} -> index + offset end)
-        ends = Enum.map(captures, fn {index, size} -> index + size + offset end)
+        starts = Enum.map(captures, &capture_start(&1, offset))
+        ends = Enum.map(captures, &capture_end(&1, offset))
 
         [:_values_, [start + offset, start + offset + length, starts, ends]]
     end
@@ -63,7 +66,37 @@ defmodule ExLisp.CLPPCRE do
 
   def split(args) do
     {regex, target, opts} = scanner_args(args)
-    Regex.split(regex, target_range(target, opts), trim: false)
+
+    values =
+      Regex.split(regex, target_range(target, opts),
+        trim: false,
+        include_captures: option?(opts, :with_registers_p)
+      )
+
+    case Keyword.get(opts, :limit) do
+      nil -> values
+      0 -> values
+      limit when is_integer(limit) and limit > 0 -> Enum.take(values, limit)
+      _ -> values
+    end
+  end
+
+  def count_matches(args), do: args |> all_match_indexes() |> length()
+
+  def all_matches(args) do
+    args
+    |> all_match_indexes()
+    |> Enum.flat_map(fn {start, size} -> [start, start + size] end)
+  end
+
+  def all_matches_as_strings(args) do
+    {regex, target, opts} = scanner_args(args)
+
+    Regex.scan(regex, target_range(target, opts), capture: :first)
+    |> Enum.map(fn
+      [whole] -> whole
+      [] -> ""
+    end)
   end
 
   def regex_replace([pattern, target, replacement | opts]) do
@@ -85,6 +118,24 @@ defmodule ExLisp.CLPPCRE do
 
   defp scanner_args([regex, target | opts]),
     do: {compile_pattern(regex), to_string(target), parse_options(opts)}
+
+  defp all_match_indexes(args) do
+    {regex, target, opts} = scanner_args(args)
+    offset = Keyword.get(opts, :start, 0) || 0
+
+    Regex.scan(regex, target_range(target, opts), return: :index, capture: :first)
+    |> Enum.map(fn [match] ->
+      {start, size} = match
+      {start + offset, size}
+    end)
+  end
+
+  defp capture_start({-1, _size}, _offset), do: nil
+  defp capture_start({index, _size}, offset), do: index + offset
+  defp capture_end({-1, _size}, _offset), do: nil
+  defp capture_end({index, size}, offset), do: index + size + offset
+
+  defp option?(opts, name), do: Keyword.get(opts, name) not in [nil, false, 0]
 
   defp compile_pattern(%Regex{} = regex), do: regex
 
