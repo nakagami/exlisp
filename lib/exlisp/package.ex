@@ -2563,44 +2563,62 @@ defmodule ExLisp.Package do
         str = Atom.to_string(sym)
         qualified_package = qualified_symbol_package(str)
         remembered_package = Process.get({:exlisp_symbol_package, sym})
+        name = symbol_to_str(sym)
+        uninterned? = String.starts_with?(str, "#:")
+        reader_package = Process.get(:exlisp_current_package, "COMMON-LISP-USER")
+        current_package = find_package(reader_package)
+
+        owning_package =
+          if uninterned? do
+            Enum.find_value(list_all_packages(), fn package ->
+              if Enum.any?(package.symbol_values || %{}, fn {_key, value} -> value == sym end) do
+                find_symbol_package(package, name)
+              end
+            end)
+          end
+
+        current_symbol_package =
+          if (not uninterned? and current_package) &&
+               (MapSet.member?(current_package.internal_symbols, name) or
+                  MapSet.member?(current_package.external_symbols, name) or
+                  Map.has_key?(current_package.symbol_packages || %{}, name)) do
+            find_symbol_package(current_package, name)
+          end
 
         cond do
+          owning_package ->
+            owning_package
+
+          uninterned? ->
+            nil
+
           is_binary(remembered_package) ->
             find_package(remembered_package) ||
               if(remembered_package == "KEYWORD", do: find_package("KEYWORD"))
 
-          ExLisp.Env.keyword?(sym) or String.starts_with?(str, ":") ->
-            find_package("KEYWORD")
-
           qualified_package ->
-            name = symbol_to_str(sym)
+            qualified_name = symbol_to_str(sym)
 
-            if MapSet.member?(qualified_package.internal_symbols, name) or
-                 MapSet.member?(qualified_package.external_symbols, name) or
-                 Map.has_key?(qualified_package.symbol_values || %{}, name) do
+            if MapSet.member?(qualified_package.internal_symbols, qualified_name) or
+                 MapSet.member?(qualified_package.external_symbols, qualified_name) or
+                 Map.has_key?(qualified_package.symbol_values || %{}, qualified_name) do
               qualified_package
             end
 
+          current_symbol_package ->
+            current_symbol_package
+
+          ExLisp.Env.keyword?(sym) or String.starts_with?(str, ":") ->
+            find_package("KEYWORD")
+
           true ->
             # Search packages
-            name = symbol_to_str(sym)
-            reader_package = Process.get(:exlisp_current_package, "COMMON-LISP-USER")
+            cl = find_package("COMMON-LISP")
 
-            curr = find_package(reader_package)
-
-            if curr &&
-                 (MapSet.member?(curr.internal_symbols, name) or
-                    MapSet.member?(curr.external_symbols, name)) do
-              curr
+            if cl && MapSet.member?(cl.external_symbols, name) do
+              cl
             else
-              # Search CL package
-              cl = find_package("COMMON-LISP")
-
-              if cl && MapSet.member?(cl.external_symbols, name) do
-                cl
-              else
-                curr || cl
-              end
+              current_package || cl
             end
         end
 
@@ -2613,18 +2631,40 @@ defmodule ExLisp.Package do
     package_name = Process.get(:exlisp_current_package, "COMMON-LISP-USER")
     cache_key = {:"$exlisp_read_symbol$", package_name, symbol}
 
-    case Process.get(cache_key, :not_cached) do
-      :not_cached ->
-        result = do_register_read_symbol(symbol)
-        Process.put(cache_key, result)
-        result
+    result =
+      case Process.get(cache_key, :not_cached) do
+        :not_cached ->
+          result = do_register_read_symbol(symbol)
+          Process.put(cache_key, result)
+          result
 
-      result ->
-        result
-    end
+        result ->
+          result
+      end
+
+    remember_registered_read_symbol(result, package_name)
+    result
   end
 
   def register_read_symbol(symbol), do: symbol
+
+  defp remember_registered_read_symbol(symbol, package_name) do
+    package = find_package(package_name)
+    name = symbol_to_str(symbol)
+
+    if package && not String.starts_with?(Atom.to_string(symbol), "#:") do
+      source =
+        find_symbol_package(package, name)
+        |> case do
+          nil -> if package == find_package("COMMON-LISP"), do: package
+          found -> found
+        end
+
+      if source, do: remember_symbol_package(symbol, source)
+    end
+
+    symbol
+  end
 
   defp do_register_read_symbol(symbol) do
     atom_name = Atom.to_string(symbol)
@@ -2664,12 +2704,15 @@ defmodule ExLisp.Package do
               {symbol, true}
           end
 
-        if own_symbol? and ExLisp.Env.keyword?(symbol) and
-             pkg.name not in ["COMMON-LISP", "COMMON-LISP-USER", "KEYWORD"] do
-          String.to_atom("#{String.downcase(pkg.name)}.#{atom_name}")
-        else
-          resolved
-        end
+        result =
+          if own_symbol? and ExLisp.Env.keyword?(symbol) and
+               pkg.name not in ["COMMON-LISP", "COMMON-LISP-USER", "KEYWORD"] do
+            String.to_atom("#{String.downcase(pkg.name)}.#{atom_name}")
+          else
+            resolved
+          end
+
+        remember_symbol_package(result, pkg)
     end
   end
 
@@ -2792,14 +2835,18 @@ defmodule ExLisp.Package do
   defp package_designator_string(%ExLisp.Package{name: name}), do: name
   defp package_designator_string(designator) when is_binary(designator), do: designator
 
-  defp package_designator_string(designator) when is_atom(designator),
-    do:
-      designator
-      |> Atom.to_string()
-      |> clean_uninterned()
+  defp package_designator_string(designator) when is_atom(designator) do
+    name = designator |> Atom.to_string() |> clean_uninterned()
+
+    if String.starts_with?(name, "|") && String.ends_with?(name, "|") do
+      string_symbol_name(name)
+    else
+      name
       |> String.trim_leading(":")
       |> String.upcase()
       |> String.replace("_", "-")
+    end
+  end
 
   defp package_designator_string(designator) do
     case symbol_to_str(designator) do
@@ -2933,7 +2980,7 @@ defmodule ExLisp.Package do
 
   defp str_to_symbol(str) do
     if str == "NIL" do
-      ExLisp.Symbol.new("NIL")
+      nil
     else
       normalized =
         if String.contains?(str, ".") do

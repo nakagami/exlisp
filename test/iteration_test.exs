@@ -122,6 +122,23 @@ defmodule ExLisp.IterationTest do
            """) == [11, 12, 13, 14]
   end
 
+  test "loop equals clauses detect variables inside backquotes" do
+    assert ExLisp.eval("""
+           (loop for type in '(short-float single-float)
+                 for zero = (coerce 0 `(complex ,type))
+                 collect (equal zero (coerce 0 `(complex ,type))))
+           """) == [:t, :t]
+  end
+
+  test "loop equals destructuring references preceding clauses" do
+    assert ExLisp.eval("""
+           (loop for n from 1 to 3
+                 for values = (list n (1+ n))
+                 for (left right) = values
+                 collect (+ left right))
+           """) == [3, 5, 7]
+  end
+
   test "dotimes with count <= 0" do
     assert ExLisp.eval("""
            (let ((run nil))

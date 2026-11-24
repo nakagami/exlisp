@@ -157,6 +157,7 @@ defmodule ExLisp.Env do
         :"*debug_io*",
         :"*query-io*",
         :"*query_io*",
+        :"*readtable*",
         :"*terminal-io*",
         :"*terminal_io*",
         :"*read-suppress*",

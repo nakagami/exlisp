@@ -629,10 +629,13 @@ defmodule ExLisp.LispParser do
           mantissa = :binary.part(str, 0, index)
           exponent = :binary.part(str, index + 1, byte_size(str) - index - 1)
 
+          normalized_mantissa =
+            if String.ends_with?(mantissa, "."), do: mantissa <> "0", else: mantissa
+
           mantissa_number? =
-            case Float.parse(mantissa) do
+            case Float.parse(normalized_mantissa) do
               {_, ""} -> true
-              _ -> match?({_, ""}, Integer.parse(mantissa))
+              _ -> match?({_, ""}, Integer.parse(normalized_mantissa))
             end
 
           exponent_number? =
@@ -642,7 +645,7 @@ defmodule ExLisp.LispParser do
             end
 
           if mantissa_number? and exponent_number? do
-            normalized = mantissa <> "e" <> exponent
+            normalized = normalized_mantissa <> "e" <> exponent
 
             {:ok,
              if(String.contains?(normalized, ".e"),

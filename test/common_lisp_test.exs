@@ -369,6 +369,13 @@ defmodule CommonLispTest do
       assert ExLisp.eval("(eql 42 42)") == :t
       assert ExLisp.eval("(eq 'a 'a)") == :t
       assert ExLisp.eval("(equalp \"ABC\" \"abc\")") == :t
+      assert ExLisp.eval("(equalp #\\A #\\a)") == :t
+
+      assert ExLisp.eval("""
+             (let* ((source (make-array 3 :initial-contents "AbC" :element-type 'base-char))
+                    (view (make-array 3 :displaced-to source :displaced-index-offset 0)))
+               (equalp "abc" view))
+             """) == :t
     end
 
     test "type predicates: null, not, atom, consp, listp, numberp, integerp, floatp, stringp, symbolp, functionp" do

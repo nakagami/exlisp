@@ -324,10 +324,8 @@
 (defun random-fixnum ()
   (random 1000000))
 
-(defun random-from-interval (n)
-  (if (or (null n) (<= n 0))
-      0
-      (random n)))
+(defun random-from-interval (upper &optional (lower (- upper)))
+  (+ (random (- upper lower)) lower))
 
 (defmacro random-case (&rest cases)
   (let ((len (length cases)))

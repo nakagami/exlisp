@@ -9,6 +9,7 @@ defmodule ExLisp.LispParserTest do
       assert {:ok, [{:int, 1, 10}]} = LispParser.tokenize("+10")
       assert {:ok, [{:float, 1, 3.14}]} = LispParser.tokenize("3.14")
       assert {:ok, [{:float, 1, -2.5}]} = LispParser.tokenize("-2.5")
+      assert {:ok, [{:float, 1, 1.0}]} = LispParser.tokenize("1.s0")
     end
 
     test "tokenizes radix integers (#b, #o, #x)" do

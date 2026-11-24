@@ -1898,6 +1898,9 @@ defmodule ExLisp.Builtins do
   def eq({:__keyword__, value}, other), do: eq(value, other)
   def eq(other, {:__keyword__, value}), do: eq(other, value)
 
+  def eq(%ExLisp.Symbol{id: xid, name: name}, %ExLisp.Symbol{id: yid, name: name}),
+    do: (xid != nil and xid == yid) |> lisp_bool()
+
   def eq(%ExLisp.Package{id: xid, name: x}, %ExLisp.Package{id: yid, name: y}),
     do: ((xid != nil and xid == yid) or x == y) |> lisp_bool()
 
@@ -1913,6 +1916,9 @@ defmodule ExLisp.Builtins do
   def eql(x, y) when is_binary(x) and is_binary(y), do: :erts_debug.same(x, y) |> lisp_bool()
   def eql({:__keyword__, value}, other), do: eql(value, other)
   def eql(other, {:__keyword__, value}), do: eql(other, value)
+
+  def eql(%ExLisp.Symbol{id: xid, name: name}, %ExLisp.Symbol{id: yid, name: name}),
+    do: (xid != nil and xid == yid) |> lisp_bool()
 
   def eql(%ExLisp.Package{id: xid, name: x}, %ExLisp.Package{id: yid, name: y}),
     do: ((xid != nil and xid == yid) or x == y) |> lisp_bool()
@@ -2004,7 +2010,7 @@ defmodule ExLisp.Builtins do
   def equal(x, y), do: (x == y) |> lisp_bool()
   def equalt(x, y), do: equal(x, y)
 
-  def equalp(%ExLisp.Character{code: c1}, %ExLisp.Character{code: c2}) do
+  def equalp(%ExLisp.Character{} = c1, %ExLisp.Character{} = c2) do
     char_equal(c1, c2)
   end
 

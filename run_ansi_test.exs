@@ -6,7 +6,12 @@ ansi_test_dir =
 
 if not File.dir?(ansi_test_dir) do
   IO.puts(:stderr, "Error: ansi-test directory not found at #{ansi_test_dir}")
-  IO.puts(:stderr, "Please clone it with: git clone https://github.com/sbcl/ansi-test #{ansi_test_dir}")
+
+  IO.puts(
+    :stderr,
+    "Please clone it with: git clone https://github.com/sbcl/ansi-test #{ansi_test_dir}"
+  )
+
   System.halt(1)
 end
 
@@ -502,8 +507,16 @@ aux_files = [
   Path.join(ansi_test_dir, "cons-aux.lsp")
 ]
 
-ExLisp.load_file(Path.expand("examples/ansi_test_harness.lisp", __DIR__))
+ExLisp.eval("""
+(progn
+  (unless (find-package "REGRESSION-TEST")
+    (make-package "REGRESSION-TEST" :nicknames '("RT" "RTEST") :use '("COMMON-LISP")))
+  (unless (find-package "CL-TEST")
+    (make-package "CL-TEST" :use '("COMMON-LISP" "REGRESSION-TEST" "COMMON-LISP-USER"))))
+""")
+
 ExLisp.eval("(in-package \"CL-TEST\")")
+ExLisp.load_file(Path.expand("examples/ansi_test_harness.lisp", __DIR__))
 
 Enum.each(aux_files, fn f ->
   if File.exists?(f) do
@@ -517,30 +530,45 @@ end)
 
 ExLisp.eval("(defmacro expand-in-current-env (form) form)")
 
-ExLisp.Env.put_fun(:safely_delete_package, fn package ->
-  if found = ExLisp.Package.find_package(package) do
-    Enum.each(found.used_by_list, fn using_name ->
-      ExLisp.Package.unuse_package(found, using_name)
-    end)
+previous_package = ExLisp.Package.current_package()
+ExLisp.Package.set_current_package("COMMON-LISP-USER")
 
-    ExLisp.Package.delete_package(package)
-  end
-end)
-ExLisp.Env.put_fun(:delete_package, &ExLisp.Package.delete_package/1)
-ExLisp.Env.put_fun(:package_name, &ExLisp.Package.package_name/1)
-ExLisp.Env.put_fun(:unexport, fn symbols, package ->
-  ExLisp.Package.unexport(symbols, package)
-end)
-ExLisp.Env.put_fun(
-  :unintern,
-  ExLisp.Closure.new(fn
-    [symbol] -> ExLisp.Package.unintern(symbol)
-    [symbol, package] -> ExLisp.Package.unintern(symbol, package)
-  end, :unintern)
-)
+try do
+  ExLisp.Env.put_fun(:safely_delete_package, fn package ->
+    if found = ExLisp.Package.find_package(package) do
+      Enum.each(found.used_by_list, fn using_name ->
+        ExLisp.Package.unuse_package(found, using_name)
+      end)
+
+      ExLisp.Package.delete_package(package)
+    end
+  end)
+
+  ExLisp.Env.put_fun(:delete_package, &ExLisp.Package.delete_package/1)
+  ExLisp.Env.put_fun(:package_name, &ExLisp.Package.package_name/1)
+
+  ExLisp.Env.put_fun(:unexport, fn symbols, package ->
+    ExLisp.Package.unexport(symbols, package)
+  end)
+
+  ExLisp.Env.put_fun(
+    :unintern,
+    ExLisp.Closure.new(
+      fn
+        [symbol] -> ExLisp.Package.unintern(symbol)
+        [symbol, package] -> ExLisp.Package.unintern(symbol, package)
+      end,
+      :unintern
+    )
+  )
+after
+  ExLisp.Package.set_current_package(previous_package)
+end
+
 ExLisp.Condition.init_condition_hierarchy()
 ExLisp.Env.put_var(:"regression-test.*compile-tests*", nil)
 ExLisp.Env.put_var(:"regression-test.*compile_tests*", nil)
+
 ExLisp.Env.put_fun(:has_non_abort_restart, fn condition ->
   result =
     if Enum.any?(ExLisp.Condition.compute_restarts(condition), fn restart ->
@@ -599,7 +627,9 @@ File.mkdir_p!(Path.join(ansi_test_dir, "sandbox/scratch"))
 
 total_failed =
   Enum.reduce(target_suites, 0, fn {name, rel_path}, acc ->
-    full_path = if Path.type(rel_path) == :absolute, do: rel_path, else: Path.join(ansi_test_dir, rel_path)
+    full_path =
+      if Path.type(rel_path) == :absolute, do: rel_path, else: Path.join(ansi_test_dir, rel_path)
+
     IO.puts("Loading #{name} (#{full_path})...")
     ExLisp.MutableCons.reset()
     ExLisp.eval("(reset-test-stats)")
@@ -616,7 +646,7 @@ total_failed =
 
     ExLisp.eval("(print-test-summary \"#{name}\")")
     failed = ExLisp.eval("*test-failed-count*")
-    acc + (if is_integer(failed), do: failed, else: 0)
+    acc + if is_integer(failed), do: failed, else: 0
   end)
 
 if total_failed > 0 do

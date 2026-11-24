@@ -1182,7 +1182,7 @@ defmodule ExLisp.Loop do
               |> Enum.map(&LispBeam.extract_symbol_name/1)
               |> MapSet.new()
 
-            if ast_references_any?(expr, prior_vars) and is_simple_var?(var_node) do
+            if ast_references_any?(expr, prior_vars) do
               {
                 inits_acc,
                 params_acc,
@@ -1234,6 +1234,9 @@ defmodule ExLisp.Loop do
 
   defp ast_references_any?({_, _, elements}, variables) when is_list(elements),
     do: Enum.any?(elements, &ast_references_any?(&1, variables))
+
+  defp ast_references_any?({_, _, node}, variables),
+    do: ast_references_any?(node, variables)
 
   defp ast_references_any?(elements, variables) when is_list(elements),
     do: Enum.any?(elements, &ast_references_any?(&1, variables))
