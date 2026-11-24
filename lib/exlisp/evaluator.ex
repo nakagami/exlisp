@@ -4750,6 +4750,14 @@ defmodule ExLisp.Evaluator do
       )
     else
       param_names = LispBeam.extract_param_names(params_node)
+      {decls, _actual_body} = LispBeam.split_declarations(body_nodes)
+
+      special_names =
+        declared_special_vars(decls)
+        |> Enum.concat(Enum.filter(param_names, &Env.specialp/1))
+        |> Enum.uniq()
+
+      special_params? = Enum.any?(param_names, &(&1 in special_names))
 
       case {param_names, has_return} do
         {[], false} ->
@@ -4766,21 +4774,15 @@ defmodule ExLisp.Evaluator do
             end
           end
 
-        {[p1], false} ->
+        {[p1], false} when not special_params? ->
           fn a ->
-            ref1 = make_ref()
-            :erlang.put(ref1, a)
-            call_env = Map.put(snapshotted_env, p1, {:box, ref1})
+            call_env = Map.put(snapshotted_env, p1, a)
             eval_progn(body_nodes, call_env)
           end
 
-        {[p1], true} ->
+        {[p1], true} when not special_params? ->
           fn a ->
-            ref1 = make_ref()
-            :erlang.put(ref1, a)
-
-            call_env =
-              snapshotted_env |> Map.put(p1, {:box, ref1}) |> Map.put({:block, name}, tag)
+            call_env = snapshotted_env |> Map.put(p1, a) |> Map.put({:block, name}, tag)
 
             try do
               eval_progn(body_nodes, call_env)
@@ -4789,27 +4791,18 @@ defmodule ExLisp.Evaluator do
             end
           end
 
-        {[p1, p2], false} ->
+        {[p1, p2], false} when not special_params? ->
           fn a, b ->
-            ref1 = make_ref()
-            ref2 = make_ref()
-            :erlang.put(ref1, a)
-            :erlang.put(ref2, b)
-            call_env = snapshotted_env |> Map.put(p1, {:box, ref1}) |> Map.put(p2, {:box, ref2})
+            call_env = snapshotted_env |> Map.put(p1, a) |> Map.put(p2, b)
             eval_progn(body_nodes, call_env)
           end
 
-        {[p1, p2], true} ->
+        {[p1, p2], true} when not special_params? ->
           fn a, b ->
-            ref1 = make_ref()
-            ref2 = make_ref()
-            :erlang.put(ref1, a)
-            :erlang.put(ref2, b)
-
             call_env =
               snapshotted_env
-              |> Map.put(p1, {:box, ref1})
-              |> Map.put(p2, {:box, ref2})
+              |> Map.put(p1, a)
+              |> Map.put(p2, b)
               |> Map.put({:block, name}, tag)
 
             try do
@@ -4819,38 +4812,24 @@ defmodule ExLisp.Evaluator do
             end
           end
 
-        {[p1, p2, p3], false} ->
+        {[p1, p2, p3], false} when not special_params? ->
           fn a, b, c ->
-            ref1 = make_ref()
-            ref2 = make_ref()
-            ref3 = make_ref()
-            :erlang.put(ref1, a)
-            :erlang.put(ref2, b)
-            :erlang.put(ref3, c)
-
             call_env =
               snapshotted_env
-              |> Map.put(p1, {:box, ref1})
-              |> Map.put(p2, {:box, ref2})
-              |> Map.put(p3, {:box, ref3})
+              |> Map.put(p1, a)
+              |> Map.put(p2, b)
+              |> Map.put(p3, c)
 
             eval_progn(body_nodes, call_env)
           end
 
-        {[p1, p2, p3], true} ->
+        {[p1, p2, p3], true} when not special_params? ->
           fn a, b, c ->
-            ref1 = make_ref()
-            ref2 = make_ref()
-            ref3 = make_ref()
-            :erlang.put(ref1, a)
-            :erlang.put(ref2, b)
-            :erlang.put(ref3, c)
-
             call_env =
               snapshotted_env
-              |> Map.put(p1, {:box, ref1})
-              |> Map.put(p2, {:box, ref2})
-              |> Map.put(p3, {:box, ref3})
+              |> Map.put(p1, a)
+              |> Map.put(p2, b)
+              |> Map.put(p3, c)
               |> Map.put({:block, name}, tag)
 
             try do
@@ -4860,44 +4839,26 @@ defmodule ExLisp.Evaluator do
             end
           end
 
-        {[p1, p2, p3, p4], false} ->
+        {[p1, p2, p3, p4], false} when not special_params? ->
           fn a, b, c, d ->
-            ref1 = make_ref()
-            ref2 = make_ref()
-            ref3 = make_ref()
-            ref4 = make_ref()
-            :erlang.put(ref1, a)
-            :erlang.put(ref2, b)
-            :erlang.put(ref3, c)
-            :erlang.put(ref4, d)
-
             call_env =
               snapshotted_env
-              |> Map.put(p1, {:box, ref1})
-              |> Map.put(p2, {:box, ref2})
-              |> Map.put(p3, {:box, ref3})
-              |> Map.put(p4, {:box, ref4})
+              |> Map.put(p1, a)
+              |> Map.put(p2, b)
+              |> Map.put(p3, c)
+              |> Map.put(p4, d)
 
             eval_progn(body_nodes, call_env)
           end
 
-        {[p1, p2, p3, p4], true} ->
+        {[p1, p2, p3, p4], true} when not special_params? ->
           fn a, b, c, d ->
-            ref1 = make_ref()
-            ref2 = make_ref()
-            ref3 = make_ref()
-            ref4 = make_ref()
-            :erlang.put(ref1, a)
-            :erlang.put(ref2, b)
-            :erlang.put(ref3, c)
-            :erlang.put(ref4, d)
-
             call_env =
               snapshotted_env
-              |> Map.put(p1, {:box, ref1})
-              |> Map.put(p2, {:box, ref2})
-              |> Map.put(p3, {:box, ref3})
-              |> Map.put(p4, {:box, ref4})
+              |> Map.put(p1, a)
+              |> Map.put(p2, b)
+              |> Map.put(p3, c)
+              |> Map.put(p4, d)
               |> Map.put({:block, name}, tag)
 
             try do

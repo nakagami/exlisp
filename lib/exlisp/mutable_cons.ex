@@ -3,6 +3,7 @@ defmodule ExLisp.MutableCons do
 
   @table :exlisp_mutable_cons_table
   @owner :exlisp_mutable_cons_owner
+  @active_key :exlisp_mutable_cons_active
 
   def ensure_table do
     case :ets.whereis(@table) do
@@ -47,6 +48,7 @@ defmodule ExLisp.MutableCons do
   def reset do
     ensure_table()
     scope = scope()
+    Process.delete({@active_key, scope})
 
     try do
       :ets.select_delete(@table, [{{{scope, :_}, :_}, [], [true]}])
@@ -58,7 +60,11 @@ defmodule ExLisp.MutableCons do
   end
 
   def resolve([]), do: []
-  def resolve([_ | _] = value), do: resolve(value, MapSet.new())
+
+  def resolve([_ | _] = value) do
+    if mutable_cons_active?(), do: resolve(value, MapSet.new()), else: value
+  end
+
   def resolve(value), do: value
 
   def replace(original, replacement) do
@@ -147,6 +153,7 @@ defmodule ExLisp.MutableCons do
   defp register(original, current, replacement) do
     ensure_table()
     scope = scope()
+    mark_active(scope)
 
     :ets.insert(@table, [
       {{scope, original}, replacement},
@@ -156,7 +163,28 @@ defmodule ExLisp.MutableCons do
     replacement
   end
 
+  defp mark_active(scope) do
+    Process.put({@active_key, scope}, true)
+    ensure_table()
+    :ets.insert(@table, {{scope, :__mutable_cons_active__}, true})
+  end
+
+  defp mutable_cons_active? do
+    scope = scope()
+    Process.get({@active_key, scope}, false)
+  end
+
   def scope, do: Process.get(:exlisp_mutable_cons_scope, self())
 
-  def set_scope(scope), do: Process.put(:exlisp_mutable_cons_scope, scope)
+  def set_scope(scope) do
+    Process.put(:exlisp_mutable_cons_scope, scope)
+
+    ensure_table()
+
+    if :ets.member(@table, {scope, :__mutable_cons_active__}) do
+      Process.put({@active_key, scope}, true)
+    end
+
+    :ok
+  end
 end

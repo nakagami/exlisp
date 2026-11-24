@@ -34,6 +34,7 @@ defmodule ExLisp.Compiler do
     module_name = Keyword.get(opts, :module, @default_module)
     output_dir = Keyword.get(opts, :output_dir, nil)
     write_beam = Keyword.get(opts, :write_beam, output_dir != nil)
+    execute_top_level = Keyword.get(opts, :execute_top_level, true)
 
     asts =
       code
@@ -51,10 +52,12 @@ defmodule ExLisp.Compiler do
         ExLisp.Env.invalidate_global_module_cache(module_name)
 
         # Top-level execution (run/0)
-        try do
-          apply(module_name, :run, [])
-        rescue
-          _ -> :ok
+        if execute_top_level do
+          try do
+            apply(module_name, :run, [])
+          rescue
+            _ -> :ok
+          end
         end
 
         if write_beam and output_dir do

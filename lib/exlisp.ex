@@ -108,16 +108,35 @@ defmodule ExLisp do
     ExLisp.Env.set_var(:"*load_truename*", abs_path)
     content = File.read!(path)
 
-    res =
-      content
-      |> ExLisp.Reader.split_expressions()
-      |> Enum.reduce(nil, fn source, _result ->
-        source
-        |> ExLisp.LispParser.parse!()
-        |> LispBeam.evaluate_ast()
-      end)
+    compiled =
+      try do
+        ExLisp.Compiler.compile_string(content,
+          module: ExLisp.Global,
+          write_beam: false,
+          execute_top_level: false
+        )
+      rescue
+        _ -> :fallback
+      end
 
-    unwrap_primary_value(res)
+    case compiled do
+      {:ok, module, _binary} ->
+        module
+        |> apply(:run, [])
+        |> unwrap_primary_value()
+
+      :fallback ->
+        res =
+          content
+          |> ExLisp.Reader.split_expressions()
+          |> Enum.reduce(nil, fn source, _result ->
+            source
+            |> ExLisp.LispParser.parse!()
+            |> LispBeam.evaluate_ast()
+          end)
+
+        unwrap_primary_value(res)
+    end
   end
 
   @doc """
