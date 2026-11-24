@@ -210,4 +210,25 @@ defmodule ExLisp.IterationTest do
                  collect (* x 10))
            """) == [10, 20, 30]
   end
+
+  test "loop collect keeps order with linear accumulation" do
+    assert ExLisp.eval("""
+           (loop for i from 1 to 5
+                 collect i
+                 finally (list 'done))
+           """) == [1, 2, 3, 4, 5]
+
+    assert ExLisp.eval("""
+           (loop for i from 1 to 5
+                 if (oddp i) collect i
+                 else collect (* i 10))
+           """) == [1, 20, 3, 40, 5]
+
+    assert ExLisp.eval("""
+           (loop for i from 1 to 4
+                 if (oddp i) collect i into values
+                 else append (list (* i 10)) into values
+                 finally (return values))
+           """) == [1, 20, 3, 40]
+  end
 end

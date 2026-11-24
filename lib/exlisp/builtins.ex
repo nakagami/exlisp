@@ -37,6 +37,39 @@ defmodule ExLisp.Builtins do
     val != nil and val != false and val != []
   end
 
+  defp row_major_aref_with_type(
+         {:array, _dims, tid} = arr,
+         idx,
+         element_type
+       )
+       when is_integer(idx) do
+    case :ets.lookup(tid, idx) do
+      [{^idx, val}] ->
+        if is_integer(val),
+          do: normalize_array_value_for_type(val, element_type),
+          else: val
+
+      [] ->
+        case get_array_displacement(tid) do
+          {target, offset} ->
+            row_major_aref(target, offset + idx)
+
+          nil ->
+            case :ets.lookup(tid, :__init__) do
+              [{:__init__, default}] -> default
+              [] -> arr |> array_initial_element()
+            end
+        end
+    end
+  end
+
+  defp array_initial_element({:array, _dims, tid}) do
+    case :ets.lookup(tid, :__meta__) do
+      [{:__meta__, %{initial_element: default}}] -> default
+      _ -> nil
+    end
+  end
+
   defp eql_hashable?(value) when is_atom(value) or is_number(value), do: true
   defp eql_hashable?(%ExLisp.Character{}), do: true
   defp eql_hashable?(%ExLisp.Ratio{}), do: true
@@ -4253,11 +4286,23 @@ defmodule ExLisp.Builtins do
 
       match?({:array, _dims, _tid}, seq) ->
         {:array, dims, tid} = seq
-        dims = current_array_dimensions(tid, dims)
+
+        {dims, fill_pointer, element_type} =
+          case :ets.lookup(tid, :__meta__) do
+            [{:__meta__, meta}] ->
+              {
+                Map.get(meta, :dimensions, dims),
+                Map.get(meta, :fill_pointer),
+                Map.get(meta, :element_type, :t)
+              }
+
+            _ ->
+              {dims, nil, :t}
+          end
 
         actual_len =
-          case :ets.lookup(tid, :__meta__) do
-            [{:__meta__, %{fill_pointer: fp}}] when is_integer(fp) ->
+          case fill_pointer do
+            fp when is_integer(fp) ->
               fp
 
             _ ->
@@ -4271,7 +4316,7 @@ defmodule ExLisp.Builtins do
         if actual_len <= 0 do
           []
         else
-          for i <- 0..(actual_len - 1), do: row_major_aref(seq, i)
+          for i <- 0..(actual_len - 1), do: row_major_aref_with_type(seq, i, element_type)
         end
 
       true ->
@@ -5068,25 +5113,30 @@ defmodule ExLisp.Builtins do
   end
 
   defp normalize_array_value(tid, value) when is_integer(value) do
-    case :ets.lookup(tid, :__meta__) do
-      [{:__meta__, %{element_type: element_type}}]
-      when element_type in [
-             :character,
-             :base_char,
-             :standard_char,
-             :extended_char,
-             :"base-char",
-             :"standard-char",
-             :"extended-char"
-           ] ->
-        ExLisp.Character.new(value)
+    element_type =
+      case :ets.lookup(tid, :__meta__) do
+        [{:__meta__, %{element_type: type}}] -> type
+        _ -> :t
+      end
 
-      _ ->
-        value
-    end
+    normalize_array_value_for_type(value, element_type)
   end
 
   defp normalize_array_value(_tid, value), do: value
+
+  defp normalize_array_value_for_type(value, element_type) do
+    if element_type in [
+         :character,
+         :base_char,
+         :standard_char,
+         :extended_char,
+         :"base-char",
+         :"standard-char",
+         :"extended-char"
+       ],
+       do: ExLisp.Character.new(value),
+       else: value
+  end
 
   def remove(item, seq), do: remove([item, seq])
   def delete(args) when is_list(args), do: remove(args)
@@ -8178,7 +8228,6 @@ defmodule ExLisp.Builtins do
       |> Map.put(:displaced_index_offset, displaced_offset)
 
     :ets.insert(new_tid, {:__meta__, new_meta})
-
     if adjustable, do: arr, else: {:array, dimensions, new_tid}
   end
 

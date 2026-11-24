@@ -600,7 +600,16 @@ functions_to_compile = [
   "do-random-intersections",
   "do-random-set-differences",
   "elt-v-6-body",
-  "elt-adj-array-6-body"
+  "elt-adj-array-6-body",
+  "is-ordered-by",
+  "is-antisymmetrically-ordered-by",
+  "is-case-insensitive",
+  "shuffle",
+  "make-scaffold-copy",
+  "check-scaffold-copy",
+  "is-intersection",
+  "set-difference-with-check",
+  "check-set-difference"
 ]
 
 Enum.each(functions_to_compile, fn f ->
@@ -668,7 +677,11 @@ target_suites =
   |> Enum.filter(fn {_suite, index} -> rem(index, shard_count) == shard_index end)
   |> Enum.map(&elem(&1, 0))
 
-compiled_suites = MapSet.new(["NTH"])
+compiled_suites =
+  MapSet.new([
+    "NTH",
+    "NSUBSTITUTE-IF"
+  ])
 
 IO.puts(
   "Running #{length(target_suites)} ANSI-TEST suites " <>

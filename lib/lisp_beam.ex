@@ -329,9 +329,9 @@ defmodule LispBeam do
         if macro_defining_ast?(ast) do
           new_chunks =
             if current_acc == [] do
-              chunks_acc ++ [[ast]]
+              [[ast] | chunks_acc]
             else
-              chunks_acc ++ [Enum.reverse(current_acc), [ast]]
+              [[ast], Enum.reverse(current_acc) | chunks_acc]
             end
 
           {new_chunks, []}
@@ -341,9 +341,9 @@ defmodule LispBeam do
       end)
 
     if current == [] do
-      chunks
+      Enum.reverse(chunks)
     else
-      chunks ++ [Enum.reverse(current)]
+      Enum.reverse([Enum.reverse(current) | chunks])
     end
   end
 

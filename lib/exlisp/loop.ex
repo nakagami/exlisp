@@ -123,23 +123,32 @@ defmodule ExLisp.Loop do
     do_parse_loop(nodes, state)
   end
 
-  defp do_parse_loop([], state), do: state
+  defp do_parse_loop([], state) do
+    %{
+      state
+      | with: Enum.reverse(state.with),
+        initially: Enum.reverse(state.initially),
+        finally: Enum.reverse(state.finally),
+        for: Enum.reverse(state.for),
+        body: Enum.reverse(state.body)
+    }
+  end
 
   defp do_parse_loop([node | rest], state) do
     case kw_name(node) do
       kw when kw in [:for, :as] ->
         {for_clause, rem_tokens} = parse_for_clause(rest)
-        do_parse_loop(rem_tokens, %{state | for: state.for ++ [for_clause]})
+        do_parse_loop(rem_tokens, %{state | for: [for_clause | state.for]})
 
       :and ->
         {for_clause, rem_tokens} = parse_for_clause(rest)
-        do_parse_loop(rem_tokens, %{state | for: state.for ++ [for_clause]})
+        do_parse_loop(rem_tokens, %{state | for: [for_clause | state.for]})
 
       :repeat ->
         case rest do
           [count_expr | rem_tokens] ->
             for_clause = {:repeat, count_expr}
-            do_parse_loop(rem_tokens, %{state | for: state.for ++ [for_clause]})
+            do_parse_loop(rem_tokens, %{state | for: [for_clause | state.for]})
 
           [] ->
             raise ArgumentError, "loop repeat requires a count expression"
@@ -147,20 +156,20 @@ defmodule ExLisp.Loop do
 
       :with ->
         {with_bindings, rem_tokens} = parse_with_clause(rest)
-        do_parse_loop(rem_tokens, %{state | with: state.with ++ with_bindings})
+        do_parse_loop(rem_tokens, %{state | with: Enum.reverse(with_bindings, state.with)})
 
       :initially ->
         {forms, rem_tokens} = collect_forms_until_kw(rest)
-        do_parse_loop(rem_tokens, %{state | initially: state.initially ++ forms})
+        do_parse_loop(rem_tokens, %{state | initially: Enum.reverse(forms, state.initially)})
 
       :finally ->
         {forms, rem_tokens} = collect_forms_until_kw(rest)
-        do_parse_loop(rem_tokens, %{state | finally: state.finally ++ forms})
+        do_parse_loop(rem_tokens, %{state | finally: Enum.reverse(forms, state.finally)})
 
       kw when kw in [:while, :until, :always, :never, :thereis] ->
         case rest do
           [expr | rem_tokens] ->
-            do_parse_loop(rem_tokens, %{state | body: state.body ++ [{kw, expr}]})
+            do_parse_loop(rem_tokens, %{state | body: [{kw, expr} | state.body]})
 
           [] ->
             raise ArgumentError, "loop #{kw} requires an expression"
@@ -175,7 +184,7 @@ defmodule ExLisp.Loop do
           end
 
         {expr, into_var, rem_tokens} = parse_accumulation_expr(rest)
-        do_parse_loop(rem_tokens, %{state | body: state.body ++ [{norm_kw, expr, into_var}]})
+        do_parse_loop(rem_tokens, %{state | body: [{norm_kw, expr, into_var} | state.body]})
 
       kw
       when kw in [
@@ -197,16 +206,16 @@ defmodule ExLisp.Loop do
           end
 
         {expr, into_var, rem_tokens} = parse_accumulation_expr(rest)
-        do_parse_loop(rem_tokens, %{state | body: state.body ++ [{norm_kw, expr, into_var}]})
+        do_parse_loop(rem_tokens, %{state | body: [{norm_kw, expr, into_var} | state.body]})
 
       kw when kw in [:do, :doing] ->
         {forms, rem_tokens} = collect_forms_until_kw(rest)
-        do_parse_loop(rem_tokens, %{state | body: state.body ++ [{:do, forms}]})
+        do_parse_loop(rem_tokens, %{state | body: [{:do, forms} | state.body]})
 
       :return ->
         case rest do
           [expr | rem_tokens] ->
-            do_parse_loop(rem_tokens, %{state | body: state.body ++ [{:return, expr}]})
+            do_parse_loop(rem_tokens, %{state | body: [{:return, expr} | state.body]})
 
           [] ->
             raise ArgumentError, "loop return requires an expression"
@@ -214,15 +223,15 @@ defmodule ExLisp.Loop do
 
       kw when kw in [:when, :if] ->
         {clause, rem_tokens} = parse_conditional(:when, rest)
-        do_parse_loop(rem_tokens, %{state | body: state.body ++ [clause]})
+        do_parse_loop(rem_tokens, %{state | body: [clause | state.body]})
 
       :unless ->
         {clause, rem_tokens} = parse_conditional(:unless, rest)
-        do_parse_loop(rem_tokens, %{state | body: state.body ++ [clause]})
+        do_parse_loop(rem_tokens, %{state | body: [clause | state.body]})
 
       _other ->
         # Treat non-keyword expressions as do clauses
-        do_parse_loop(rest, %{state | body: state.body ++ [{:do, [node]}]})
+        do_parse_loop(rest, %{state | body: [{:do, [node]} | state.body]})
     end
   end
 
@@ -753,6 +762,20 @@ defmodule ExLisp.Loop do
     # Determine accumulators and special termination values
     acc_info = analyze_accumulators(parsed.body)
 
+    acc_info =
+      if parsed.finally == [] do
+        acc_info
+      else
+        %{
+          acc_info
+          | vars:
+              Map.new(acc_info.vars, fn
+                {name, :collect} -> {name, :mixed}
+                pair -> pair
+              end)
+        }
+      end
+
     # Initialize loop variables and state
     {init_bindings, loop_params, loop_inits, step_updates, end_checks, var_bindings} =
       build_for_machinery(parsed.for)
@@ -908,7 +931,19 @@ defmodule ExLisp.Loop do
         {kw, _expr, into_var}
         when kw in [:collect, :append, :nconc, :sum, :count, :maximize, :minimize] ->
           var_name = into_var || :__default_acc__
-          %{acc | types: Enum.uniq([kw | acc.types]), vars: Map.put(acc.vars, var_name, kw)}
+
+          accumulator_type =
+            case Map.get(acc.vars, var_name) do
+              nil -> kw
+              ^kw -> kw
+              _ -> :mixed
+            end
+
+          %{
+            acc
+            | types: Enum.uniq([kw | acc.types]),
+              vars: Map.put(acc.vars, var_name, accumulator_type)
+          }
 
         {:conditional, _type, _test, then_clauses, else_clauses} ->
           sub = analyze_accumulators(then_clauses ++ else_clauses)
@@ -916,7 +951,11 @@ defmodule ExLisp.Loop do
           %{
             acc
             | types: Enum.uniq(acc.types ++ sub.types),
-              vars: Map.merge(acc.vars, sub.vars),
+              vars:
+                Map.merge(acc.vars, sub.vars, fn
+                  _name, type, type -> type
+                  _name, _left, _right -> :mixed
+                end),
               special: acc.special || sub.special
           }
 
@@ -953,7 +992,7 @@ defmodule ExLisp.Loop do
           Enum.map(vars_list, fn {var_name, kw} ->
             init_val =
               case kw do
-                k when k in [:collect, :append, :nconc] -> {:quoted, {1, 1}, []}
+                k when k in [:collect, :append, :nconc, :mixed] -> {:quoted, {1, 1}, []}
                 k when k in [:sum, :count] -> int_node(0)
                 _ -> lit_node(nil)
               end
@@ -975,7 +1014,13 @@ defmodule ExLisp.Loop do
         # Return value
         default_var =
           if Map.has_key?(acc_info.vars, :__default_acc__) do
-            symbol_node(:__default_acc__)
+            accumulator = symbol_node(:__default_acc__)
+
+            if Map.get(acc_info.vars, :__default_acc__) == :collect do
+              {:list, {1, 1}, [symbol_node(:reverse), accumulator]}
+            else
+              accumulator
+            end
           else
             lit_node(nil)
           end
@@ -1549,7 +1594,13 @@ defmodule ExLisp.Loop do
            ] ->
         acc_var_name = into_var || :__default_acc__
         acc_sym = if is_atom(acc_var_name), do: symbol_node(acc_var_name), else: acc_var_name
-        next_acc_val = build_acc_step(accum_kw, acc_sym, expr)
+
+        next_acc_val =
+          if accum_kw == :collect and Map.get(acc_info.vars, acc_var_name) == :collect do
+            build_acc_step(:reverse_collect, acc_sym, expr)
+          else
+            build_acc_step(accum_kw, acc_sym, expr)
+          end
 
         # Wrap remaining steps with new acc_sym
         rest_expr =
@@ -1624,6 +1675,10 @@ defmodule ExLisp.Loop do
 
   defp build_acc_step(:collect, acc_sym, expr) do
     {:list, {1, 1}, [symbol_node(:append), acc_sym, {:list, {1, 1}, [symbol_node(:list), expr]}]}
+  end
+
+  defp build_acc_step(:reverse_collect, acc_sym, expr) do
+    {:list, {1, 1}, [symbol_node(:cons), expr, acc_sym]}
   end
 
   defp build_acc_step(:append, acc_sym, expr) do
