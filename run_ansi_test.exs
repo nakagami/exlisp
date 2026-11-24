@@ -611,6 +611,19 @@ Enum.each(functions_to_compile, fn f ->
   end
 end)
 
+ansi_harness_helpers = ["%values_equal", "%normalize_expected_val"]
+previous_package = ExLisp.Package.current_package()
+ExLisp.Package.set_current_package("COMMON-LISP-USER")
+
+try do
+  Enum.each(ansi_harness_helpers, fn name ->
+    qualified_name = :"cl-test.#{name}"
+    ExLisp.Env.put_fun(String.to_atom(name), ExLisp.Env.get_fun(qualified_name))
+  end)
+after
+  ExLisp.Package.set_current_package(previous_package)
+end
+
 cli_args = System.argv()
 
 parse_env_int = fn name, default, minimum ->
@@ -655,6 +668,8 @@ target_suites =
   |> Enum.filter(fn {_suite, index} -> rem(index, shard_count) == shard_index end)
   |> Enum.map(&elem(&1, 0))
 
+compiled_suites = MapSet.new(["NTH"])
+
 IO.puts(
   "Running #{length(target_suites)} ANSI-TEST suites " <>
     "(shard #{shard_index + 1}/#{shard_count})."
@@ -676,18 +691,24 @@ total_failed =
     ExLisp.Package.set_current_package("CL-TEST")
 
     File.cd!(Path.join(ansi_test_dir, "sandbox"), fn ->
-      full_path
-      |> File.read!()
-      |> ExLisp.Reader.split_expressions()
-      |> Enum.each(fn source ->
-        ExLisp.MutableCons.reset()
+      source = File.read!(full_path)
 
-        try do
-          source |> ExLisp.LispParser.parse!() |> LispBeam.evaluate_ast()
-        after
-          ExLisp.Package.set_current_package("CL-TEST")
-        end
-      end)
+      if MapSet.member?(compiled_suites, name) do
+        module = Module.concat([ExLisp, :ANSI, :"Compiled#{name}"])
+        ExLisp.Compiler.compile_string(source, module: module, execute_top_level: true)
+      else
+        source
+        |> ExLisp.Reader.split_expressions()
+        |> Enum.each(fn form ->
+          ExLisp.MutableCons.reset()
+
+          try do
+            form |> ExLisp.LispParser.parse!() |> LispBeam.evaluate_ast()
+          after
+            ExLisp.Package.set_current_package("CL-TEST")
+          end
+        end)
+      end
     end)
 
     ExLisp.Package.set_current_package("CL-TEST")

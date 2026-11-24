@@ -53,11 +53,7 @@ defmodule ExLisp.Compiler do
 
         # Top-level execution (run/0)
         if execute_top_level do
-          try do
-            apply(module_name, :run, [])
-          rescue
-            _ -> :ok
-          end
+          apply(module_name, :run, [])
         end
 
         if write_beam and output_dir do

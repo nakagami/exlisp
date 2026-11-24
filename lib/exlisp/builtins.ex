@@ -263,7 +263,11 @@ defmodule ExLisp.Builtins do
         ExLisp.Package.set_current_package(package)
         fun.(norm_args)
       after
-        ExLisp.Package.set_current_package(previous)
+        if ExLisp.Package.find_package(previous) do
+          ExLisp.Package.set_current_package(previous)
+        else
+          ExLisp.Package.set_current_package(package)
+        end
       end
     else
       fun.(norm_args)
@@ -300,6 +304,22 @@ defmodule ExLisp.Builtins do
 
           ExLisp.Env.has_fun?(down_sym) ->
             ExLisp.Env.call_fun(down_sym, mapped_args)
+
+          macro_callsite = Process.get(:exlisp_macro_callsite_package) ->
+            callsite_name =
+              macro_callsite
+              |> to_string()
+              |> String.downcase()
+              |> String.replace("_", "-")
+
+            qualified_name = :"#{callsite_name}.#{down_sym}"
+
+            if ExLisp.Env.has_fun?(qualified_name) do
+              ExLisp.Env.call_fun(qualified_name, mapped_args)
+            else
+              raise RuntimeError,
+                    "Undefined function: #{inspect(sym)} (package #{ExLisp.Package.current_package()}, macro callsite #{inspect(macro_callsite)})"
+            end
 
           true ->
             raise RuntimeError,
@@ -3577,18 +3597,24 @@ defmodule ExLisp.Builtins do
             true -> :eql
           end
 
+        list = list || []
         item_key = if key_fn, do: invoke_fn(key_fn, [item]), else: item
 
         found =
-          Enum.any?(list || [], fn elem ->
-            elem_key = if key_fn, do: invoke_fn(key_fn, [elem]), else: elem
-            test_match?(test_fn, item_key, elem_key)
-          end)
+          if key_fn == nil and test_fn == :eql and eql_hashable?(item) and
+               Enum.all?(list, &eql_hashable?/1) do
+            MapSet.member?(MapSet.new(list), item_key)
+          else
+            Enum.any?(list, fn elem ->
+              elem_key = if key_fn, do: invoke_fn(key_fn, [elem]), else: elem
+              test_match?(test_fn, item_key, elem_key)
+            end)
+          end
 
         if found do
           list
         else
-          [item | list || []]
+          [item | list]
         end
 
       [_, other | _] ->
@@ -3625,17 +3651,26 @@ defmodule ExLisp.Builtins do
         l1 = if is_list(list1), do: list1, else: []
         l2 = if is_list(list2), do: list2, else: []
 
-        Enum.reduce(l1, l2, fn elem, acc ->
-          target_key = if key_fn, do: invoke_fn(key_fn, [elem]), else: elem
+        if key_fn == nil and test_fn == :eql and Enum.all?(l1, &eql_hashable?/1) and
+             Enum.all?(l2, &eql_hashable?/1) do
+          l2_set = MapSet.new(l2)
 
-          exists =
-            Enum.any?(l2, fn x ->
-              k_val = if key_fn, do: invoke_fn(key_fn, [x]), else: x
-              test_match?(test_fn, target_key, k_val)
-            end)
+          Enum.reduce(l1, l2, fn elem, acc ->
+            if MapSet.member?(l2_set, elem), do: acc, else: [elem | acc]
+          end)
+        else
+          Enum.reduce(l1, l2, fn elem, acc ->
+            target_key = if key_fn, do: invoke_fn(key_fn, [elem]), else: elem
 
-          if exists, do: acc, else: [elem | acc]
-        end)
+            exists =
+              Enum.any?(l2, fn x ->
+                k_val = if key_fn, do: invoke_fn(key_fn, [x]), else: x
+                test_match?(test_fn, target_key, k_val)
+              end)
+
+            if exists, do: acc, else: [elem | acc]
+          end)
+        end
 
       _ ->
         raise ArgumentError, "union requires at least 2 arguments"
@@ -3742,27 +3777,36 @@ defmodule ExLisp.Builtins do
         l1 = if is_list(list1), do: list1, else: []
         l2 = if is_list(list2), do: list2, else: []
 
-        diff1 =
-          Enum.filter(l1, fn elem ->
-            target_key = if key_fn, do: invoke_fn(key_fn, [elem]), else: elem
+        if key_fn == nil and test_fn == :eql and Enum.all?(l1, &eql_hashable?/1) and
+             Enum.all?(l2, &eql_hashable?/1) do
+          l1_set = MapSet.new(l1)
+          l2_set = MapSet.new(l2)
 
-            not Enum.any?(l2, fn x ->
-              k_val = if key_fn, do: invoke_fn(key_fn, [x]), else: x
-              test_match?(test_fn, target_key, k_val)
+          Enum.reject(l1, &MapSet.member?(l2_set, &1)) ++
+            Enum.reject(l2, &MapSet.member?(l1_set, &1))
+        else
+          diff1 =
+            Enum.filter(l1, fn elem ->
+              target_key = if key_fn, do: invoke_fn(key_fn, [elem]), else: elem
+
+              not Enum.any?(l2, fn x ->
+                k_val = if key_fn, do: invoke_fn(key_fn, [x]), else: x
+                test_match?(test_fn, target_key, k_val)
+              end)
             end)
-          end)
 
-        diff2 =
-          Enum.filter(l2, fn elem ->
-            target_key = if key_fn, do: invoke_fn(key_fn, [elem]), else: elem
+          diff2 =
+            Enum.filter(l2, fn elem ->
+              target_key = if key_fn, do: invoke_fn(key_fn, [elem]), else: elem
 
-            not Enum.any?(l1, fn x ->
-              k_val = if key_fn, do: invoke_fn(key_fn, [x]), else: x
-              test_match?(test_fn, k_val, target_key)
+              not Enum.any?(l1, fn x ->
+                k_val = if key_fn, do: invoke_fn(key_fn, [x]), else: x
+                test_match?(test_fn, k_val, target_key)
+              end)
             end)
-          end)
 
-        diff1 ++ diff2
+          diff1 ++ diff2
+        end
 
       _ ->
         raise ArgumentError, "set-exclusive-or requires at least 2 arguments"
@@ -3789,14 +3833,20 @@ defmodule ExLisp.Builtins do
         l1 = if is_list(list1), do: list1, else: []
         l2 = if is_list(list2), do: list2, else: []
 
-        Enum.all?(l1, fn elem ->
-          target_key = if key_fn, do: invoke_fn(key_fn, [elem]), else: elem
+        if key_fn == nil and test_fn == :eql and Enum.all?(l1, &eql_hashable?/1) and
+             Enum.all?(l2, &eql_hashable?/1) do
+          candidates = MapSet.new(l2)
+          Enum.all?(l1, &MapSet.member?(candidates, &1))
+        else
+          Enum.all?(l1, fn elem ->
+            target_key = if key_fn, do: invoke_fn(key_fn, [elem]), else: elem
 
-          Enum.any?(l2, fn x ->
-            k_val = if key_fn, do: invoke_fn(key_fn, [x]), else: x
-            test_match?(test_fn, target_key, k_val)
+            Enum.any?(l2, fn x ->
+              k_val = if key_fn, do: invoke_fn(key_fn, [x]), else: x
+              test_match?(test_fn, target_key, k_val)
+            end)
           end)
-        end)
+        end
         |> lisp_bool()
 
       _ ->
@@ -6965,11 +7015,7 @@ defmodule ExLisp.Builtins do
   def char_lessp([_]), do: :t
 
   def char_lessp(args) when is_list(args) do
-    args
-    |> Enum.map(&char_upcase/1)
-    |> Enum.chunk_every(2, 1, :discard)
-    |> Enum.all?(fn [a, b] -> a < b end)
-    |> lisp_bool()
+    char_ordered?(args, :lt, :case) |> lisp_bool()
   end
 
   def char_lessp(_c), do: :t
@@ -6979,11 +7025,7 @@ defmodule ExLisp.Builtins do
   def char_greaterp([_]), do: :t
 
   def char_greaterp(args) when is_list(args) do
-    args
-    |> Enum.map(&char_upcase/1)
-    |> Enum.chunk_every(2, 1, :discard)
-    |> Enum.all?(fn [a, b] -> a > b end)
-    |> lisp_bool()
+    char_ordered?(args, :gt, :case) |> lisp_bool()
   end
 
   def char_greaterp(_c), do: :t
@@ -6994,11 +7036,7 @@ defmodule ExLisp.Builtins do
   def char_not_greaterp([_]), do: :t
 
   def char_not_greaterp(args) when is_list(args) do
-    args
-    |> Enum.map(&char_upcase/1)
-    |> Enum.chunk_every(2, 1, :discard)
-    |> Enum.all?(fn [a, b] -> a <= b end)
-    |> lisp_bool()
+    char_ordered?(args, :lte, :case) |> lisp_bool()
   end
 
   def char_not_greaterp(_c), do: :t
@@ -7008,11 +7046,7 @@ defmodule ExLisp.Builtins do
   def char_not_lessp([_]), do: :t
 
   def char_not_lessp(args) when is_list(args) do
-    args
-    |> Enum.map(&char_upcase/1)
-    |> Enum.chunk_every(2, 1, :discard)
-    |> Enum.all?(fn [a, b] -> a >= b end)
-    |> lisp_bool()
+    char_ordered?(args, :gte, :case) |> lisp_bool()
   end
 
   def char_not_lessp(_c), do: :t
@@ -7099,11 +7133,7 @@ defmodule ExLisp.Builtins do
   def char_lt([_]), do: :t
 
   def char_lt(args) when is_list(args) do
-    args
-    |> Enum.map(&char_code/1)
-    |> Enum.chunk_every(2, 1, :discard)
-    |> Enum.all?(fn [a, b] -> a < b end)
-    |> lisp_bool()
+    char_ordered?(args, :lt, :code) |> lisp_bool()
   end
 
   def char_lt(_c), do: :t
@@ -7113,11 +7143,7 @@ defmodule ExLisp.Builtins do
   def char_lte([_]), do: :t
 
   def char_lte(args) when is_list(args) do
-    args
-    |> Enum.map(&char_code/1)
-    |> Enum.chunk_every(2, 1, :discard)
-    |> Enum.all?(fn [a, b] -> a <= b end)
-    |> lisp_bool()
+    char_ordered?(args, :lte, :code) |> lisp_bool()
   end
 
   def char_lte(_c), do: :t
@@ -7127,11 +7153,7 @@ defmodule ExLisp.Builtins do
   def char_gt([_]), do: :t
 
   def char_gt(args) when is_list(args) do
-    args
-    |> Enum.map(&char_code/1)
-    |> Enum.chunk_every(2, 1, :discard)
-    |> Enum.all?(fn [a, b] -> a > b end)
-    |> lisp_bool()
+    char_ordered?(args, :gt, :code) |> lisp_bool()
   end
 
   def char_gt(_c), do: :t
@@ -7141,15 +7163,40 @@ defmodule ExLisp.Builtins do
   def char_gte([_]), do: :t
 
   def char_gte(args) when is_list(args) do
-    args
-    |> Enum.map(&char_code/1)
-    |> Enum.chunk_every(2, 1, :discard)
-    |> Enum.all?(fn [a, b] -> a >= b end)
-    |> lisp_bool()
+    char_ordered?(args, :gte, :code) |> lisp_bool()
   end
 
   def char_gte(_c), do: :t
   def char_gte(c1, c2), do: char_gte([c1, c2])
+
+  defp char_ordered?([], _relation, _mode), do: true
+  defp char_ordered?([_], _relation, _mode), do: true
+
+  defp char_ordered?([first, second | rest], relation, mode) do
+    first = normalize_char_for_compare(first, mode)
+    second = normalize_char_for_compare(second, mode)
+    first_pair_matches = char_relation?(first, second, relation)
+    rest_matches = char_ordered_from?(second, rest, relation, mode)
+
+    first_pair_matches and rest_matches
+  end
+
+  defp char_ordered_from?(_previous, [], _relation, _mode), do: true
+
+  defp char_ordered_from?(previous, [next | rest], relation, mode) do
+    next = normalize_char_for_compare(next, mode)
+    pair_matches = char_relation?(previous, next, relation)
+    rest_matches = char_ordered_from?(next, rest, relation, mode)
+    pair_matches and rest_matches
+  end
+
+  defp normalize_char_for_compare(char, :code), do: char_code(char)
+  defp normalize_char_for_compare(char, :case), do: char_upcase(char)
+
+  defp char_relation?(left, right, :lt), do: left < right
+  defp char_relation?(left, right, :lte), do: left <= right
+  defp char_relation?(left, right, :gt), do: left > right
+  defp char_relation?(left, right, :gte), do: left >= right
 
   defp arity_program_error(name) do
     ExLisp.Condition.error(:program_error, "#{name} requires at least 1 argument")

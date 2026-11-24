@@ -223,19 +223,7 @@ defmodule LispBeam do
             [compile_expr(single, MapSet.new())]
 
           multiple ->
-            Enum.map(multiple, fn ast ->
-              try do
-                expr = compile_expr(ast, MapSet.new())
-
-                {:try, 1, [expr], [],
-                 [
-                   {:clause, 1, [{:tuple, 1, [{:var, 1, :_}, {:var, 1, :_}, {:var, 1, :_}]}], [],
-                    [{:atom, 1, nil}]}
-                 ], []}
-              rescue
-                _ -> {:atom, 1, nil}
-              end
-            end)
+            Enum.map(multiple, &compile_expr(&1, MapSet.new()))
         end
 
       erl_forms = [
@@ -6812,12 +6800,7 @@ defmodule LispBeam do
             lisp_args = Enum.map(args, &ExLisp.Macro.ast_to_lisp_data/1)
             lisp_whole = ExLisp.Macro.ast_to_lisp_data(ast)
 
-            expanded_data =
-              if is_function(macro_fun, 2) do
-                macro_fun.(lisp_args, lisp_whole)
-              else
-                macro_fun.(lisp_args)
-              end
+            expanded_data = invoke_macro_function(macro_fun, lisp_args, lisp_whole)
 
             expanded_ast = ExLisp.Macro.lisp_data_to_ast(expanded_data, line)
             expand_local_macros(expanded_ast, local_macros)
@@ -6827,12 +6810,7 @@ defmodule LispBeam do
             lisp_args = Enum.map(args, &ExLisp.Macro.ast_to_lisp_data/1)
             lisp_whole = ExLisp.Macro.ast_to_lisp_data(ast)
 
-            expanded_data =
-              if is_function(macro_fun, 2) do
-                macro_fun.(lisp_args, lisp_whole)
-              else
-                macro_fun.(lisp_args)
-              end
+            expanded_data = invoke_macro_function(macro_fun, lisp_args, lisp_whole)
 
             expanded_ast = ExLisp.Macro.lisp_data_to_ast(expanded_data, line)
             expand_local_macros(expanded_ast, local_macros)
@@ -6878,12 +6856,7 @@ defmodule LispBeam do
         lisp_args = Enum.map(args, &ExLisp.Macro.ast_to_lisp_data/1)
         lisp_whole = ExLisp.Macro.ast_to_lisp_data({:list, 1, [op | args]})
 
-        expanded_lisp_data =
-          if is_function(macro_fun, 2) do
-            macro_fun.(lisp_args, lisp_whole)
-          else
-            macro_fun.(lisp_args)
-          end
+        expanded_lisp_data = invoke_macro_function(macro_fun, lisp_args, lisp_whole)
 
         expanded_ast = ExLisp.Macro.lisp_data_to_ast(expanded_lisp_data)
         compile_expr(expanded_ast, local_env)
@@ -6956,6 +6929,14 @@ defmodule LispBeam do
         end
     end
   end
+
+  defp invoke_macro_function(%ExLisp.Closure{fun: fun}, args, whole), do: fun.([args, whole])
+
+  defp invoke_macro_function(fun, args, whole) when is_function(fun, 2),
+    do: fun.(args, whole)
+
+  defp invoke_macro_function(fun, args, _whole) when is_function(fun, 1),
+    do: fun.(args)
 
   def has_lambda_list_keywords?(params_node) do
     elems =

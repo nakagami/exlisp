@@ -30,6 +30,47 @@ defmodule ExLisp.PackageIterationLogicalPathnameTest do
     assert :visible in ExLisp.Package.find_all_symbols("VISIBLE")
   end
 
+  test "symbol home lookup cache invalidates after package changes" do
+    suffix = System.unique_integer([:positive])
+    first = "CACHE-A-#{suffix}"
+    second = "CACHE-B-#{suffix}"
+    symbol = "CACHED-SYMBOL-#{suffix}"
+    package_a = ExLisp.Package.make_package(first, use: [])
+    package_b = ExLisp.Package.make_package(second, use: [])
+
+    on_exit(fn ->
+      ExLisp.Package.delete_package(first)
+      ExLisp.Package.delete_package(second)
+    end)
+
+    ExLisp.Package.intern(symbol, package_a)
+    ExLisp.Package.intern(symbol, package_b)
+
+    assert [:_values_, [qualified, :internal]] = ExLisp.Package.intern(symbol, package_a)
+
+    expected_symbol = String.downcase(symbol) |> String.replace("-", "_")
+    assert Atom.to_string(qualified) == "#{String.downcase(first)}.#{expected_symbol}"
+  end
+
+  test "closures fall back to their definition package when the caller package is deleted" do
+    name = "DELETED-CALLER-#{System.unique_integer([:positive])}"
+    ExLisp.Package.make_package(name, use: [])
+    ExLisp.Package.set_current_package(name)
+
+    closure =
+      ExLisp.Closure.new(
+        fn _args ->
+          ExLisp.Package.delete_package(name)
+          :ok
+        end,
+        :delete_caller_package,
+        package: "COMMON-LISP-USER"
+      )
+
+    assert ExLisp.Builtins.invoke_fn(closure, []) == :ok
+    assert ExLisp.Package.current_package() == "COMMON-LISP-USER"
+  end
+
   test "logical pathnames retain hosts and apply translations" do
     pathname = ExLisp.Pathname.pathname("SYS:SRC;**;*.LISP")
 

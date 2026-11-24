@@ -10,6 +10,16 @@ defmodule ExLisp.SequencesAndListsTest do
     assert ExLisp.eval("(subsetp '(1 4) '(1 2 3))") == nil
   end
 
+  test "EQL set fast paths preserve numeric identity and custom predicates" do
+    assert ExLisp.eval("(eql (car (adjoin 1.0 '(1))) 1.0)") == :t
+    assert ExLisp.eval("(length (union '(1 2 3) '(3 4 5)))") == 5
+    assert ExLisp.eval("(set-exclusive-or '(1 2.0 3) '(1 2 4.0))") == [2.0, 3, 2, 4.0]
+    assert ExLisp.eval("(subsetp '(2 4) '(1 2 3 4))") == :t
+
+    assert ExLisp.eval("(union '(1 3) '(2 4) :test (lambda (a b) (= (mod a 2) (mod b 2))))") ==
+             [3, 1, 2, 4]
+  end
+
   test "association list operations: assoc-if, rassoc-if, copy-alist" do
     assert ExLisp.eval("(assoc-if #'evenp '((1 . a) (2 . b) (3 . c)))") == [2 | :b]
     assert ExLisp.eval("(rassoc-if #'oddp '((a . 2) (b . 3) (c . 4)))") == [:b | 3]
@@ -41,6 +51,9 @@ defmodule ExLisp.SequencesAndListsTest do
     assert ExLisp.eval("(copy-seq '(1 2 3))") == [1, 2, 3]
     assert ExLisp.eval("(copy-seq \"abc\")") == "abc"
     assert ExLisp.eval("(array-element-type \"abc\")") == :character
-    assert ExLisp.eval("(let ((a (make-array 3 :element-type 'base-char :initial-contents '(#\\a #\\b #\\c)))) (array-element-type (copy-seq a)))") == :base_char
+
+    assert ExLisp.eval(
+             "(let ((a (make-array 3 :element-type 'base-char :initial-contents '(#\\a #\\b #\\c)))) (array-element-type (copy-seq a)))"
+           ) == :base_char
   end
 end

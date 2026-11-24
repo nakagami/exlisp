@@ -21,6 +21,8 @@ defmodule ExLisp.Package do
             symbol_values: %{}
 
   @table :lisp_packages_table
+  @revision_key :exlisp_package_revision
+  @home_count_cache_key :exlisp_symbol_home_count_cache
   @missing_cl_exports [
     "**",
     "***",
@@ -1464,6 +1466,7 @@ defmodule ExLisp.Package do
   defp save_package(%ExLisp.Package{name: name, nicknames: nicks} = pkg) do
     :ets.insert(@table, {name, pkg})
     Enum.each(nicks, fn n -> :ets.insert(@table, {n, pkg}) end)
+    bump_revision()
     ExLisp.Env.invalidate_resolution_cache()
   end
 
@@ -1917,6 +1920,7 @@ defmodule ExLisp.Package do
           end
         end)
 
+        bump_revision()
         ExLisp.Env.invalidate_resolution_cache()
         :t
     end
@@ -2975,11 +2979,33 @@ defmodule ExLisp.Package do
   end
 
   defp symbol_home_count(name, _source_pkg) do
-    list_all_packages()
-    |> Enum.count(fn package ->
-      MapSet.member?(package.internal_symbols, name) or
-        MapSet.member?(package.external_symbols, name)
-    end)
+    revision = :persistent_term.get(@revision_key, 0)
+
+    {^revision, counts} =
+      case Process.get(@home_count_cache_key) do
+        {^revision, cached_counts} -> {revision, cached_counts}
+        _ -> {revision, %{}}
+      end
+
+    case Map.fetch(counts, name) do
+      {:ok, count} ->
+        count
+
+      :error ->
+        count =
+          list_all_packages()
+          |> Enum.count(fn package ->
+            MapSet.member?(package.internal_symbols, name) or
+              MapSet.member?(package.external_symbols, name)
+          end)
+
+        Process.put(@home_count_cache_key, {revision, Map.put(counts, name, count)})
+        count
+    end
+  end
+
+  defp bump_revision do
+    :persistent_term.put(@revision_key, System.unique_integer([:positive, :monotonic]))
   end
 
   defp add_inherited_sources(pkg, names) do

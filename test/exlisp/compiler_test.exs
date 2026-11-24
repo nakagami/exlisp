@@ -35,6 +35,16 @@ defmodule ExLisp.CompilerTest do
       assert apply(TestModuleCompiled, :has_var, [:base])
       refute apply(TestModuleCompiled, :has_var, [:unknown])
     end
+
+    test "does not hide exceptions from top-level execution" do
+      assert_raise RuntimeError, ~r/top-level failure/, fn ->
+        Compiler.compile_string(
+          ~s[(error "top-level failure")],
+          module: FailingTopLevelModule,
+          write_beam: false
+        )
+      end
+    end
   end
 
   describe "compile_file/2 and file output" do
@@ -97,6 +107,24 @@ defmodule ExLisp.CompilerTest do
   end
 
   describe "Common Lisp compile and compiled-function-p" do
+    test "compiles calls to closure-backed Lisp macros" do
+      ExLisp.eval("""
+      (defmacro double-expression (form)
+        `(+ ,form ,form))
+      """)
+
+      ast = ExLisp.LispParser.parse!("(double-expression 21)")
+      assert LispBeam.compile_and_eval_asts([ast]) == 42
+    end
+
+    test "propagates exceptions raised by compiled expressions" do
+      ast = ExLisp.LispParser.parse!("(error \"compile probe\")")
+
+      assert_raise RuntimeError, ~r/compile probe/, fn ->
+        LispBeam.compile_and_eval_asts([ast, {:lit, :unreachable}])
+      end
+    end
+
     test "compiles lambda directly to BEAM code" do
       ExLisp.eval("(defparameter *fn* (compile nil '(lambda (x) (* x 3))))")
       assert ExLisp.eval("(funcall *fn* 7)") == 21
