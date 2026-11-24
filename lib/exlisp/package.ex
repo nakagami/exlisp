@@ -1680,13 +1680,19 @@ defmodule ExLisp.Package do
   def find_all_symbols(name_designator) do
     name = symbol_to_str(name_designator)
 
-    list_all_packages()
-    |> Enum.flat_map(fn pkg ->
-      package_iterator_entries(pkg, [:internal, :external])
-      |> Enum.filter(fn {symbol, _status, _package} -> symbol_to_str(symbol) == name end)
-      |> Enum.map(&elem(&1, 0))
+    Enum.flat_map(list_all_packages(), fn pkg ->
+      present_symbols =
+        if pkg.name == "KEYWORD" do
+          MapSet.union(pkg.internal_symbols, pkg.external_symbols)
+        else
+          MapSet.union(
+            MapSet.difference(pkg.internal_symbols, pkg.external_symbols),
+            pkg.external_symbols
+          )
+        end
+
+      if MapSet.member?(present_symbols, name), do: [symbol_in_package(name, pkg)], else: []
     end)
-    |> Enum.uniq()
   end
 
   @doc """

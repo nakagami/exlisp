@@ -37,11 +37,21 @@ defmodule ExLisp.Builtins do
     val != nil and val != false and val != []
   end
 
+  defp eql_hashable?(value) when is_atom(value) or is_number(value), do: true
+  defp eql_hashable?(%ExLisp.Character{}), do: true
+  defp eql_hashable?(%ExLisp.Ratio{}), do: true
+  defp eql_hashable?({:complex, _real, _imaginary}), do: true
+  defp eql_hashable?(_value), do: false
+
   defp stable_binary_copy(binary) do
     binary
     |> :binary.copy(2)
     |> :binary.part(0, Kernel.byte_size(binary))
   end
+
+  defp list_elt([value | _tail], 0), do: {:ok, value}
+  defp list_elt([_value | tail], index) when index > 0, do: list_elt(tail, index - 1)
+  defp list_elt(_list, _index), do: :error
 
   @doc """
   Converts an Elixir boolean into a Lisp boolean (:t or nil).
@@ -3652,14 +3662,20 @@ defmodule ExLisp.Builtins do
         l1 = if is_list(list1), do: list1, else: []
         l2 = if is_list(list2), do: list2, else: []
 
-        Enum.filter(l1, fn elem ->
-          target_key = if key_fn, do: invoke_fn(key_fn, [elem]), else: elem
+        if key_fn == nil and test_fn == :eql and Enum.all?(l1, &eql_hashable?/1) and
+             Enum.all?(l2, &eql_hashable?/1) do
+          candidates = MapSet.new(l2)
+          Enum.filter(l1, &MapSet.member?(candidates, &1))
+        else
+          Enum.filter(l1, fn elem ->
+            target_key = if key_fn, do: invoke_fn(key_fn, [elem]), else: elem
 
-          Enum.any?(l2, fn x ->
-            k_val = if key_fn, do: invoke_fn(key_fn, [x]), else: x
-            test_match?(test_fn, target_key, k_val)
+            Enum.any?(l2, fn x ->
+              k_val = if key_fn, do: invoke_fn(key_fn, [x]), else: x
+              test_match?(test_fn, target_key, k_val)
+            end)
           end)
-        end)
+        end
 
       _ ->
         raise ArgumentError, "intersection requires at least 2 arguments"
@@ -3686,14 +3702,20 @@ defmodule ExLisp.Builtins do
         l1 = if is_list(list1), do: list1, else: []
         l2 = if is_list(list2), do: list2, else: []
 
-        Enum.filter(l1, fn elem ->
-          target_key = if key_fn, do: invoke_fn(key_fn, [elem]), else: elem
+        if key_fn == nil and test_fn == :eql and Enum.all?(l1, &eql_hashable?/1) and
+             Enum.all?(l2, &eql_hashable?/1) do
+          exclusions = MapSet.new(l2)
+          Enum.reject(l1, &MapSet.member?(exclusions, &1))
+        else
+          Enum.filter(l1, fn elem ->
+            target_key = if key_fn, do: invoke_fn(key_fn, [elem]), else: elem
 
-          not Enum.any?(l2, fn x ->
-            k_val = if key_fn, do: invoke_fn(key_fn, [x]), else: x
-            test_match?(test_fn, target_key, k_val)
+            not Enum.any?(l2, fn x ->
+              k_val = if key_fn, do: invoke_fn(key_fn, [x]), else: x
+              test_match?(test_fn, target_key, k_val)
+            end)
           end)
-        end)
+        end
 
       _ ->
         raise ArgumentError, "set-difference requires at least 2 arguments"
@@ -7635,13 +7657,15 @@ defmodule ExLisp.Builtins do
   end
 
   def elt(list, index) when is_list(list) and is_integer(index) do
-    if index < 0 or index >= Kernel.length(list) do
-      ExLisp.Condition.error(:type_error,
-        datum: index,
-        expected_type: [:integer, 0, Kernel.length(list) - 1]
-      )
-    else
-      Enum.at(list, index)
+    case list_elt(list, index) do
+      {:ok, value} ->
+        value
+
+      :error ->
+        ExLisp.Condition.error(:type_error,
+          datum: index,
+          expected_type: [:integer, 0, Kernel.length(list) - 1]
+        )
     end
   end
 
@@ -7679,13 +7703,15 @@ defmodule ExLisp.Builtins do
   end
 
   def set_elt(list, index, val) when is_list(list) and is_integer(index) do
-    if index < 0 or index >= Kernel.length(list) do
-      ExLisp.Condition.error(:type_error,
-        datum: index,
-        expected_type: [:integer, 0, Kernel.length(list) - 1]
-      )
-    else
-      List.replace_at(list, index, val)
+    case list_replace_at(list, index, val) do
+      {:ok, replacement} ->
+        replacement
+
+      :error ->
+        ExLisp.Condition.error(:type_error,
+          datum: index,
+          expected_type: [:integer, 0, Kernel.length(list) - 1]
+        )
     end
   end
 
@@ -7712,6 +7738,17 @@ defmodule ExLisp.Builtins do
   def set_elt(seq, _index, _val) do
     raise RuntimeError, "Invalid sequence for set_elt: #{inspect(seq)}"
   end
+
+  defp list_replace_at([_value | tail], 0, replacement), do: {:ok, [replacement | tail]}
+
+  defp list_replace_at([value | tail], index, replacement) when index > 0 do
+    case list_replace_at(tail, index - 1, replacement) do
+      {:ok, updated_tail} -> {:ok, [value | updated_tail]}
+      :error -> :error
+    end
+  end
+
+  defp list_replace_at(_list, _index, _replacement), do: :error
 
   def arrayp([arr]), do: arrayp(arr)
   def arrayp({:array, _, _}), do: :t

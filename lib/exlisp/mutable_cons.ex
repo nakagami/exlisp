@@ -123,7 +123,7 @@ defmodule ExLisp.MutableCons do
       raise ArgumentError, "index #{index} is outside the list"
     end
 
-    register(cons, current, replacement)
+    register_root(cons, replacement)
     replacement
   end
 
@@ -160,6 +160,14 @@ defmodule ExLisp.MutableCons do
       {{scope, current}, replacement}
     ])
 
+    replacement
+  end
+
+  defp register_root(original, replacement) do
+    ensure_table()
+    scope = scope()
+    mark_active(scope)
+    :ets.insert(@table, {{scope, original}, replacement})
     replacement
   end
 

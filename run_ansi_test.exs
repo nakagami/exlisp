@@ -583,8 +583,6 @@ ExLisp.Env.put_fun(:has_non_abort_restart, fn condition ->
 end)
 
 functions_to_compile = [
-  "%values-equal",
-  "%normalize-expected-val",
   "subseq-equalp",
   "search-check",
   "remove-check",
@@ -593,7 +591,16 @@ functions_to_compile = [
   "subseq-check",
   "substitute-check",
   "make-random-element",
-  "make-random-remove-input"
+  "make-random-remove-input",
+  "make-int-list",
+  "make-int-array",
+  "nth-1-body",
+  "nintersection-with-check",
+  "nintersection-12-body",
+  "do-random-intersections",
+  "do-random-set-differences",
+  "elt-v-6-body",
+  "elt-adj-array-6-body"
 ]
 
 Enum.each(functions_to_compile, fn f ->
@@ -666,6 +673,7 @@ total_failed =
     IO.puts("Loading #{name} (#{full_path})...")
     ExLisp.MutableCons.reset()
     ExLisp.eval("(reset-test-stats)")
+    ExLisp.Package.set_current_package("CL-TEST")
 
     File.cd!(Path.join(ansi_test_dir, "sandbox"), fn ->
       full_path
@@ -673,10 +681,16 @@ total_failed =
       |> ExLisp.Reader.split_expressions()
       |> Enum.each(fn source ->
         ExLisp.MutableCons.reset()
-        source |> ExLisp.LispParser.parse!() |> LispBeam.evaluate_ast()
+
+        try do
+          source |> ExLisp.LispParser.parse!() |> LispBeam.evaluate_ast()
+        after
+          ExLisp.Package.set_current_package("CL-TEST")
+        end
       end)
     end)
 
+    ExLisp.Package.set_current_package("CL-TEST")
     ExLisp.eval("(print-test-summary \"#{name}\")")
     failed = ExLisp.eval("*test-failed-count*")
     elapsed_seconds = (System.monotonic_time(:millisecond) - suite_started_at) / 1000
