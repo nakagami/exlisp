@@ -6,6 +6,10 @@ defmodule ExLisp.Env do
 
   @history_table :exlisp_history
   @keywords_table :exlisp_keywords
+  @fun_revision_key :exlisp_fun_revision
+  @fun_cache_key :exlisp_fun_resolution_cache
+  @macro_revision_key :exlisp_macro_revision
+  @macro_cache_key :exlisp_macro_resolution_cache
 
   @doc """
   Prepares the ETS history table and verifies code paths for compiled BEAM modules (initial run only).
@@ -107,6 +111,8 @@ defmodule ExLisp.Env do
     end
 
     ExLisp.CLOS.reset()
+    bump_fun_revision()
+    bump_macro_revision()
 
     :ok
   end
@@ -683,6 +689,7 @@ defmodule ExLisp.Env do
         :persistent_term.put({:exlisp_fun, u_name}, fun)
     end
 
+    bump_fun_revision()
     fun_name
   end
 
@@ -715,53 +722,9 @@ defmodule ExLisp.Env do
   def get_fun(name) do
     fun_name = normalize_name(name)
 
-    case :persistent_term.get({:exlisp_fun, fun_name}, :__not_found__) do
-      :__not_found__ ->
-        candidates = namespaced_lookup_candidates(fun_name)
-
-        found_fun =
-          Enum.find_value(candidates, fn cand ->
-            case :persistent_term.get({:exlisp_fun, cand}, :__not_found__) do
-              :__not_found__ -> nil
-              f -> f
-            end
-          end)
-
-        case found_fun do
-          nil ->
-            case Enum.find_value(candidates, fn cand ->
-                   case lookup_global_module_fun(cand) do
-                     {:ok, f} -> f
-                     :error -> nil
-                   end
-                 end) do
-              nil ->
-                case Enum.find_value(candidates, fn cand ->
-                       case BuiltinFunction.visible_canonical_name(cand) do
-                         {:ok, canonical} ->
-                           ExLisp.Closure.new(
-                             fn args -> ExLisp.Builtins.dispatch_builtin(canonical, args) end,
-                             canonical
-                           )
-
-                         :error ->
-                           nil
-                       end
-                     end) do
-                  nil -> raise RuntimeError, "Undefined function: #{fun_name}"
-                  builtin_closure -> builtin_closure
-                end
-
-              mod_fun ->
-                mod_fun
-            end
-
-          fun ->
-            fun
-        end
-
-      fun ->
-        fun
+    case find_fun(fun_name) do
+      nil -> raise RuntimeError, "Undefined function: #{fun_name}"
+      fun -> fun
     end
   end
 
@@ -783,8 +746,31 @@ defmodule ExLisp.Env do
     end
   end
 
+  def invalidate_global_module_cache(mod \\ ExLisp.Global) do
+    Process.delete({:exlisp_global_module_loaded, mod})
+    bump_fun_revision()
+    :ok
+  end
+
+  def invalidate_resolution_cache do
+    bump_fun_revision()
+    bump_macro_revision()
+    :ok
+  end
+
   defp global_module_loaded?(mod) do
-    match?({:file, _}, :code.is_loaded(mod))
+    cache_key = {:exlisp_global_module_loaded, mod}
+    revision = :persistent_term.get(@fun_revision_key, 0)
+
+    case Process.get(cache_key) do
+      {^revision, loaded?} ->
+        loaded?
+
+      _ ->
+        loaded? = match?({:file, _}, :code.is_loaded(mod))
+        Process.put(cache_key, {revision, loaded?})
+        loaded?
+    end
   end
 
   @doc """
@@ -832,23 +818,59 @@ defmodule ExLisp.Env do
   """
   def has_fun?(name) do
     fun_name = normalize_name(name)
+    find_fun(fun_name) != nil
+  end
 
-    if :persistent_term.get({:exlisp_fun, fun_name}, :__not_found__) != :__not_found__ do
-      true
-    else
-      candidates = namespaced_lookup_candidates(fun_name)
+  defp find_fun(fun_name) do
+    revision = :persistent_term.get(@fun_revision_key, 0)
+    package = ExLisp.Package.current_package()
+    callsite = Process.get(:exlisp_macro_callsite_package)
+    cache_key = {fun_name, package, callsite}
+    cache = current_revision_cache(@fun_cache_key, revision)
 
-      Enum.any?(candidates, fn cand ->
-        if :persistent_term.get({:exlisp_fun, cand}, :__not_found__) != :__not_found__ do
-          true
-        else
-          case lookup_global_module_fun(cand) do
-            {:ok, _} -> true
-            :error -> BuiltinFunction.visible_builtin?(cand)
-          end
-        end
-      end)
+    case Map.fetch(cache, cache_key) do
+      {:ok, found} ->
+        found
+
+      :error ->
+        candidates = [fun_name | namespaced_lookup_candidates(fun_name)] |> Enum.uniq()
+
+        found =
+          Enum.find_value(candidates, fn cand ->
+            case :persistent_term.get({:exlisp_fun, cand}, :__not_found__) do
+              :__not_found__ -> nil
+              fun -> fun
+            end
+          end) ||
+            Enum.find_value(candidates, fn cand ->
+              case lookup_global_module_fun(cand) do
+                {:ok, fun} -> fun
+                :error -> nil
+              end
+            end) ||
+            Enum.find_value(candidates, fn cand ->
+              case BuiltinFunction.visible_canonical_name(cand) do
+                {:ok, canonical} ->
+                  ExLisp.Closure.new(
+                    fn args -> ExLisp.Builtins.dispatch_builtin(canonical, args) end,
+                    canonical
+                  )
+
+                :error ->
+                  nil
+              end
+            end)
+
+        Process.put(@fun_cache_key, {revision, Map.put(cache, cache_key, found)})
+        found
     end
+  end
+
+  defp bump_fun_revision do
+    :persistent_term.put(
+      @fun_revision_key,
+      :persistent_term.get(@fun_revision_key, 0) + 1
+    )
   end
 
   @doc """
@@ -919,6 +941,7 @@ defmodule ExLisp.Env do
       _ -> :ok
     end
 
+    bump_fun_revision()
     :ok
   end
 
@@ -972,6 +995,7 @@ defmodule ExLisp.Env do
         :persistent_term.put({:exlisp_macro, u_name}, macro_fun)
     end
 
+    bump_macro_revision()
     macro_name
   end
 
@@ -981,28 +1005,9 @@ defmodule ExLisp.Env do
   def get_macro(name) do
     macro_name = normalize_name(name)
 
-    case :persistent_term.get({:exlisp_macro, macro_name}, :__not_found__) do
-      :__not_found__ ->
-        candidates = namespaced_lookup_candidates(macro_name)
-
-        found_macro =
-          Enum.find_value(candidates, fn cand ->
-            case :persistent_term.get({:exlisp_macro, cand}, :__not_found__) do
-              :__not_found__ -> nil
-              m -> m
-            end
-          end)
-
-        case found_macro do
-          nil ->
-            raise RuntimeError, "Undefined macro: #{macro_name}"
-
-          macro_fun ->
-            macro_fun
-        end
-
-      macro_fun ->
-        macro_fun
+    case find_macro(macro_name) do
+      nil -> raise RuntimeError, "Undefined macro: #{macro_name}"
+      macro_fun -> macro_fun
     end
   end
 
@@ -1011,15 +1016,52 @@ defmodule ExLisp.Env do
   """
   def has_macro?(name) do
     macro_name = normalize_name(name)
+    find_macro(macro_name) != nil
+  end
 
-    if :persistent_term.get({:exlisp_macro, macro_name}, :__not_found__) != :__not_found__ do
-      true
-    else
-      candidates = namespaced_lookup_candidates(macro_name)
+  defp find_macro(macro_name) do
+    revision = :persistent_term.get(@macro_revision_key, 0)
+    package = ExLisp.Package.current_package()
+    callsite = Process.get(:exlisp_macro_callsite_package)
+    cache_key = {macro_name, package, callsite}
+    cache = current_revision_cache(@macro_cache_key, revision)
 
-      Enum.any?(candidates, fn cand ->
-        :persistent_term.get({:exlisp_macro, cand}, :__not_found__) != :__not_found__
-      end)
+    case Map.fetch(cache, cache_key) do
+      {:ok, found} ->
+        found
+
+      :error ->
+        found =
+          case :persistent_term.get({:exlisp_macro, macro_name}, nil) do
+            nil ->
+              namespaced_lookup_candidates(macro_name)
+              |> Enum.find_value(fn cand ->
+                case :persistent_term.get({:exlisp_macro, cand}, :__not_found__) do
+                  :__not_found__ -> nil
+                  macro_fun -> macro_fun
+                end
+              end)
+
+            macro_fun ->
+              macro_fun
+          end
+
+        Process.put(@macro_cache_key, {revision, Map.put(cache, cache_key, found)})
+        found
+    end
+  end
+
+  defp bump_macro_revision do
+    :persistent_term.put(
+      @macro_revision_key,
+      :persistent_term.get(@macro_revision_key, 0) + 1
+    )
+  end
+
+  defp current_revision_cache(cache_key, revision) do
+    case Process.get(cache_key) do
+      {^revision, cache} -> cache
+      _ -> %{}
     end
   end
 
@@ -1467,26 +1509,50 @@ defmodule ExLisp.Env do
   Normalizes symbol names to lowercase atoms.
   """
   def normalize_name(name) when is_atom(name) do
-    case name do
-      :_cl_star_star_ -> :*
-      :_cl_star_star_star_star_ -> :**
-      :_cl_star_star_star_star_star_star_ -> :"***"
-      :_cl_plus_plus_ -> :+
-      :_cl_plus_plus_plus_plus_ -> :++
-      :_cl_plus_plus_plus_plus_plus_plus_ -> :+++
-      _ -> Atom.to_string(name) |> String.downcase() |> String.to_atom()
+    cache_key = {:"$exlisp_env_normalized_name$", name}
+
+    case Process.get(cache_key, :not_cached) do
+      :not_cached ->
+        normalized =
+          case name do
+            :_cl_star_star_ -> :*
+            :_cl_star_star_star_star_ -> :**
+            :_cl_star_star_star_star_star_star_ -> :"***"
+            :_cl_plus_plus_ -> :+
+            :_cl_plus_plus_plus_plus_ -> :++
+            :_cl_plus_plus_plus_plus_plus_plus_ -> :+++
+            _ -> ExLisp.Symbol.downcase_atom(Atom.to_string(name))
+          end
+
+        Process.put(cache_key, normalized)
+        normalized
+
+      normalized ->
+        normalized
     end
   end
 
   def normalize_name(name) when is_binary(name) do
-    case name do
-      "_cl_star_star_" -> :*
-      "_cl_star_star_star_star_" -> :**
-      "_cl_star_star_star_star_star_star_" -> :"***"
-      "_cl_plus_plus_" -> :+
-      "_cl_plus_plus_plus_plus_" -> :++
-      "_cl_plus_plus_plus_plus_plus_plus_" -> :+++
-      _ -> String.downcase(name) |> String.to_atom()
+    cache_key = {:"$exlisp_env_normalized_name$", name}
+
+    case Process.get(cache_key, :not_cached) do
+      :not_cached ->
+        normalized =
+          case name do
+            "_cl_star_star_" -> :*
+            "_cl_star_star_star_star_" -> :**
+            "_cl_star_star_star_star_star_star_" -> :"***"
+            "_cl_plus_plus_" -> :+
+            "_cl_plus_plus_plus_plus_" -> :++
+            "_cl_plus_plus_plus_plus_plus_plus_" -> :+++
+            _ -> ExLisp.Symbol.downcase_atom(name)
+          end
+
+        Process.put(cache_key, normalized)
+        normalized
+
+      normalized ->
+        normalized
     end
   end
 

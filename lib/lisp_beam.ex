@@ -7003,7 +7003,17 @@ defmodule LispBeam do
   def extract_symbol_name(nil), do: nil
 
   def extract_symbol_name({:id, _pos, [name]}) when is_binary(name) do
-    extract_symbol_name(String.to_atom(name))
+    if String.contains?(name, ".") and current_package_qualified?(name) do
+      [_package, symbol] = String.split(name, ".", parts: 2)
+      extract_symbol_name(symbol)
+    else
+      if String.starts_with?(name, "|") or String.starts_with?(name, ":|") or
+           String.starts_with?(name, "#:") do
+        String.to_atom(name)
+      else
+        ExLisp.Symbol.downcase_atom(name)
+      end
+    end
   end
 
   def extract_symbol_name({:id, _pos, parts}) when is_list(parts) do
@@ -7018,11 +7028,11 @@ defmodule LispBeam do
              String.starts_with?(str, "#:") do
           sym
         else
-          str |> String.downcase() |> String.to_atom()
+          ExLisp.Symbol.downcase_atom(str)
         end
 
       _ ->
-        Enum.join(parts, ".") |> String.downcase() |> String.to_atom()
+        parts |> Enum.join(".") |> ExLisp.Symbol.downcase_atom()
     end
   end
 
@@ -7033,7 +7043,7 @@ defmodule LispBeam do
          String.starts_with?(str, "#:") do
       atom
     else
-      str |> String.downcase() |> String.to_atom()
+      ExLisp.Symbol.downcase_atom(str)
     end
   end
 
@@ -7052,7 +7062,7 @@ defmodule LispBeam do
            String.starts_with?(str, "#:") do
         atom
       else
-        str |> String.downcase() |> String.to_atom()
+        ExLisp.Symbol.downcase_atom(str)
       end
     end
   end
@@ -7066,7 +7076,7 @@ defmodule LispBeam do
            String.starts_with?(name, "#:") do
         String.to_atom(name)
       else
-        String.downcase(name) |> String.to_atom()
+        ExLisp.Symbol.downcase_atom(name)
       end
     end
   end
@@ -7115,9 +7125,7 @@ defmodule LispBeam do
             true -> to_string(name)
           end
 
-        down = String.downcase(name_string)
-
-        case BuiltinFunction.canonical_name(down) do
+        case BuiltinFunction.canonical_name(name_string) do
           {:ok, canon} ->
             canon
 
@@ -7125,7 +7133,7 @@ defmodule LispBeam do
             if String.contains?(name_string, ":") do
               nil
             else
-              String.to_atom(down)
+              ExLisp.Symbol.downcase_atom(name_string)
             end
         end
 
@@ -7136,7 +7144,7 @@ defmodule LispBeam do
         if valid_remote_module?(mod) do
           nil
         else
-          str = Enum.join(string_parts, ".") |> String.downcase()
+          str = Enum.join(string_parts, ".")
 
           case BuiltinFunction.canonical_name(str) do
             {:ok, canon} ->
@@ -7144,28 +7152,28 @@ defmodule LispBeam do
 
               if package in ["cl", "common-lisp", "common_lisp"],
                 do: canon,
-                else: String.to_atom(str)
+                else: ExLisp.Symbol.downcase_atom(str)
 
-            :error -> String.to_atom(str)
+            :error -> ExLisp.Symbol.downcase_atom(str)
           end
         end
     end
   end
 
   def extract_op_name({:keyword, _pos, kw}) when is_atom(kw) do
-    kw |> Atom.to_string() |> String.trim_leading(":") |> String.downcase() |> String.to_atom()
+    kw |> Atom.to_string() |> String.trim_leading(":") |> ExLisp.Symbol.downcase_atom()
   end
 
   def extract_op_name({:lit, atom}) when is_atom(atom) do
-    Atom.to_string(atom) |> String.downcase() |> String.to_atom()
+    atom |> Atom.to_string() |> ExLisp.Symbol.downcase_atom()
   end
 
   def extract_op_name(atom) when is_atom(atom) do
-    Atom.to_string(atom) |> String.downcase() |> String.to_atom()
+    atom |> Atom.to_string() |> ExLisp.Symbol.downcase_atom()
   end
 
   def extract_op_name(name) when is_binary(name) do
-    String.downcase(name) |> String.to_atom()
+    ExLisp.Symbol.downcase_atom(name)
   end
 
   def extract_op_name(_), do: nil

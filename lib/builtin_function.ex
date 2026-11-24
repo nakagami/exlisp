@@ -1576,11 +1576,12 @@ defmodule BuiltinFunction do
   Returns the canonicalized atom name for the given operator.
   """
   def canonical_name(name) when is_binary(name) do
-    down_str = String.downcase(name)
-    cache_key = {:"$exlisp_canonical_name$", down_str}
+    cache_key = {:"$exlisp_canonical_name$", name}
 
     case Process.get(cache_key, :not_cached) do
       :not_cached ->
+        down_str = ExLisp.Symbol.downcase(name)
+
         result =
           case split_qualified_name(down_str) do
             [pkg, sym] when pkg in @known_package_prefixes ->
@@ -1604,11 +1605,12 @@ defmodule BuiltinFunction do
         {:ok, canonical}
 
       nil ->
-        str = atom |> Atom.to_string() |> String.downcase()
-        cache_key = {:"$exlisp_canonical_name$", str}
+        cache_key = {:"$exlisp_canonical_name$", atom}
 
         case Process.get(cache_key, :not_cached) do
           :not_cached ->
+            str = ExLisp.Symbol.downcase(Atom.to_string(atom))
+
             result =
               case split_qualified_name(str) do
                 [pkg, sym] when pkg in @known_package_prefixes ->

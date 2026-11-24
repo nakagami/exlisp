@@ -129,32 +129,58 @@ defmodule ExLisp.Package do
   ]
 
   def ensure_tables do
-    case :ets.whereis(@table) do
-      :undefined ->
-        try do
-          :ets.new(@table, [:set, :public, :named_table])
-          init_standard_packages()
-        rescue
-          _ -> :ok
-        end
+    if Process.get(:exlisp_package_tables_ready, false) do
+      :ok
+    else
+      case :ets.whereis(@table) do
+        :undefined ->
+          try do
+            :ets.new(@table, [:set, :public, :named_table])
+            init_standard_packages()
+          rescue
+            _ -> :ok
+          end
 
-      _ ->
-        :ok
+        _ ->
+          :ok
+      end
+
+      Process.put(:exlisp_package_tables_ready, true)
+      :ok
     end
   end
 
   def current_package do
-    ensure_tables()
+    special_key = {:"$special$", :"*package*"}
+    special = :erlang.get(special_key)
 
-    try do
-      package = ExLisp.Env.get_var(:"*package*")
+    cond do
+      special != :undefined ->
+        package_name(special)
 
-      case find_package(package) do
-        %__MODULE__{name: name} -> name
-        nil -> Process.get(:exlisp_current_package, "COMMON-LISP-USER")
-      end
-    rescue
-      _ -> Process.get(:exlisp_current_package, "COMMON-LISP-USER")
+      true ->
+        case Process.get(:exlisp_current_package, :undefined) do
+          :undefined ->
+            ensure_tables()
+
+            try do
+              package = ExLisp.Env.get_var(:"*package*")
+
+              case find_package(package) do
+                %__MODULE__{name: name} ->
+                  Process.put(:exlisp_current_package, name)
+                  name
+
+                nil ->
+                  "COMMON-LISP-USER"
+              end
+            rescue
+              _ -> "COMMON-LISP-USER"
+            end
+
+          cached ->
+            cached
+        end
     end
   end
 
@@ -175,6 +201,7 @@ defmodule ExLisp.Package do
 
     if :erlang.get(special_key) != :undefined do
       :erlang.put(special_key, pkg)
+      Process.put(:exlisp_current_package, pkg.name)
     else
       Process.put(:exlisp_current_package, pkg.name)
       ExLisp.Env.put_var(:"*package*", pkg)
@@ -1437,6 +1464,7 @@ defmodule ExLisp.Package do
   defp save_package(%ExLisp.Package{name: name, nicknames: nicks} = pkg) do
     :ets.insert(@table, {name, pkg})
     Enum.each(nicks, fn n -> :ets.insert(@table, {n, pkg}) end)
+    ExLisp.Env.invalidate_resolution_cache()
   end
 
   # --- Package Lookup ---
@@ -1883,6 +1911,7 @@ defmodule ExLisp.Package do
           end
         end)
 
+        ExLisp.Env.invalidate_resolution_cache()
         :t
     end
   end

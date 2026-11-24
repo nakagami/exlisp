@@ -57,7 +57,9 @@ defmodule ExLisp.MutableCons do
     :ok
   end
 
-  def resolve(value), do: resolve(value, MapSet.new())
+  def resolve([]), do: []
+  def resolve([_ | _] = value), do: resolve(value, MapSet.new())
+  def resolve(value), do: value
 
   def replace(original, replacement) do
     register(original, resolve(original), replacement)

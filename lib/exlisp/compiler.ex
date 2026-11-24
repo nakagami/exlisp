@@ -48,6 +48,7 @@ defmodule ExLisp.Compiler do
       {:ok, ^module_name, binary} ->
         :code.purge(module_name)
         {:module, ^module_name} = :code.load_binary(module_name, ~c"nofile", binary)
+        ExLisp.Env.invalidate_global_module_cache(module_name)
 
         # Top-level execution (run/0)
         try do
