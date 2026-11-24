@@ -1446,7 +1446,14 @@ defmodule CommonLispTest do
 
   describe "Elixir and Erlang Interop" do
     test "calls Elixir module functions" do
+      ExLisp.eval("(defparameter interop-argument 0)")
+
       assert ExLisp.eval("(Enum.map '(1 2 3) (lambda (x) (* x 10)))") == [10, 20, 30]
+
+      assert ExLisp.eval(
+               "(Enum.map '(1 2 3) (lambda (interop-argument) (* interop-argument 10)))"
+             ) == [10, 20, 30]
+
       assert ExLisp.eval("(String.upcase \"elixir\")") == "ELIXIR"
       assert ExLisp.eval("(Path.join \"foo\" \"bar\")") == "foo/bar"
     end

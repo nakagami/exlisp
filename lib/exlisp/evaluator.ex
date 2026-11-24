@@ -4902,6 +4902,21 @@ defmodule ExLisp.Evaluator do
           end
 
           case length(param_names) do
+            0 ->
+              fn -> base_fun.([]) end
+
+            1 ->
+              fn a -> base_fun.([a]) end
+
+            2 ->
+              fn a, b -> base_fun.([a, b]) end
+
+            3 ->
+              fn a, b, c -> base_fun.([a, b, c]) end
+
+            4 ->
+              fn a, b, c, d -> base_fun.([a, b, c, d]) end
+
             5 ->
               fn a, b, c, d, e -> base_fun.([a, b, c, d, e]) end
 
