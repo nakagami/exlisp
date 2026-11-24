@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   test:
-    name: Test (Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }})
+    name: Unit tests (Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }})
     runs-on: ubuntu-latest
 
     strategy:
@@ -45,10 +45,45 @@ jobs:
       - name: Run tests
         run: mix test
 
+  ansi-test:
+    name: ANSI tests (${{ matrix.shard }}/8)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Elixir and Erlang/OTP
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: '27.x'
+          elixir-version: '1.18.x'
+
+      - name: Restore dependencies cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-27.x-1.18.x-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-27.x-1.18.x-
+
+      - name: Install dependencies
+        run: mix deps.get
+
       - name: Clone ANSI tests
         run: git clone --depth 1 https://github.com/sbcl/ansi-test.git ../ansi-test
 
-      - name: Run ANSI test suite
+      - name: Run ANSI test shard
         run: mix run run_ansi_test.exs
         env:
           ANSI_TEST_DIR: ../ansi-test
+          ANSI_TEST_SHARD: ${{ matrix.shard }}
+          ANSI_TEST_SHARDS: 8

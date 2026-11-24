@@ -606,7 +606,26 @@ end)
 
 cli_args = System.argv()
 
-target_suites =
+parse_env_int = fn name, default, minimum ->
+  value = System.get_env(name, Integer.to_string(default))
+
+  case Integer.parse(value) do
+    {number, ""} when number >= minimum ->
+      number
+
+    _ ->
+      raise "#{name} must be an integer greater than or equal to #{minimum}, got: #{inspect(value)}"
+  end
+end
+
+shard_count = parse_env_int.("ANSI_TEST_SHARDS", 1, 1)
+shard_index = parse_env_int.("ANSI_TEST_SHARD", 0, 0)
+
+if shard_index >= shard_count do
+  raise "ANSI_TEST_SHARD must be less than ANSI_TEST_SHARDS (#{shard_count})"
+end
+
+selected_suites =
   if cli_args != [] do
     Enum.map(cli_args, fn arg ->
       base = Path.basename(arg, ".lsp")
@@ -623,13 +642,27 @@ target_suites =
     suites
   end
 
+target_suites =
+  selected_suites
+  |> Enum.with_index()
+  |> Enum.filter(fn {_suite, index} -> rem(index, shard_count) == shard_index end)
+  |> Enum.map(&elem(&1, 0))
+
+IO.puts(
+  "Running #{length(target_suites)} ANSI-TEST suites " <>
+    "(shard #{shard_index + 1}/#{shard_count})."
+)
+
 File.mkdir_p!(Path.join(ansi_test_dir, "sandbox/scratch"))
+
+started_at = System.monotonic_time(:millisecond)
 
 total_failed =
   Enum.reduce(target_suites, 0, fn {name, rel_path}, acc ->
     full_path =
       if Path.type(rel_path) == :absolute, do: rel_path, else: Path.join(ansi_test_dir, rel_path)
 
+    suite_started_at = System.monotonic_time(:millisecond)
     IO.puts("Loading #{name} (#{full_path})...")
     ExLisp.MutableCons.reset()
     ExLisp.eval("(reset-test-stats)")
@@ -646,8 +679,13 @@ total_failed =
 
     ExLisp.eval("(print-test-summary \"#{name}\")")
     failed = ExLisp.eval("*test-failed-count*")
+    elapsed_seconds = (System.monotonic_time(:millisecond) - suite_started_at) / 1000
+    IO.puts("#{name} completed in #{Float.round(elapsed_seconds, 2)}s")
     acc + if is_integer(failed), do: failed, else: 0
   end)
+
+elapsed_seconds = (System.monotonic_time(:millisecond) - started_at) / 1000
+IO.puts("\nANSI-TEST shard completed in #{Float.round(elapsed_seconds, 2)}s.")
 
 if total_failed > 0 do
   IO.puts("\nANSI-TEST finished with #{total_failed} failures.")
