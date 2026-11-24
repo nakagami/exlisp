@@ -2848,6 +2848,9 @@ defmodule LispBeam do
     end)
   end
 
+  @doc false
+  def mutated_vars(asts), do: find_mutated_vars(asts)
+
   defp find_mutated_vars(asts) when is_list(asts) do
     Enum.reduce(asts, MapSet.new(), fn ast, acc ->
       MapSet.union(acc, find_mutated_vars(ast))

@@ -4757,7 +4757,11 @@ defmodule ExLisp.Evaluator do
         |> Enum.concat(Enum.filter(param_names, &Env.specialp/1))
         |> Enum.uniq()
 
-      special_params? = Enum.any?(param_names, &(&1 in special_names))
+      mutated_params = LispBeam.mutated_vars(body_nodes)
+
+      boxed_params? =
+        Enum.any?(param_names, &(&1 in special_names)) or
+          Enum.any?(param_names, &MapSet.member?(mutated_params, &1))
 
       case {param_names, has_return} do
         {[], false} ->
@@ -4774,13 +4778,13 @@ defmodule ExLisp.Evaluator do
             end
           end
 
-        {[p1], false} when not special_params? ->
+        {[p1], false} when not boxed_params? ->
           fn a ->
             call_env = Map.put(snapshotted_env, p1, a)
             eval_progn(body_nodes, call_env)
           end
 
-        {[p1], true} when not special_params? ->
+        {[p1], true} when not boxed_params? ->
           fn a ->
             call_env = snapshotted_env |> Map.put(p1, a) |> Map.put({:block, name}, tag)
 
@@ -4791,13 +4795,13 @@ defmodule ExLisp.Evaluator do
             end
           end
 
-        {[p1, p2], false} when not special_params? ->
+        {[p1, p2], false} when not boxed_params? ->
           fn a, b ->
             call_env = snapshotted_env |> Map.put(p1, a) |> Map.put(p2, b)
             eval_progn(body_nodes, call_env)
           end
 
-        {[p1, p2], true} when not special_params? ->
+        {[p1, p2], true} when not boxed_params? ->
           fn a, b ->
             call_env =
               snapshotted_env
@@ -4812,7 +4816,7 @@ defmodule ExLisp.Evaluator do
             end
           end
 
-        {[p1, p2, p3], false} when not special_params? ->
+        {[p1, p2, p3], false} when not boxed_params? ->
           fn a, b, c ->
             call_env =
               snapshotted_env
@@ -4823,7 +4827,7 @@ defmodule ExLisp.Evaluator do
             eval_progn(body_nodes, call_env)
           end
 
-        {[p1, p2, p3], true} when not special_params? ->
+        {[p1, p2, p3], true} when not boxed_params? ->
           fn a, b, c ->
             call_env =
               snapshotted_env
@@ -4839,7 +4843,7 @@ defmodule ExLisp.Evaluator do
             end
           end
 
-        {[p1, p2, p3, p4], false} when not special_params? ->
+        {[p1, p2, p3, p4], false} when not boxed_params? ->
           fn a, b, c, d ->
             call_env =
               snapshotted_env
@@ -4851,7 +4855,7 @@ defmodule ExLisp.Evaluator do
             eval_progn(body_nodes, call_env)
           end
 
-        {[p1, p2, p3, p4], true} when not special_params? ->
+        {[p1, p2, p3, p4], true} when not boxed_params? ->
           fn a, b, c, d ->
             call_env =
               snapshotted_env

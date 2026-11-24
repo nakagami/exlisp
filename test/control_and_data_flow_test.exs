@@ -116,6 +116,18 @@ defmodule ExLisp.ControlAndDataFlowTest do
     assert ExLisp.eval(code_shiftf) == [1, 2, 3, 99]
   end
 
+  test "functions keep mutable parameters lexically bound" do
+    ExLisp.eval("""
+    (defun mutate-test-parameters (first second third)
+      (setq first (+ first second))
+      (incf third first)
+      third)
+    """)
+
+    assert ExLisp.eval("(mutate-test-parameters 1 2 3)") == 6
+    assert ExLisp.eval("(boundp 'first)") == nil
+  end
+
   test "symbol-function, fdefinition, fmakunbound, makunbound, boundp, fboundp" do
     ExLisp.eval("(defun test-dyn-fun (x) (* x 3))")
     assert ExLisp.eval("(fboundp 'test-dyn-fun)") == :t
