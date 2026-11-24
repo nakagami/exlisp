@@ -20,6 +20,13 @@ defmodule ExLisp.SequencesAndListsTest do
              [3, 1, 2, 4]
   end
 
+  test "compiled eq preserves cons identity" do
+    assert ExLisp.eval("""
+           (flet ((make-value () (list 'a)))
+             (eq (make-value) (make-value)))
+           """) == nil
+  end
+
   test "association list operations: assoc-if, rassoc-if, copy-alist" do
     assert ExLisp.eval("(assoc-if #'evenp '((1 . a) (2 . b) (3 . c)))") == [2 | :b]
     assert ExLisp.eval("(rassoc-if #'oddp '((a . 2) (b . 3) (c . 4)))") == [:b | 3]

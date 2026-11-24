@@ -1848,7 +1848,10 @@ defmodule BuiltinFunction do
 
       # List creation: (list 1 2 3)
       :list ->
-        ast_cons_list(Enum.map(args, compile_expr_fn))
+        compiled_args = Enum.map(args, compile_expr_fn)
+        args_cons = ast_cons_list(compiled_args)
+
+        {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :list}}, [args_cons]}
 
       _ ->
         case Map.get(@builtin_mappings, norm_op) do
@@ -2029,11 +2032,7 @@ defmodule BuiltinFunction do
         compile_inline_cmp_2(:"/=", :num_neq_two, a, b)
 
       {:eq, [a, b]} ->
-        {:case, 1, {:op, 1, :"=:=", a, b},
-         [
-           {:clause, 1, [{:atom, 1, true}], [], [{:atom, 1, :t}]},
-           {:clause, 1, [{:atom, 1, false}], [], [{:atom, 1, nil}]}
-         ]}
+        {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :eq}}, [a, b]}
 
       {:eql, [a, b]} ->
         {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :eql}}, [a, b]}

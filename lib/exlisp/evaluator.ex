@@ -7,6 +7,7 @@ defmodule ExLisp.Evaluator do
 
   alias ExLisp.Builtins
   alias ExLisp.Env
+  alias ExLisp.MutableCons
 
   @doc """
   Evaluates an AST expression in the given lexical environment.
@@ -192,7 +193,7 @@ defmodule ExLisp.Evaluator do
           end
       end
 
-    ExLisp.MutableCons.resolve(value)
+    ExLisp.MutableCons.resolve_cell(value)
   end
 
   defp keyword_symbol?(sym) when is_atom(sym) do
@@ -2227,12 +2228,13 @@ defmodule ExLisp.Evaluator do
 
           op in [:car, :_cl_car_] ->
             [target_node | _] = place_args
-            {target_getter, _target_setter} = get_setf_expansion(target_node, env)
+            {target_getter, target_setter} = get_setf_expansion(target_node, env)
             getter = fn -> Builtins.car(target_getter.()) end
 
             setter = fn unwrapped ->
               cur = target_getter.()
               Builtins.rplaca(cur, unwrapped)
+              target_setter.(MutableCons.resolve(cur))
               unwrapped
             end
 
@@ -2240,12 +2242,13 @@ defmodule ExLisp.Evaluator do
 
           op in [:cdr, :_cl_cdr_] ->
             [target_node | _] = place_args
-            {target_getter, _target_setter} = get_setf_expansion(target_node, env)
+            {target_getter, target_setter} = get_setf_expansion(target_node, env)
             getter = fn -> Builtins.cdr(target_getter.()) end
 
             setter = fn unwrapped ->
               cur = target_getter.()
               Builtins.rplacd(cur, unwrapped)
+              target_setter.(MutableCons.resolve(cur))
               unwrapped
             end
 
@@ -2254,12 +2257,13 @@ defmodule ExLisp.Evaluator do
           op in [:nth, :_cl_nth_] ->
             [idx_node, target_node | _] = place_args
             idx = eval(idx_node, env) |> Builtins.unwrap_mv_primary()
-            {target_getter, _target_setter} = get_setf_expansion(target_node, env)
+            {target_getter, target_setter} = get_setf_expansion(target_node, env)
             getter = fn -> Builtins.nth(idx, target_getter.()) end
 
             setter = fn unwrapped ->
               cur = target_getter.()
               ExLisp.MutableCons.set_nth(idx, cur, unwrapped)
+              target_setter.(MutableCons.resolve(cur))
               unwrapped
             end
 
@@ -2270,12 +2274,12 @@ defmodule ExLisp.Evaluator do
             {target_getter, target_setter} = get_setf_expansion(target_node, env)
             ind = eval(ind_node, env) |> Builtins.unwrap_mv_primary()
 
-            _def_val =
+            def_val =
               if rest_args != [],
                 do: eval(hd(rest_args), env) |> Builtins.unwrap_mv_primary(),
                 else: nil
 
-            getter = fn -> Builtins.getf(target_getter.(), ind) end
+            getter = fn -> Builtins.getf(target_getter.(), ind, def_val) end
 
             setter = fn unwrapped ->
               cur = target_getter.()

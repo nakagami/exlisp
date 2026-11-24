@@ -202,7 +202,6 @@ defmodule ExLisp.Package do
     special_key = {:"$special$", ExLisp.Env.normalize_name(:"*package*")}
 
     if :erlang.get(special_key) != :undefined do
-      :erlang.put(special_key, pkg)
       Process.put(:exlisp_current_package, pkg.name)
     else
       Process.put(:exlisp_current_package, pkg.name)
@@ -1509,8 +1508,7 @@ defmodule ExLisp.Package do
   def find_package!(pkg_designator) do
     case find_package(pkg_designator) do
       nil ->
-        str = to_string(pkg_designator)
-        raise RuntimeError, "Package #{str} not found"
+        ExLisp.Condition.error(:package_error, package: pkg_designator)
 
       pkg ->
         pkg
@@ -1601,18 +1599,20 @@ defmodule ExLisp.Package do
   def all_symbols_list(pkg_desig) do
     pkg = find_package!(pkg_desig)
 
-    used_externals =
+    own_symbols =
+      MapSet.union(pkg.internal_symbols, pkg.external_symbols)
+      |> Enum.map(&symbol_in_package(&1, pkg))
+
+    inherited_symbols =
       Enum.flat_map(pkg.use_list, fn u_name ->
         if u_pkg = find_package(u_name) do
-          MapSet.to_list(u_pkg.external_symbols)
+          Enum.map(u_pkg.external_symbols, &symbol_in_package(&1, u_pkg))
         else
           []
         end
       end)
 
-    MapSet.union(pkg.internal_symbols, pkg.external_symbols)
-    |> MapSet.union(MapSet.new(used_externals))
-    |> Enum.map(&symbol_in_package(&1, pkg))
+    own_symbols ++ inherited_symbols
   end
 
   @doc """
@@ -2130,7 +2130,7 @@ defmodule ExLisp.Package do
 
           _ ->
             pkg
-        end
+          end
 
       _ ->
         pkg
@@ -2526,7 +2526,6 @@ defmodule ExLisp.Package do
       if is_nil(pkg_desig), do: find_package!(current_package()), else: find_package!(pkg_desig)
 
     name = reader_symbol_to_str(name_desig)
-
     case find_symbol_in_pkg(name, pkg) do
       {:found, sym, status} ->
         [:_values_, [sym, status]]
@@ -2538,10 +2537,14 @@ defmodule ExLisp.Package do
 
   def unintern(symbol_desig, pkg_desig \\ nil) do
     pkg =
-      if is_nil(pkg_desig), do: find_package!(current_package()), else: find_package!(pkg_desig)
+      if is_nil(pkg_desig) do
+        package = ExLisp.Env.get_var(:"*package*")
+        find_package!(package)
+      else
+        find_package!(pkg_desig)
+      end
 
     name = symbol_to_str(symbol_desig)
-
     if MapSet.member?(pkg.internal_symbols, name) or MapSet.member?(pkg.external_symbols, name) do
       inherited =
         Enum.flat_map(pkg.use_list, fn used_name ->
@@ -2573,6 +2576,7 @@ defmodule ExLisp.Package do
       }
 
       save_package(updated)
+      Process.delete({:exlisp_symbol_package, symbol_desig})
       :t
     else
       nil
@@ -2657,7 +2661,7 @@ defmodule ExLisp.Package do
             if cl && MapSet.member?(cl.external_symbols, name) do
               cl
             else
-              current_package || cl
+              nil
             end
         end
 
@@ -2915,16 +2919,16 @@ defmodule ExLisp.Package do
         end
 
       qualified ->
-        case String.split(qualified, ".", parts: 2) do
-          [package, name] ->
-            if find_package(package |> String.upcase() |> String.replace("_", "-")) do
-              string_symbol_name(name)
-            else
-              String.upcase(qualified) |> String.replace("_", "-")
-            end
+        case qualified_symbol_package(qualified) do
+          %ExLisp.Package{name: package_name} ->
+            prefix_length = String.length(package_name) + 1
 
-          [name] ->
-            String.upcase(name) |> String.replace("_", "-")
+            qualified
+            |> String.slice(prefix_length..-1//1)
+            |> string_symbol_name()
+
+          nil ->
+            String.upcase(qualified) |> String.replace("_", "-")
         end
     end
   end
@@ -2943,7 +2947,8 @@ defmodule ExLisp.Package do
           base
         else
           package_prefix = String.downcase(source_pkg.name)
-          String.to_atom("#{package_prefix}.#{Atom.to_string(base)}")
+          qualified = String.to_atom("#{package_prefix}.#{Atom.to_string(base)}")
+          remember_symbol_package(qualified, source_pkg)
         end
 
       symbol ->
@@ -2959,13 +2964,13 @@ defmodule ExLisp.Package do
   end
 
   defp qualified_symbol_package(str) do
-    case String.split(str, ".", parts: 2) do
-      [package, _name] ->
-        find_package(String.upcase(package) |> String.replace("_", "-"))
+    downcased = String.downcase(str)
 
-      _ ->
-        nil
-    end
+    list_all_packages()
+    |> Enum.sort_by(&String.length(&1.name), :desc)
+    |> Enum.find(fn package ->
+      String.starts_with?(downcased, String.downcase(package.name) <> ".")
+    end)
   end
 
   def remember_symbol_package(symbol, %ExLisp.Package{name: name}) do

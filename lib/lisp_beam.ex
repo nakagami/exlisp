@@ -803,7 +803,9 @@ defmodule LispBeam do
 
       :list ->
         compiled_args = Enum.map(args, &compile_expr(&1, local_env))
-        ast_cons_list(compiled_args)
+        args_cons = ast_cons_list(compiled_args)
+
+        {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :list}}, [args_cons]}
 
       name when name in [:not, :null] ->
         case args do
@@ -858,11 +860,7 @@ defmodule LispBeam do
             c1 = compile_expr(arg1, local_env)
             c2 = compile_expr(arg2, local_env)
 
-            {:case, 1, {:op, 1, :"=:=", c1, c2},
-             [
-               {:clause, 1, [{:atom, 1, true}], [], [{:atom, 1, :t}]},
-               {:clause, 1, [{:atom, 1, false}], [], [{:atom, 1, nil}]}
-             ]}
+            {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :eq}}, [c1, c2]}
 
           _ ->
             compile_regular_op(op, args, local_env)

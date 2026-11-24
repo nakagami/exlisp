@@ -326,7 +326,11 @@ defmodule ExLisp.Condition do
   """
   def invoke_debugger(condition) do
     object = coerce_to_condition(condition, [], :simple_error)
-    old_hook = debugger_hook()
+    old_hook =
+      case ExLisp.Env.get_var(:"*debugger-hook*") do
+        hook when hook not in [nil, false, :unbound] -> hook
+        _ -> nil
+      end
 
     case old_hook do
       nil ->
@@ -357,22 +361,6 @@ defmodule ExLisp.Condition do
     end
 
     raise RuntimeError, message: format_condition(object)
-  end
-
-  defp debugger_hook do
-    key = {:"$special$", ExLisp.Env.normalize_name(:"*debugger-hook*")}
-
-    case :erlang.get(key) do
-      :undefined ->
-        if ExLisp.Env.has_var?(:"*debugger-hook*") do
-          ExLisp.Env.get_var(:"*debugger-hook*")
-        end
-
-      hook ->
-        hook
-    end
-  rescue
-    _ -> nil
   end
 
   @doc """

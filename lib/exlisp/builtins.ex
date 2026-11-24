@@ -45,6 +45,8 @@ defmodule ExLisp.Builtins do
        when is_integer(idx) do
     case :ets.lookup(tid, idx) do
       [{^idx, val}] ->
+        val = decode_array_value(tid, val)
+
         if is_integer(val),
           do: normalize_array_value_for_type(val, element_type),
           else: val
@@ -56,7 +58,7 @@ defmodule ExLisp.Builtins do
 
           nil ->
             case :ets.lookup(tid, :__init__) do
-              [{:__init__, default}] -> default
+              [{:__init__, default}] -> decode_array_value(tid, default)
               [] -> arr |> array_initial_element()
             end
         end
@@ -69,6 +71,21 @@ defmodule ExLisp.Builtins do
       _ -> nil
     end
   end
+
+  defp encode_array_value(_tid, value) when not is_list(value), do: value
+  defp encode_array_value(_tid, []), do: []
+
+  defp encode_array_value(tid, value) do
+    ref = make_ref()
+    Process.put({:exlisp_array_identity, tid, ref}, value)
+    {:__exlisp_array_identity__, ref}
+  end
+
+  defp decode_array_value(tid, {:__exlisp_array_identity__, ref}) do
+    Process.get({:exlisp_array_identity, tid, ref})
+  end
+
+  defp decode_array_value(_tid, value), do: value
 
   defp eql_hashable?(value) when is_atom(value) or is_number(value), do: true
   defp eql_hashable?(%ExLisp.Character{}), do: true
@@ -443,6 +460,7 @@ defmodule ExLisp.Builtins do
   end
 
   defp proper_list?([]), do: true
+  defp proper_list?([_head, :., _tail]), do: false
   defp proper_list?([_ | tail]) when is_list(tail), do: proper_list?(tail)
   defp proper_list?([_ | _]), do: false
   defp proper_list?(_), do: false
@@ -1970,7 +1988,10 @@ defmodule ExLisp.Builtins do
   def eq(x, y) when is_atom(x) and is_atom(y), do: (x === y) |> lisp_bool()
 
   def eq(x, y) when is_list(x) and is_list(y),
-    do: (ExLisp.MutableCons.resolve(x) === ExLisp.MutableCons.resolve(y)) |> lisp_bool()
+    do:
+      (:erts_debug.same(x, y) or
+         :erts_debug.same(ExLisp.MutableCons.resolve(x), ExLisp.MutableCons.resolve(y)))
+      |> lisp_bool()
 
   def eq(x, y), do: :erts_debug.same(x, y) |> lisp_bool()
   def eqt(x, y), do: eq(x, y)
@@ -2540,8 +2561,8 @@ defmodule ExLisp.Builtins do
   end
 
   def car(cons) do
-    case ExLisp.MutableCons.resolve(cons) do
-      [head | _] -> ExLisp.MutableCons.resolve(head)
+    case ExLisp.MutableCons.resolve_cell(cons) do
+      [head | _] -> ExLisp.MutableCons.resolve_cell(head)
       nil -> nil
       [] -> nil
       other -> raise(ArgumentError, "car requires a list or nil, got: #{inspect(other)}")
@@ -2549,8 +2570,8 @@ defmodule ExLisp.Builtins do
   end
 
   def cdr(cons) do
-    case ExLisp.MutableCons.resolve(cons) do
-      [_ | tail] -> ExLisp.MutableCons.resolve(tail)
+    case ExLisp.MutableCons.resolve_cell(cons) do
+      [_ | tail] -> ExLisp.MutableCons.resolve_cell(tail)
       nil -> nil
       [] -> nil
       other -> raise(ArgumentError, "cdr requires a list or nil, got: #{inspect(other)}")
@@ -3022,6 +3043,9 @@ defmodule ExLisp.Builtins do
   def member(args) when is_list(args) do
     case args do
       [item, list | rest_opts] when is_list(list) or list == nil ->
+        unless proper_list?(list || []),
+          do: ExLisp.Condition.error(:type_error, datum: list, expected_type: :list)
+
         opts = parse_lisp_keywords(rest_opts, [:key, :test, :test_not])
         key_fn = Keyword.get(opts, :key, nil)
 
@@ -3035,7 +3059,7 @@ defmodule ExLisp.Builtins do
         find_member_rec(item, list || [], test_fn, key_fn)
 
       [_, other | _] ->
-        raise ArgumentError, "member requires a proper list, got: #{inspect(other)}"
+        ExLisp.Condition.error(:type_error, datum: other, expected_type: :list)
 
       _ ->
         raise ArgumentError, "member requires at least 2 arguments"
@@ -3074,12 +3098,15 @@ defmodule ExLisp.Builtins do
   def member_if(args) when is_list(args) do
     case args do
       [predicate, list | rest_opts] when is_list(list) or list == nil ->
+        unless proper_list?(list || []),
+          do: ExLisp.Condition.error(:type_error, datum: list, expected_type: :list)
+
         opts = parse_lisp_keywords(rest_opts, [:key])
         key_fn = Keyword.get(opts, :key, nil)
         find_member_if_rec(predicate, list || [], key_fn, true)
 
       [_, other | _] ->
-        raise ArgumentError, "member-if requires a proper list, got: #{inspect(other)}"
+        ExLisp.Condition.error(:type_error, datum: other, expected_type: :list)
 
       _ ->
         raise ArgumentError, "member-if requires at least 2 arguments"
@@ -3091,12 +3118,15 @@ defmodule ExLisp.Builtins do
   def member_if_not(args) when is_list(args) do
     case args do
       [predicate, list | rest_opts] when is_list(list) or list == nil ->
+        unless proper_list?(list || []),
+          do: ExLisp.Condition.error(:type_error, datum: list, expected_type: :list)
+
         opts = parse_lisp_keywords(rest_opts, [:key])
         key_fn = Keyword.get(opts, :key, nil)
         find_member_if_rec(predicate, list || [], key_fn, false)
 
       [_, other | _] ->
-        raise ArgumentError, "member-if-not requires a proper list, got: #{inspect(other)}"
+        ExLisp.Condition.error(:type_error, datum: other, expected_type: :list)
 
       _ ->
         raise ArgumentError, "member-if-not requires at least 2 arguments"
@@ -3615,7 +3645,7 @@ defmodule ExLisp.Builtins do
   def list_length(list) when is_list(list), do: ExLisp.MutableCons.list_length(list)
 
   def list_length(other),
-    do: raise(ArgumentError, "list-length requires a list, got: #{inspect(other)}")
+    do: ExLisp.Condition.error(:type_error, datum: other, expected_type: :list)
 
   def adjoin(args) when is_list(args) do
     case args do
@@ -4613,14 +4643,18 @@ defmodule ExLisp.Builtins do
 
   defp check_start_end!(start_idx, end_idx, total_len) do
     if not is_integer(start_idx) or start_idx < 0 or start_idx > total_len do
-      raise ArgumentError,
-            "Invalid start index: #{inspect(start_idx)} for sequence of length #{total_len}"
+      ExLisp.Condition.error(:type_error,
+        datum: start_idx,
+        expected_type: [:integer, 0, total_len]
+      )
     end
 
     if end_idx != nil and
          (not is_integer(end_idx) or end_idx < 0 or end_idx > total_len or end_idx < start_idx) do
-      raise ArgumentError,
-            "Invalid end index: #{inspect(end_idx)} for sequence of length #{total_len} with start #{start_idx}"
+      ExLisp.Condition.error(:type_error,
+        datum: end_idx,
+        expected_type: [:integer, start_idx, total_len]
+      )
     end
   end
 
@@ -7417,7 +7451,9 @@ defmodule ExLisp.Builtins do
             flat_contents = flatten_initial_contents(initial_contents, dimensions)
 
             objects =
-              Enum.with_index(flat_contents, fn val, idx -> {idx, val} end)
+              Enum.with_index(flat_contents, fn val, idx ->
+                {idx, encode_array_value(tid, val)}
+              end)
 
             :ets.insert(tid, objects)
 
@@ -7436,7 +7472,7 @@ defmodule ExLisp.Builtins do
         element_type = Keyword.get(opts, :element_type, :t)
 
         if initial_element != nil do
-          :ets.insert(tid, {:__init__, initial_element})
+          :ets.insert(tid, {:__init__, encode_array_value(tid, initial_element)})
         else
           :ets.insert(tid, {:__init__, nil})
         end
@@ -7566,6 +7602,7 @@ defmodule ExLisp.Builtins do
   def aref({:array, [_dim], tid}, idx) when is_integer(idx) do
     case :ets.lookup(tid, idx) do
       [{_, val}] ->
+        val = decode_array_value(tid, val)
         normalize_array_value(tid, val)
 
       _ ->
@@ -7576,7 +7613,7 @@ defmodule ExLisp.Builtins do
           _ ->
             case :ets.lookup(tid, :__init__) do
               [{_, default}] ->
-                default
+                decode_array_value(tid, default)
 
               _ ->
                 nil
@@ -7616,6 +7653,7 @@ defmodule ExLisp.Builtins do
 
         case :ets.lookup(tid, flat_idx) do
           [{^flat_idx, val}] ->
+            val = decode_array_value(tid, val)
             normalize_array_value(tid, val)
 
           [] ->
@@ -7626,7 +7664,7 @@ defmodule ExLisp.Builtins do
               nil ->
                 case :ets.lookup(tid, :__init__) do
                   [{:__init__, default}] ->
-                    default
+                    decode_array_value(tid, default)
 
                   [] ->
                     case :ets.lookup(tid, :__meta__) do
@@ -7651,7 +7689,7 @@ defmodule ExLisp.Builtins do
         set_aref(target, offset + index, val)
 
       _ ->
-        :ets.insert(tid, {index, val})
+        :ets.insert(tid, {index, encode_array_value(tid, val)})
         val
     end
   end
@@ -7690,7 +7728,7 @@ defmodule ExLisp.Builtins do
             set_aref(target, offset + flat_idx, val)
 
           _ ->
-            :ets.insert(tid, {flat_idx, val})
+            :ets.insert(tid, {flat_idx, encode_array_value(tid, val)})
             val
         end
 
@@ -7705,7 +7743,7 @@ defmodule ExLisp.Builtins do
   end
 
   def set_svref({:array, [_dim], tid}, index, val) when is_integer(index) do
-    :ets.insert(tid, {index, val})
+    :ets.insert(tid, {index, encode_array_value(tid, val)})
     val
   end
 
@@ -7719,7 +7757,7 @@ defmodule ExLisp.Builtins do
   def svref({:array, [_dim], tid}, index) when is_integer(index) do
     case :ets.lookup(tid, index) do
       [{_, val}] ->
-        val
+        decode_array_value(tid, val)
 
       _ ->
         case :ets.lookup(tid, :__init__) do
@@ -7972,6 +8010,7 @@ defmodule ExLisp.Builtins do
   def row_major_aref({:array, _dims, tid} = _arr, idx) when is_integer(idx) do
     case :ets.lookup(tid, idx) do
       [{^idx, val}] ->
+        val = decode_array_value(tid, val)
         normalize_array_value(tid, val)
 
       [] ->
@@ -7982,7 +8021,7 @@ defmodule ExLisp.Builtins do
           nil ->
             case :ets.lookup(tid, :__init__) do
               [{:__init__, default}] ->
-                default
+                decode_array_value(tid, default)
 
               [] ->
                 case :ets.lookup(tid, :__meta__) do
@@ -8006,7 +8045,7 @@ defmodule ExLisp.Builtins do
         set_aref(target, offset + idx, val)
 
       _ ->
-        :ets.insert(tid, {idx, val})
+        :ets.insert(tid, {idx, encode_array_value(tid, val)})
         val
     end
   end
@@ -9744,18 +9783,18 @@ defmodule ExLisp.Builtins do
     str = String.trim_leading(str, ":")
 
     str =
-      case String.split(str, ".", parts: 2) do
-        [package, name] ->
-          package = package |> String.upcase() |> String.replace("_", "-")
+      case ExLisp.Package.symbol_package(sym) do
+        %ExLisp.Package{name: package_name} ->
+          prefix = String.downcase(package_name) <> "."
 
-          if ExLisp.Package.find_package(package) do
-            name
+          if String.starts_with?(String.downcase(str), prefix) do
+            String.slice(str, String.length(prefix)..-1//1)
           else
             str
           end
 
-        [name] ->
-          name
+        _ ->
+          str
       end
 
     cleaned =
