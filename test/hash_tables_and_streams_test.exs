@@ -90,4 +90,14 @@ defmodule HashTablesAndStreamsTest do
     assert ExLisp.Stream.close(stream) == :t
     assert ExLisp.Stream.open_stream_p(stream) == nil
   end
+
+  test "Gray Streams protocol preserves standard stream operations" do
+    ExLisp.GrayStreamsCompat.install()
+
+    assert ExLisp.eval("""
+           (let ((stream (make-string-input-stream "abc")))
+             (list (open-stream-p stream)
+                   (stream-element-type stream)))
+           """) == [:t, :character]
+  end
 end

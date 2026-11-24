@@ -44,6 +44,15 @@ defmodule ExLisp.GrayStreamsCompat do
       ExLisp.CLOS.register_generic(name, generic_args)
     end)
 
+    ExLisp.CLOS.register_method(
+      :stream_element_type,
+      nil,
+      [:t],
+      &ExLisp.Stream.stream_element_type/1
+    )
+
+    ExLisp.CLOS.register_method(:open_stream_p, nil, [:t], &ExLisp.Stream.open_stream_p/1)
+
     :t
   end
 end
