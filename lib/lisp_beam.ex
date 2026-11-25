@@ -516,6 +516,15 @@ defmodule LispBeam do
      [{:integer, 1, num}, {:integer, 1, den}]}
   end
 
+  def compile_expr({:complex, real, imaginary}, local_env) do
+    {:tuple, 1,
+     [
+       {:atom, 1, :complex},
+       compile_expr(real, local_env),
+       compile_expr(imaginary, local_env)
+     ]}
+  end
+
   def compile_expr(val, _local_env) when is_integer(val) do
     {:integer, 1, val}
   end
@@ -6861,7 +6870,7 @@ defmodule LispBeam do
 
       match?({:list, _, _}, op) or match?({:quoted, _, _}, op) or is_list(op) ->
         compiled_fn = compile_expr(op, local_env)
-        compiled_args = Enum.map(args, &compile_expr(&1, local_env))
+        compiled_args = Enum.map(args, &compile_argument_expr(&1, local_env))
 
         args_cons =
           Enum.reduce(Enum.reverse(compiled_args), {nil, 1}, fn elem, acc ->
@@ -6875,15 +6884,15 @@ defmodule LispBeam do
         cond do
           is_atom(op_name) and
               MapSet.member?(local_env, {:direct_module_fn, op_name, length(args)}) ->
-            compiled_args = Enum.map(args, &compile_expr(&1, local_env))
+            compiled_args = Enum.map(args, &compile_argument_expr(&1, local_env))
             {:call, 1, {:atom, 1, op_name}, compiled_args}
 
           is_atom(op_name) and MapSet.member?(local_env, {:direct_fn, op_name}) ->
-            compiled_args = Enum.map(args, &compile_expr(&1, local_env))
+            compiled_args = Enum.map(args, &compile_argument_expr(&1, local_env))
             {:call, 1, {:var, 1, erl_var_name(op_name)}, compiled_args}
 
           is_atom(op_name) and MapSet.member?(local_env, {:closure_fn, op_name}) ->
-            compiled_args = Enum.map(args, &compile_expr(&1, local_env))
+            compiled_args = Enum.map(args, &compile_argument_expr(&1, local_env))
 
             erl_args_cons =
               Enum.reduce(Enum.reverse(compiled_args), {nil, 1}, fn elem, acc ->
@@ -6897,14 +6906,14 @@ defmodule LispBeam do
             {:remote, mod, fun} = normalize_remote_op(op)
 
             {:call, 1, {:remote, 1, {:atom, 1, mod}, {:atom, 1, fun}},
-             Enum.map(args, &compile_expr(&1, local_env))}
+             Enum.map(args, &compile_argument_expr(&1, local_env))}
 
           match?({:ok, _}, BuiltinFunction.lookup(op)) ->
             {:ok, builtin_op} = BuiltinFunction.lookup(op)
-            BuiltinFunction.compile(builtin_op, args, &compile_expr(&1, local_env))
+            BuiltinFunction.compile(builtin_op, args, &compile_argument_expr(&1, local_env))
 
           is_atom(op_name) and ExLisp.Env.has_fun?(op_name) ->
-            compiled_args = Enum.map(args, &compile_expr(&1, local_env))
+            compiled_args = Enum.map(args, &compile_argument_expr(&1, local_env))
 
             erl_args_cons =
               Enum.reduce(Enum.reverse(compiled_args), {nil, 1}, fn elem, acc ->
@@ -6915,7 +6924,7 @@ defmodule LispBeam do
              [{:atom, 1, op_name}, erl_args_cons]}
 
           true ->
-            compiled_args = Enum.map(args, &compile_expr(&1, local_env))
+            compiled_args = Enum.map(args, &compile_argument_expr(&1, local_env))
 
             erl_args_cons =
               Enum.reduce(Enum.reverse(compiled_args), {nil, 1}, fn elem, acc ->
@@ -6926,6 +6935,11 @@ defmodule LispBeam do
              [{:atom, 1, op_name}, erl_args_cons]}
         end
     end
+  end
+
+  defp compile_argument_expr(ast, local_env) do
+    {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :unwrap_mv_primary}},
+     [compile_expr(ast, local_env)]}
   end
 
   defp invoke_macro_function(%ExLisp.Closure{fun: fun}, args, whole), do: fun.([args, whole])

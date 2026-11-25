@@ -679,6 +679,7 @@ target_suites =
 
 compiled_suites =
   MapSet.new([
+    "TIMES",
     "NTH",
     "NSUBSTITUTE-IF"
   ])

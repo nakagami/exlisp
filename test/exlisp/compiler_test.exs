@@ -45,6 +45,21 @@ defmodule ExLisp.CompilerTest do
         )
       end
     end
+
+    test "uses only the primary value for function arguments" do
+      code = """
+      (defun produces-multiple-values (n) (values n 99))
+      (defun consumes-primary-value (n)
+        (ash 1 (floor (produces-multiple-values n) 2)))
+      (defun matches-complex-literals () (= #c(1 2) #c(1 2)))
+      """
+
+      {:ok, mod, _binary} =
+        Compiler.compile_string(code, module: PrimaryValueModule, write_beam: false)
+
+      assert apply(mod, :consumes_primary_value, [8]) == 16
+      assert apply(mod, :matches_complex_literals, []) == :t
+    end
   end
 
   describe "compile_file/2 and file output" do
