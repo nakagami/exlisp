@@ -75,5 +75,8 @@ defmodule ExLisp.SequencesAndListsTest do
   test "string search falls back for non-ASCII and custom comparisons" do
     assert ExLisp.eval(~s[(search "界世" "世界世界")]) == 1
     assert ExLisp.eval(~s[(search "m" "adgmnpq" :test #'char<)]) == 4
+
+    long_unicode_string = String.duplicate("a", 4096) <> "界"
+    assert ExLisp.Builtins.search(["界", long_unicode_string]) == 4096
   end
 end

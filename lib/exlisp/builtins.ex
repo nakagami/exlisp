@@ -4658,6 +4658,14 @@ defmodule ExLisp.Builtins do
     end
   end
 
+  defp sequence_bounds(opts, total_len, start_key, end_key) do
+    start_idx = Keyword.get(opts, start_key, 0) || 0
+    end_option = Keyword.get(opts, end_key, nil)
+    end_idx = if is_integer(end_option), do: end_option, else: total_len
+    check_start_end!(start_idx, end_option, total_len)
+    {start_idx, end_idx}
+  end
+
   def search(args) when is_list(args) do
     case args do
       [seq1, seq2 | rest_opts] ->
@@ -4683,38 +4691,26 @@ defmodule ExLisp.Builtins do
             true -> :eql
           end
 
-        if key_fn == nil and test_fn == :eql and ascii_binary?(seq1) and ascii_binary?(seq2) do
-          len1 = Kernel.byte_size(seq1)
-          len2 = Kernel.byte_size(seq2)
-          start1 = Keyword.get(opts, :start1, 0) || 0
-          end1_opt = Keyword.get(opts, :end1, nil)
-          end1 = if is_integer(end1_opt), do: end1_opt, else: len1
-          check_start_end!(start1, end1_opt, len1)
+        binary_fast_path? =
+          key_fn == nil and test_fn == :eql and ascii_binary?(seq1) and ascii_binary?(seq2)
 
-          start2 = Keyword.get(opts, :start2, 0) || 0
-          end2_opt = Keyword.get(opts, :end2, nil)
-          end2 = if is_integer(end2_opt), do: end2_opt, else: len2
-          check_start_end!(start2, end2_opt, len2)
+        {first, second, len1, len2} =
+          if binary_fast_path? do
+            {seq1, seq2, Kernel.byte_size(seq1), Kernel.byte_size(seq2)}
+          else
+            first = seq_to_list(seq1)
+            second = seq_to_list(seq2)
+            {first, second, Kernel.length(first), Kernel.length(second)}
+          end
 
-          binary_search(seq1, seq2, start1, end1, start2, end2, from_end)
+        {start1, end1} = sequence_bounds(opts, len1, :start1, :end1)
+        {start2, end2} = sequence_bounds(opts, len2, :start2, :end2)
+
+        if binary_fast_path? do
+          binary_search(first, second, start1, end1, start2, end2, from_end)
         else
-          l1 = seq_to_list(seq1)
-          l2 = seq_to_list(seq2)
-          len1 = Kernel.length(l1)
-          len2 = Kernel.length(l2)
-
-          start1 = Keyword.get(opts, :start1, 0) || 0
-          end1_opt = Keyword.get(opts, :end1, nil)
-          end1 = if is_integer(end1_opt), do: end1_opt, else: len1
-          check_start_end!(start1, end1_opt, len1)
-
-          start2 = Keyword.get(opts, :start2, 0) || 0
-          end2_opt = Keyword.get(opts, :end2, nil)
-          end2 = if is_integer(end2_opt), do: end2_opt, else: len2
-          check_start_end!(start2, end2_opt, len2)
-
-          sub1 = Enum.slice(l1, start1, max(0, end1 - start1))
-          sub2 = Enum.slice(l2, start2, max(0, end2 - start2))
+          sub1 = Enum.slice(first, start1, max(0, end1 - start1))
+          sub2 = Enum.slice(second, start2, max(0, end2 - start2))
           sub1_len = Kernel.length(sub1)
           sub2_len = Kernel.length(sub2)
 
@@ -4773,6 +4769,9 @@ defmodule ExLisp.Builtins do
 
   defp reverse_binary(binary),
     do: binary |> :binary.bin_to_list() |> Enum.reverse() |> :erlang.list_to_binary()
+
+  defp ascii_binary?(binary) when :erlang.byte_size(binary) >= 4096,
+    do: :re.run(binary, "[^\\x00-\\x7F]", capture: :none) == :nomatch
 
   defp ascii_binary?(<<>>), do: true
   defp ascii_binary?(<<byte, rest::binary>>) when byte < 128, do: ascii_binary?(rest)
@@ -4897,15 +4896,8 @@ defmodule ExLisp.Builtins do
         len1 = Kernel.length(l1)
         len2 = Kernel.length(l2)
 
-        start1 = Keyword.get(opts, :start1, 0) || 0
-        end1_opt = Keyword.get(opts, :end1, nil)
-        end1 = if is_integer(end1_opt), do: end1_opt, else: len1
-        check_start_end!(start1, end1_opt, len1)
-
-        start2 = Keyword.get(opts, :start2, 0) || 0
-        end2_opt = Keyword.get(opts, :end2, nil)
-        end2 = if is_integer(end2_opt), do: end2_opt, else: len2
-        check_start_end!(start2, end2_opt, len2)
+        {start1, end1} = sequence_bounds(opts, len1, :start1, :end1)
+        {start2, end2} = sequence_bounds(opts, len2, :start2, :end2)
 
         sub1 = Enum.slice(l1, start1, max(0, end1 - start1))
         sub2 = Enum.slice(l2, start2, max(0, end2 - start2))
@@ -5983,17 +5975,11 @@ defmodule ExLisp.Builtins do
         opts = parse_lisp_keywords(rest, [:start1, :end1, :start2, :end2])
         l1 = seq_to_list(seq1)
         total1 = Kernel.length(l1)
-        start1 = Keyword.get(opts, :start1, 0) || 0
-        end1_opt = Keyword.get(opts, :end1, nil)
-        end1 = if is_integer(end1_opt), do: end1_opt, else: total1
-        check_start_end!(start1, end1_opt, total1)
+        {start1, end1} = sequence_bounds(opts, total1, :start1, :end1)
 
         l2 = seq_to_list(seq2)
         total2 = Kernel.length(l2)
-        start2 = Keyword.get(opts, :start2, 0) || 0
-        end2_opt = Keyword.get(opts, :end2, nil)
-        end2 = if is_integer(end2_opt), do: end2_opt, else: total2
-        check_start_end!(start2, end2_opt, total2)
+        {start2, end2} = sequence_bounds(opts, total2, :start2, :end2)
 
         count = min(max(end1 - start1, 0), max(end2 - start2, 0))
         replacement_items = Enum.slice(l2, start2, count)
