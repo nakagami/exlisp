@@ -60,6 +60,34 @@ defmodule ExLisp.CompilerTest do
       assert apply(mod, :consumes_primary_value, [8]) == 16
       assert apply(mod, :matches_complex_literals, []) == :t
     end
+
+    test "preserves list results passed between recursive functions" do
+      code = """
+      (defun split-values (x)
+        (cond
+          ((null x) (values nil nil))
+          ((null (cdr x)) (values x nil))
+          (t
+           (multiple-value-bind (y z)
+               (split-values (cddr x))
+             (values (cons (car x) y) (cons (cadr x) z))))))
+
+      (defun rebuild-list (x)
+        (cond
+          ((null x) nil)
+          ((null (cdr x)) x)
+          (t
+           (multiple-value-bind (y z)
+               (split-values x)
+             (append (rebuild-list y) (rebuild-list z))))))
+      """
+
+      {:ok, mod, _binary} =
+        Compiler.compile_string(code, module: RecursiveListModule, write_beam: false)
+
+      assert apply(mod, :rebuild_list, [[1, 2, 3, 4, 5, 6, 7, 8]]) ==
+               [1, 5, 3, 7, 2, 6, 4, 8]
+    end
   end
 
   describe "compile_file/2 and file output" do

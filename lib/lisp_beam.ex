@@ -811,7 +811,7 @@ defmodule LispBeam do
         end
 
       :list ->
-        compiled_args = Enum.map(args, &compile_expr(&1, local_env))
+        compiled_args = Enum.map(args, &compile_argument_expr(&1, local_env))
         args_cons = ast_cons_list(compiled_args)
 
         {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :list}}, [args_cons]}
@@ -1664,7 +1664,7 @@ defmodule LispBeam do
         case op do
           {:list, _pos, _} ->
             compiled_fn = compile_expr(op, local_env)
-            compiled_args = Enum.map(args, &compile_expr(&1, local_env))
+            compiled_args = Enum.map(args, &compile_argument_expr(&1, local_env))
             {:call, 1, compiled_fn, compiled_args}
 
           _ ->
@@ -6888,11 +6888,11 @@ defmodule LispBeam do
             {:call, 1, {:atom, 1, op_name}, compiled_args}
 
           is_atom(op_name) and MapSet.member?(local_env, {:direct_fn, op_name}) ->
-            compiled_args = Enum.map(args, &compile_argument_expr(&1, local_env))
+            compiled_args = Enum.map(args, &compile_expr(&1, local_env))
             {:call, 1, {:var, 1, erl_var_name(op_name)}, compiled_args}
 
           is_atom(op_name) and MapSet.member?(local_env, {:closure_fn, op_name}) ->
-            compiled_args = Enum.map(args, &compile_argument_expr(&1, local_env))
+            compiled_args = Enum.map(args, &compile_expr(&1, local_env))
 
             erl_args_cons =
               Enum.reduce(Enum.reverse(compiled_args), {nil, 1}, fn elem, acc ->
@@ -6937,7 +6937,18 @@ defmodule LispBeam do
     end
   end
 
-  defp compile_argument_expr(ast, local_env) do
+  defp compile_argument_expr({:id, _pos, [name]} = ast, local_env)
+       when is_binary(name) do
+    if String.starts_with?(name, "__mv_") do
+      compile_expr(ast, local_env)
+    else
+      unwrap_compiled_argument(ast, local_env)
+    end
+  end
+
+  defp compile_argument_expr(ast, local_env), do: unwrap_compiled_argument(ast, local_env)
+
+  defp unwrap_compiled_argument(ast, local_env) do
     {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :unwrap_mv_primary}},
      [compile_expr(ast, local_env)]}
   end
