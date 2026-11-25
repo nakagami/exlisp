@@ -63,4 +63,17 @@ defmodule ExLisp.SequencesAndListsTest do
              "(let ((a (make-array 3 :element-type 'base-char :initial-contents '(#\\a #\\b #\\c)))) (array-element-type (copy-seq a)))"
            ) == :base_char
   end
+
+  test "ASCII string search fast path handles ranges and overlapping matches" do
+    assert ExLisp.eval(~s[(search "aba" "ababa")]) == 0
+    assert ExLisp.eval(~s[(search "aba" "ababa" :from-end t)]) == 2
+    assert ExLisp.eval(~s[(search "aba" "zababaq" :start2 1 :end2 6)]) == 1
+    assert ExLisp.eval(~s[(search "a" "abc" :start1 1)]) == 0
+    assert ExLisp.eval(~s[(search "" "abc" :from-end t)]) == 3
+  end
+
+  test "string search falls back for non-ASCII and custom comparisons" do
+    assert ExLisp.eval(~s[(search "界世" "世界世界")]) == 1
+    assert ExLisp.eval(~s[(search "m" "adgmnpq" :test #'char<)]) == 4
+  end
 end

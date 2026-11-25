@@ -681,7 +681,14 @@ compiled_suites =
   MapSet.new([
     "TIMES",
     "NTH",
-    "NSUBSTITUTE-IF"
+    "NSUBSTITUTE-IF",
+    "SEARCH-STRING",
+    "SUBSTITUTE",
+    "NSUBSTITUTE",
+    "NSUBSTITUTE-IF-NOT",
+    "SET-DIFFERENCE",
+    "INTERSECTION",
+    "NINTERSECTION"
   ])
 
 IO.puts(

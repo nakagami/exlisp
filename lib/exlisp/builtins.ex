@@ -4683,35 +4683,51 @@ defmodule ExLisp.Builtins do
             true -> :eql
           end
 
-        l1 = seq_to_list(seq1)
-        l2 = seq_to_list(seq2)
-        len1 = Kernel.length(l1)
-        len2 = Kernel.length(l2)
+        if key_fn == nil and test_fn == :eql and ascii_binary?(seq1) and ascii_binary?(seq2) do
+          len1 = Kernel.byte_size(seq1)
+          len2 = Kernel.byte_size(seq2)
+          start1 = Keyword.get(opts, :start1, 0) || 0
+          end1_opt = Keyword.get(opts, :end1, nil)
+          end1 = if is_integer(end1_opt), do: end1_opt, else: len1
+          check_start_end!(start1, end1_opt, len1)
 
-        start1 = Keyword.get(opts, :start1, 0) || 0
-        end1_opt = Keyword.get(opts, :end1, nil)
-        end1 = if is_integer(end1_opt), do: end1_opt, else: len1
-        check_start_end!(start1, end1_opt, len1)
+          start2 = Keyword.get(opts, :start2, 0) || 0
+          end2_opt = Keyword.get(opts, :end2, nil)
+          end2 = if is_integer(end2_opt), do: end2_opt, else: len2
+          check_start_end!(start2, end2_opt, len2)
 
-        start2 = Keyword.get(opts, :start2, 0) || 0
-        end2_opt = Keyword.get(opts, :end2, nil)
-        end2 = if is_integer(end2_opt), do: end2_opt, else: len2
-        check_start_end!(start2, end2_opt, len2)
-
-        sub1 = Enum.slice(l1, start1, max(0, end1 - start1))
-        sub2 = Enum.slice(l2, start2, max(0, end2 - start2))
-        sub1_len = Kernel.length(sub1)
-        sub2_len = Kernel.length(sub2)
-
-        if sub1_len == 0 do
-          if from_end, do: end2, else: start2
+          binary_search(seq1, seq2, start1, end1, start2, end2, from_end)
         else
-          max_start = sub2_len - sub1_len
+          l1 = seq_to_list(seq1)
+          l2 = seq_to_list(seq2)
+          len1 = Kernel.length(l1)
+          len2 = Kernel.length(l2)
 
-          if max_start < 0 do
-            nil
+          start1 = Keyword.get(opts, :start1, 0) || 0
+          end1_opt = Keyword.get(opts, :end1, nil)
+          end1 = if is_integer(end1_opt), do: end1_opt, else: len1
+          check_start_end!(start1, end1_opt, len1)
+
+          start2 = Keyword.get(opts, :start2, 0) || 0
+          end2_opt = Keyword.get(opts, :end2, nil)
+          end2 = if is_integer(end2_opt), do: end2_opt, else: len2
+          check_start_end!(start2, end2_opt, len2)
+
+          sub1 = Enum.slice(l1, start1, max(0, end1 - start1))
+          sub2 = Enum.slice(l2, start2, max(0, end2 - start2))
+          sub1_len = Kernel.length(sub1)
+          sub2_len = Kernel.length(sub2)
+
+          if sub1_len == 0 do
+            if from_end, do: end2, else: start2
           else
-            do_search(sub1, sub2, sub1_len, max_start, start2, from_end, key_fn, test_fn)
+            max_start = sub2_len - sub1_len
+
+            if max_start < 0 do
+              nil
+            else
+              do_search(sub1, sub2, sub1_len, max_start, start2, from_end, key_fn, test_fn)
+            end
           end
         end
 
@@ -4721,6 +4737,46 @@ defmodule ExLisp.Builtins do
   end
 
   def search(seq1, seq2), do: search([seq1, seq2])
+
+  defp binary_search(pattern, target, start1, end1, start2, end2, from_end)
+       when is_binary(pattern) and is_binary(target) do
+    pattern_length = end1 - start1
+    target_length = end2 - start2
+
+    if pattern_length > target_length do
+      nil
+    else
+      pattern_part = :erlang.binary_part(pattern, start1, pattern_length)
+      target_part = :erlang.binary_part(target, start2, target_length)
+
+      cond do
+        pattern_length == 0 ->
+          if from_end, do: end2, else: start2
+
+        from_end ->
+          reversed_pattern = reverse_binary(pattern_part)
+          reversed_target = reverse_binary(target_part)
+
+          case :binary.match(reversed_target, reversed_pattern) do
+            {index, _length} -> start2 + target_length - index - pattern_length
+            :nomatch -> nil
+          end
+
+        true ->
+          case :binary.match(target_part, pattern_part) do
+            {index, _length} -> start2 + index
+            :nomatch -> nil
+          end
+      end
+    end
+  end
+
+  defp reverse_binary(binary),
+    do: binary |> :binary.bin_to_list() |> Enum.reverse() |> :erlang.list_to_binary()
+
+  defp ascii_binary?(<<>>), do: true
+  defp ascii_binary?(<<byte, rest::binary>>) when byte < 128, do: ascii_binary?(rest)
+  defp ascii_binary?(_binary), do: false
 
   defp prefix_match?([], _l2, _key_fn, _test_fn), do: true
   defp prefix_match?(_l1, [], _key_fn, _test_fn), do: false
