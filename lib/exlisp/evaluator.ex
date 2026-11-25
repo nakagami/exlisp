@@ -1396,7 +1396,7 @@ defmodule ExLisp.Evaluator do
         case args do
           [pkg_node | _] ->
             pkg_name = defpackage_designator(pkg_node)
-            ExLisp.Package.set_current_package(pkg_name)
+            ExLisp.Package.in_package(pkg_name)
 
           _ ->
             nil

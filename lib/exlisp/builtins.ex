@@ -11104,12 +11104,12 @@ defmodule ExLisp.Builtins do
 
   def in_package(args) when is_list(args) do
     case args do
-      [name | _] -> ExLisp.Package.set_current_package(name)
-      name -> ExLisp.Package.set_current_package(name)
+      [name | _] -> ExLisp.Package.in_package(name)
+      name -> ExLisp.Package.in_package(name)
     end
   end
 
-  def in_package(name), do: ExLisp.Package.set_current_package(name)
+  def in_package(name), do: ExLisp.Package.in_package(name)
 
   def export(args) when is_list(args) do
     case args do

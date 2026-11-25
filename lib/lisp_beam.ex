@@ -8026,7 +8026,7 @@ defmodule LispBeam do
 
         pkg_beam = compile_expr({:lit, pkg_name}, local_env)
 
-        {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Package}, {:atom, 1, :set_current_package}},
+        {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Package}, {:atom, 1, :in_package}},
          [pkg_beam]}
 
       _ ->

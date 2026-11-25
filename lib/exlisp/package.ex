@@ -211,6 +211,12 @@ defmodule ExLisp.Package do
     pkg
   end
 
+  def in_package(pkg_designator) do
+    pkg = set_current_package(pkg_designator)
+    ExLisp.Env.set_var(:"*package*", pkg)
+    pkg
+  end
+
   # --- Standard Packages Initialization ---
 
   def init_standard_packages do
