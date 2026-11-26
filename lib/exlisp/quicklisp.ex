@@ -413,21 +413,14 @@ defmodule ExLisp.Quicklisp do
             "Quicklisp archive size mismatch for #{archive_path}: expected #{expected_size}, got #{actual_size}"
     end
 
-    {md5, sha1} =
+    md5 =
       archive_path
       |> File.stream!(64 * 1024, [])
-      |> Enum.reduce({:crypto.hash_init(:md5), :crypto.hash_init(:sha)}, fn chunk,
-                                                                            {md5_state,
-                                                                             sha1_state} ->
-        {:crypto.hash_update(md5_state, chunk), :crypto.hash_update(sha1_state, chunk)}
-      end)
-      |> then(fn {md5_state, sha1_state} ->
-        {:crypto.hash_final(md5_state) |> Base.encode16(case: :lower),
-         :crypto.hash_final(sha1_state) |> Base.encode16(case: :lower)}
-      end)
+      |> Enum.reduce(:crypto.hash_init(:md5), &:crypto.hash_update(&2, &1))
+      |> :crypto.hash_final()
+      |> Base.encode16(case: :lower)
 
     verify_digest!("MD5", archive_path, release[:md5], md5)
-    verify_digest!("SHA1", archive_path, release[:sha1], sha1)
     :ok
   end
 
@@ -540,12 +533,12 @@ defmodule ExLisp.Quicklisp do
       |> Enum.reject(&String.starts_with?(&1, "#"))
       |> Enum.reduce(%{}, fn line, acc ->
         case String.split(line, ~r/\s+/) do
-          [proj, url, size, md5, sha1, prefix | sys_files] ->
+          [proj, url, size, md5, content_sha1, prefix | sys_files] ->
             Map.put(acc, String.downcase(proj), %{
               url: url,
               size: String.to_integer(size),
               md5: md5,
-              sha1: sha1,
+              content_sha1: content_sha1,
               prefix: prefix,
               system_files: sys_files
             })

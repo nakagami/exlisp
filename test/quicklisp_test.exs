@@ -7,7 +7,7 @@ defmodule QuicklispTest do
     :ok
   end
 
-  test "Quicklisp archive integrity validates size and digests" do
+  test "Quicklisp archive integrity validates size and archive MD5" do
     path =
       Path.join(
         System.tmp_dir!(),
@@ -21,13 +21,17 @@ defmodule QuicklispTest do
     release = %{
       size: byte_size(contents),
       md5: :crypto.hash(:md5, contents) |> Base.encode16(case: :lower),
-      sha1: :crypto.hash(:sha, contents) |> Base.encode16(case: :lower)
+      content_sha1: "not-the-archive-sha1"
     }
 
     assert ExLisp.Quicklisp.verify_archive!(path, release) == :ok
 
-    assert_raise RuntimeError, ~r/SHA1 mismatch/, fn ->
-      ExLisp.Quicklisp.verify_archive!(path, %{release | sha1: "invalid"})
+    assert_raise RuntimeError, ~r/size mismatch/, fn ->
+      ExLisp.Quicklisp.verify_archive!(path, %{release | size: release.size + 1})
+    end
+
+    assert_raise RuntimeError, ~r/MD5 mismatch/, fn ->
+      ExLisp.Quicklisp.verify_archive!(path, %{release | md5: "invalid"})
     end
   end
 
