@@ -326,6 +326,7 @@ defmodule ExLisp.Condition do
   """
   def invoke_debugger(condition) do
     object = coerce_to_condition(condition, [], :simple_error)
+
     old_hook =
       case ExLisp.Env.get_var(:"*debugger-hook*") do
         hook when hook not in [nil, false, :unbound] -> hook
@@ -654,7 +655,6 @@ defmodule ExLisp.Condition do
   end
 
   def restart_name(name) when is_atom(name), do: name
-  def restart_name(%ExLisp.Symbol{name: n}), do: String.to_atom(String.downcase(n))
   def restart_name(_), do: nil
 
   def format_restart(%{report: report, name: _name} = restart) do

@@ -47,7 +47,18 @@ defmodule ExLisp.CLFormat do
 
       # --- Conditional: ~[ ... ~] ---
       [?[ | after_bracket] ->
-        handle_conditional(after_bracket, params, colons, ats, args, all_args, acc, col, at_nl, ctx)
+        handle_conditional(
+          after_bracket,
+          params,
+          colons,
+          ats,
+          args,
+          all_args,
+          acc,
+          col,
+          at_nl,
+          ctx
+        )
 
       # --- Iteration: ~{ ... ~} ---
       [?{ | after_brace] ->
@@ -59,7 +70,18 @@ defmodule ExLisp.CLFormat do
 
       # --- Justification: ~< ... ~> ---
       [?< | after_angle] ->
-        handle_justification(after_angle, params, colons, ats, args, all_args, acc, col, at_nl, ctx)
+        handle_justification(
+          after_angle,
+          params,
+          colons,
+          ats,
+          args,
+          all_args,
+          acc,
+          col,
+          at_nl,
+          ctx
+        )
 
       # --- Escape: ~^ ---
       [?^ | after_caret] ->
@@ -84,7 +106,10 @@ defmodule ExLisp.CLFormat do
       # --- Standard directives ---
       [d | after_dir] ->
         dir_char = if d >= ?a and d <= ?z, do: d - 32, else: d
-        {out_str, new_args} = execute_directive(dir_char, params, colons, ats, args, all_args, col, at_nl)
+
+        {out_str, new_args} =
+          execute_directive(dir_char, params, colons, ats, args, all_args, col, at_nl)
+
         {new_acc, new_col, new_at_nl} = append_output(acc, col, at_nl, out_str)
         do_format_chars(after_dir, new_args, all_args, new_acc, new_col, new_at_nl, ctx)
     end
@@ -120,6 +145,7 @@ defmodule ExLisp.CLFormat do
 
   defp execute_directive(?A, params, colons, _ats, args, _all_args, _col, _at_nl) do
     {val, rem_args} = pop_arg(args)
+
     str =
       cond do
         colons and val == nil -> "()"
@@ -137,6 +163,7 @@ defmodule ExLisp.CLFormat do
 
   defp execute_directive(?S, params, colons, _ats, args, _all_args, _col, _at_nl) do
     {val, rem_args} = pop_arg(args)
+
     str =
       cond do
         colons and val == nil -> "()"
@@ -154,6 +181,7 @@ defmodule ExLisp.CLFormat do
 
   defp execute_directive(?C, _params, colons, ats, args, _all_args, _col, _at_nl) do
     {val, rem_args} = pop_arg(args)
+
     char_str =
       case val do
         %ExLisp.Character{code: c} ->
@@ -162,21 +190,25 @@ defmodule ExLisp.CLFormat do
             colons -> char_name(c)
             true -> <<c::utf8>>
           end
+
         c when is_integer(c) ->
           cond do
             ats -> "#\\#{char_name(c)}"
             colons -> char_name(c)
             true -> <<c::utf8>>
           end
+
         <<c::utf8>> ->
           cond do
             ats -> "#\\#{char_name(c)}"
             colons -> char_name(c)
             true -> <<c::utf8>>
           end
+
         _ ->
           "#{val}"
       end
+
     {char_str, rem_args}
   end
 
@@ -206,6 +238,7 @@ defmodule ExLisp.CLFormat do
 
   defp execute_directive(?R, params, colons, ats, args, _all_args, _col, _at_nl) do
     {val, rem_args} = pop_arg(args)
+
     str =
       case params do
         [radix | rest_params] when is_integer(radix) ->
@@ -217,17 +250,21 @@ defmodule ExLisp.CLFormat do
             ats and colons ->
               # Old Roman numeral
               to_roman_numeral(val, true)
+
             ats ->
               # Roman numeral
               to_roman_numeral(val, false)
+
             colons ->
               # Ordinal English word (e.g. fourth)
               to_ordinal_word(val)
+
             true ->
               # Cardinal English word (e.g. four)
               to_cardinal_word(val)
           end
       end
+
     {str, rem_args}
   end
 
@@ -282,12 +319,22 @@ defmodule ExLisp.CLFormat do
   end
 
   defp execute_directive(?%, params, _colons, _ats, args, _all_args, _col, _at_nl) do
-    n = case params do [count | _] when is_integer(count) and count >= 0 -> count; _ -> 1 end
+    n =
+      case params do
+        [count | _] when is_integer(count) and count >= 0 -> count
+        _ -> 1
+      end
+
     {String.duplicate("\n", n), args}
   end
 
   defp execute_directive(?&, params, _colons, _ats, args, _all_args, _col, at_newline?) do
-    n = case params do [count | _] when is_integer(count) and count >= 0 -> count; _ -> 1 end
+    n =
+      case params do
+        [count | _] when is_integer(count) and count >= 0 -> count
+        _ -> 1
+      end
+
     if n == 0 do
       {"", args}
     else
@@ -298,17 +345,31 @@ defmodule ExLisp.CLFormat do
   end
 
   defp execute_directive(?|, params, _colons, _ats, args, _all_args, _col, _at_nl) do
-    n = case params do [count | _] when is_integer(count) and count >= 0 -> count; _ -> 1 end
+    n =
+      case params do
+        [count | _] when is_integer(count) and count >= 0 -> count
+        _ -> 1
+      end
+
     {String.duplicate("\f", n), args}
   end
 
   defp execute_directive(?~, params, _colons, _ats, args, _all_args, _col, _at_nl) do
-    n = case params do [count | _] when is_integer(count) and count >= 0 -> count; _ -> 1 end
+    n =
+      case params do
+        [count | _] when is_integer(count) and count >= 0 -> count
+        _ -> 1
+      end
+
     {String.duplicate("~", n), args}
   end
 
   defp execute_directive(?*, params, colons, ats, args, all_args, _col, _at_nl) do
-    n = case params do [count | _] when is_integer(count) -> count; _ -> 1 end
+    n =
+      case params do
+        [count | _] when is_integer(count) -> count
+        _ -> 1
+      end
 
     new_args =
       cond do
@@ -332,6 +393,7 @@ defmodule ExLisp.CLFormat do
 
   defp execute_directive(??, _params, _colons, ats, args, all_args, _col, _at_nl) do
     {fmt_arg, rem1} = pop_arg(args)
+
     if ats do
       # ~@? takes fmt_control and uses remaining args
       {sub_out, new_args} = format_internal(to_string(fmt_arg), rem1, all_args)
@@ -346,8 +408,17 @@ defmodule ExLisp.CLFormat do
   end
 
   defp execute_directive(?T, params, colons, _ats, args, _all_args, current_col, _at_nl) do
-    colnum = case params do [c | _] when is_integer(c) -> c; _ -> 1 end
-    colinc = case params do [_, inc | _] when is_integer(inc) and inc > 0 -> inc; _ -> 1 end
+    colnum =
+      case params do
+        [c | _] when is_integer(c) -> c
+        _ -> 1
+      end
+
+    colinc =
+      case params do
+        [_, inc | _] when is_integer(inc) and inc > 0 -> inc
+        _ -> 1
+      end
 
     spaces =
       if colons do
@@ -374,7 +445,18 @@ defmodule ExLisp.CLFormat do
 
   # --- Conditionals (~[ ... ~]) ---
 
-  defp handle_conditional(after_bracket, params, colons, ats, args, all_args, acc, col, at_nl, ctx) do
+  defp handle_conditional(
+         after_bracket,
+         params,
+         colons,
+         ats,
+         args,
+         all_args,
+         acc,
+         col,
+         at_nl,
+         ctx
+       ) do
     {clauses, rest_after_close} = extract_matching_clauses(after_bracket, ?[, ?])
 
     cond do
@@ -395,7 +477,16 @@ defmodule ExLisp.CLFormat do
             clause_str = hd(clauses)
             {out_str, rem_args} = format_internal(clause_str, args, all_args, ctx)
             {new_acc, new_col, new_at_nl} = append_output(acc, col, at_nl, out_str)
-            do_format_chars(rest_after_close, rem_args, all_args, new_acc, new_col, new_at_nl, ctx)
+
+            do_format_chars(
+              rest_after_close,
+              rem_args,
+              all_args,
+              new_acc,
+              new_col,
+              new_at_nl,
+              ctx
+            )
 
           _ ->
             # Falsey / nil: consume arg and do not execute clause
@@ -443,7 +534,11 @@ defmodule ExLisp.CLFormat do
     {body_chars, rest_after_close} = extract_matching_body(after_brace, ?{, ?})
     body_str = List.to_string(body_chars)
 
-    max_iter = case params do [n | _] when is_integer(n) -> n; _ -> :infinity end
+    max_iter =
+      case params do
+        [n | _] when is_integer(n) -> n
+        _ -> :infinity
+      end
 
     {out_str, new_args} =
       cond do
@@ -492,7 +587,8 @@ defmodule ExLisp.CLFormat do
     actual_body = if body_str == "", do: to_string(hd(items)), else: body_str
     actual_items = if body_str == "", do: tl(items), else: items
 
-    {sub_out, rem_items} = format_internal(actual_body, actual_items, all_args, %{outer_args: tl_or_empty(items)})
+    {sub_out, rem_items} =
+      format_internal(actual_body, actual_items, all_args, %{outer_args: tl_or_empty(items)})
 
     if rem_items == actual_items do
       # Avoid infinite loop if no items were consumed
@@ -553,6 +649,7 @@ defmodule ExLisp.CLFormat do
   end
 
   defp capitalize_first(""), do: ""
+
   defp capitalize_first(str) do
     case String.next_grapheme(str) do
       {first, rest} -> String.upcase(first) <> String.downcase(rest)
@@ -562,12 +659,38 @@ defmodule ExLisp.CLFormat do
 
   # --- Justification: ~< ... ~> ---
 
-  defp handle_justification(after_angle, params, colons, ats, args, all_args, acc, col, at_nl, ctx) do
+  defp handle_justification(
+         after_angle,
+         params,
+         colons,
+         ats,
+         args,
+         all_args,
+         acc,
+         col,
+         at_nl,
+         ctx
+       ) do
     {clauses, rest_after_close} = extract_matching_clauses(after_angle, ?<, ?>)
 
-    mincol = case params do [mc | _] when is_integer(mc) and mc >= 0 -> mc; _ -> 0 end
-    colinc = case params do [_, ci | _] when is_integer(ci) and ci > 0 -> ci; _ -> 1 end
-    minpad = case params do [_, _, mp | _] when is_integer(mp) and mp >= 0 -> mp; _ -> 0 end
+    mincol =
+      case params do
+        [mc | _] when is_integer(mc) and mc >= 0 -> mc
+        _ -> 0
+      end
+
+    colinc =
+      case params do
+        [_, ci | _] when is_integer(ci) and ci > 0 -> ci
+        _ -> 1
+      end
+
+    minpad =
+      case params do
+        [_, _, mp | _] when is_integer(mp) and mp >= 0 -> mp
+        _ -> 0
+      end
+
     padchar =
       case params do
         [_, _, _, pc | _] when is_integer(pc) -> <<pc::utf8>>
@@ -650,6 +773,7 @@ defmodule ExLisp.CLFormat do
     cond do
       colons and ats ->
         [first_pad | rest_pads] = gap_pads
+
         interleaved =
           Enum.zip(fields, rest_pads)
           |> Enum.map(fn {f, p} -> f <> p end)
@@ -708,7 +832,8 @@ defmodule ExLisp.CLFormat do
     parse_params_loop(next_rest, args, [count | acc])
   end
 
-  defp parse_params_loop([c | _rest] = chars, args, acc) when (c >= ?0 and c <= ?9) or c == ?- or c == ?+ or c == ?' do
+  defp parse_params_loop([c | _rest] = chars, args, acc)
+       when (c >= ?0 and c <= ?9) or c == ?- or c == ?+ or c == ?' do
     case parse_single_param(chars) do
       {:ok, val, remaining} ->
         next_rest = skip_comma(remaining)
@@ -721,13 +846,16 @@ defmodule ExLisp.CLFormat do
 
   defp parse_params_loop(chars, _args, acc), do: {Enum.reverse(acc), chars}
 
-  defp parse_single_param([?' , char_val | rest]) do
+  defp parse_single_param([?', char_val | rest]) do
     {:ok, char_val, rest}
   end
 
   defp parse_single_param([c | _] = chars) when (c >= ?0 and c <= ?9) or c == ?- or c == ?+ do
-    {digits, rest} = Enum.split_while(chars, fn ch -> (ch >= ?0 and ch <= ?9) or ch == ?- or ch == ?+ end)
+    {digits, rest} =
+      Enum.split_while(chars, fn ch -> (ch >= ?0 and ch <= ?9) or ch == ?- or ch == ?+ end)
+
     str = List.to_string(digits)
+
     case Integer.parse(str) do
       {num, ""} -> {:ok, num, rest}
       _ -> :error
@@ -825,8 +953,18 @@ defmodule ExLisp.CLFormat do
 
       with_commas =
         if colons do
-          commachar = case params do [_, _, c | _] when is_integer(c) -> <<c::utf8>>; _ -> "," end
-          interval = case params do [_, _, _, inv | _] when is_integer(inv) and inv > 0 -> inv; _ -> 3 end
+          commachar =
+            case params do
+              [_, _, c | _] when is_integer(c) -> <<c::utf8>>
+              _ -> ","
+            end
+
+          interval =
+            case params do
+              [_, _, _, inv | _] when is_integer(inv) and inv > 0 -> inv
+              _ -> 3
+            end
+
           insert_commas(raw_str, commachar, interval)
         else
           raw_str
@@ -839,8 +977,17 @@ defmodule ExLisp.CLFormat do
           true -> with_commas
         end
 
-      mincol = case params do [m | _] when is_integer(m) -> m; _ -> 0 end
-      padchar = case params do [_, p | _] when is_integer(p) -> <<p::utf8>>; _ -> " " end
+      mincol =
+        case params do
+          [m | _] when is_integer(m) -> m
+          _ -> 0
+        end
+
+      padchar =
+        case params do
+          [_, p | _] when is_integer(p) -> <<p::utf8>>
+          _ -> " "
+        end
 
       if String.length(with_sign) < mincol do
         String.duplicate(padchar, mincol - String.length(with_sign)) <> with_sign
@@ -862,8 +1009,17 @@ defmodule ExLisp.CLFormat do
   end
 
   defp pad_string(str, params) do
-    mincol = case params do [m | _] when is_integer(m) -> m; _ -> 0 end
-    padchar = case params do [_, p | _] when is_integer(p) -> <<p::utf8>>; _ -> " " end
+    mincol =
+      case params do
+        [m | _] when is_integer(m) -> m
+        _ -> 0
+      end
+
+    padchar =
+      case params do
+        [_, p | _] when is_integer(p) -> <<p::utf8>>
+        _ -> " "
+      end
 
     if String.length(str) < mincol do
       String.duplicate(padchar, mincol - String.length(str)) <> str
@@ -876,7 +1032,12 @@ defmodule ExLisp.CLFormat do
 
   defp format_float_f(val, params, ats) do
     f_val = to_float_val(val)
-    d = case params do [_, digits | _] when is_integer(digits) -> digits; _ -> nil end
+
+    d =
+      case params do
+        [_, digits | _] when is_integer(digits) -> digits
+        _ -> nil
+      end
 
     str =
       if d != nil do
@@ -905,7 +1066,13 @@ defmodule ExLisp.CLFormat do
 
   defp format_monetary(val, params, colons, ats) do
     f_val = to_float_val(val)
-    d = case params do [digits | _] when is_integer(digits) -> digits; _ -> 2 end
+
+    d =
+      case params do
+        [digits | _] when is_integer(digits) -> digits
+        _ -> 2
+      end
+
     str = :erlang.float_to_binary(abs(f_val), decimals: d)
 
     with_commas =
@@ -935,21 +1102,44 @@ defmodule ExLisp.CLFormat do
 
   defp to_cardinal_word(0), do: "zero"
   defp to_cardinal_word(n) when n < 0, do: "negative " <> to_cardinal_word(-n)
+
   defp to_cardinal_word(n) when is_integer(n) do
     do_cardinal(n) |> String.trim()
   end
+
   defp to_cardinal_word(other), do: "#{other}"
 
   @ones_words %{
-    1 => "one", 2 => "two", 3 => "three", 4 => "four", 5 => "five",
-    6 => "six", 7 => "seven", 8 => "eight", 9 => "nine", 10 => "ten",
-    11 => "eleven", 12 => "twelve", 13 => "thirteen", 14 => "fourteen",
-    15 => "fifteen", 16 => "sixteen", 17 => "seventeen", 18 => "eighteen", 19 => "nineteen"
+    1 => "one",
+    2 => "two",
+    3 => "three",
+    4 => "four",
+    5 => "five",
+    6 => "six",
+    7 => "seven",
+    8 => "eight",
+    9 => "nine",
+    10 => "ten",
+    11 => "eleven",
+    12 => "twelve",
+    13 => "thirteen",
+    14 => "fourteen",
+    15 => "fifteen",
+    16 => "sixteen",
+    17 => "seventeen",
+    18 => "eighteen",
+    19 => "nineteen"
   }
 
   @tens_words %{
-    2 => "twenty", 3 => "thirty", 4 => "forty", 5 => "fifty",
-    6 => "sixty", 7 => "seventy", 8 => "eighty", 9 => "ninety"
+    2 => "twenty",
+    3 => "thirty",
+    4 => "forty",
+    5 => "fifty",
+    6 => "sixty",
+    7 => "seventy",
+    8 => "eighty",
+    9 => "ninety"
   }
 
   defp do_cardinal(n) when n >= 1_000_000_000 do
@@ -994,8 +1184,14 @@ defmodule ExLisp.CLFormat do
   defp do_cardinal(0), do: ""
 
   @ordinal_exceptions %{
-    "one" => "first", "two" => "second", "three" => "third", "four" => "fourth",
-    "five" => "fifth", "eight" => "eighth", "nine" => "ninth", "twelve" => "twelfth"
+    "one" => "first",
+    "two" => "second",
+    "three" => "third",
+    "four" => "fourth",
+    "five" => "fifth",
+    "eight" => "eighth",
+    "nine" => "ninth",
+    "twelve" => "twelfth"
   }
 
   defp to_ordinal_word(n) when is_integer(n) do
@@ -1020,27 +1216,45 @@ defmodule ExLisp.CLFormat do
 
     Enum.join(prefix_words ++ [ord_last], "")
   end
+
   defp to_ordinal_word(other), do: "#{other}"
 
   @roman_table [
-    {1000, "M"}, {900, "CM"}, {500, "D"}, {400, "CD"},
-    {100, "C"}, {90, "XC"}, {50, "L"}, {40, "XL"},
-    {10, "X"}, {9, "IX"}, {5, "V"}, {4, "IV"}, {1, "I"}
+    {1000, "M"},
+    {900, "CM"},
+    {500, "D"},
+    {400, "CD"},
+    {100, "C"},
+    {90, "XC"},
+    {50, "L"},
+    {40, "XL"},
+    {10, "X"},
+    {9, "IX"},
+    {5, "V"},
+    {4, "IV"},
+    {1, "I"}
   ]
 
   @old_roman_table [
-    {1000, "M"}, {500, "D"}, {100, "C"}, {50, "L"},
-    {10, "X"}, {5, "V"}, {1, "I"}
+    {1000, "M"},
+    {500, "D"},
+    {100, "C"},
+    {50, "L"},
+    {10, "X"},
+    {5, "V"},
+    {1, "I"}
   ]
 
   defp to_roman_numeral(n, old?) when is_integer(n) and n > 0 do
     table = if old?, do: @old_roman_table, else: @roman_table
     do_roman(n, table, "")
   end
+
   defp to_roman_numeral(n, _), do: "#{n}"
 
   defp do_roman(0, _table, acc), do: acc
   defp do_roman(_n, [], acc), do: acc
+
   defp do_roman(n, [{val, str} | rest], acc) do
     if n >= val do
       count = div(n, val)

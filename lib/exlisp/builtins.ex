@@ -276,145 +276,26 @@ defmodule ExLisp.Builtins do
                        :quit
                      ])
 
-  def unwrap_mv_primary([:_values_, [first | _]]), do: first
-  def unwrap_mv_primary([:_values_, []]), do: nil
-  def unwrap_mv_primary([:_values_ | _]), do: nil
-  def unwrap_mv_primary(other), do: other
+  def unwrap_mv_primary(value), do: ExLisp.Runtime.unwrap_mv_primary(value)
 
-  defp normalize_raw_args(nil), do: []
-  defp normalize_raw_args([]), do: []
-  defp normalize_raw_args([head | tail]), do: [head | normalize_raw_args(tail)]
-  defp normalize_raw_args(_other), do: []
+  defp normalize_raw_args(value), do: ExLisp.Runtime.normalize_raw_args(value)
 
   # --- Higher-order function invocation helper ---
 
   @doc """
   Invokes a function object or function name symbol with the given arguments list.
   """
-  def invoke_fn(fn_val, [arg]) when is_function(fn_val, 1) do
-    fn_val.(unwrap_mv_primary(arg))
-  end
-
-  def invoke_fn(fn_val, [a, b]) when is_function(fn_val, 2) do
-    fn_val.(unwrap_mv_primary(a), unwrap_mv_primary(b))
-  end
-
-  def invoke_fn(fn_val, [a, b, c]) when is_function(fn_val, 3) do
-    fn_val.(unwrap_mv_primary(a), unwrap_mv_primary(b), unwrap_mv_primary(c))
-  end
-
-  def invoke_fn(%ExLisp.Closure{fun: fun, package: package}, args) do
-    norm_args = args |> normalize_raw_args() |> Enum.map(&unwrap_mv_primary/1)
-
-    if package do
-      previous = ExLisp.Package.current_package()
-
-      try do
-        ExLisp.Package.set_current_package(package)
-        fun.(norm_args)
-      after
-        if ExLisp.Package.find_package(previous) do
-          ExLisp.Package.set_current_package(previous)
-        else
-          ExLisp.Package.set_current_package(package)
-        end
-      end
-    else
-      fun.(norm_args)
-    end
-  end
-
-  def invoke_fn(fn_val, args) when is_function(fn_val) do
-    norm_args = args |> normalize_raw_args() |> Enum.map(&unwrap_mv_primary/1)
-
-    cond do
-      is_function(fn_val, length(norm_args)) ->
-        Kernel.apply(fn_val, norm_args)
-
-      true ->
-        raise RuntimeError,
-              "Invalid arity for function #{inspect(fn_val)} with #{length(norm_args)} arguments"
-    end
-  end
-
-  def invoke_fn(sym, args) when is_atom(sym) and sym not in [nil, nil] do
-    down_sym = sym |> Atom.to_string() |> String.downcase() |> String.to_atom()
-    norm_args = args |> normalize_raw_args()
-
-    case BuiltinFunction.canonical_name(down_sym) do
-      {:ok, canonical} ->
-        dispatch_builtin(canonical, norm_args)
-
-      :error ->
-        mapped_args = Enum.map(norm_args, &unwrap_mv_primary/1)
-
-        cond do
-          function_exported?(__MODULE__, down_sym, length(mapped_args)) ->
-            Kernel.apply(__MODULE__, down_sym, mapped_args)
-
-          ExLisp.Env.has_fun?(down_sym) ->
-            ExLisp.Env.call_fun(down_sym, mapped_args)
-
-          macro_callsite = Process.get(:exlisp_macro_callsite_package) ->
-            callsite_name =
-              macro_callsite
-              |> to_string()
-              |> String.downcase()
-              |> String.replace("_", "-")
-
-            qualified_name = :"#{callsite_name}.#{down_sym}"
-
-            if ExLisp.Env.has_fun?(qualified_name) do
-              ExLisp.Env.call_fun(qualified_name, mapped_args)
-            else
-              raise RuntimeError,
-                    "Undefined function: #{inspect(sym)} (package #{ExLisp.Package.current_package()}, macro callsite #{inspect(macro_callsite)})"
-            end
-
-          true ->
-            raise RuntimeError,
-                  "Undefined function: #{inspect(sym)} (package #{ExLisp.Package.current_package()}, macro callsite #{inspect(Process.get(:exlisp_macro_callsite_package))})"
-        end
-    end
-  end
-
-  def invoke_fn(other, _args) do
-    raise RuntimeError, "Invalid function: #{inspect(other)}"
-  end
+  def invoke_fn(fn_val, args), do: ExLisp.Runtime.invoke_fn(fn_val, args)
 
   defp apply_key(nil, elem), do: elem
   defp apply_key(key_fn, elem), do: invoke_fn(key_fn, [elem])
 
-  def funcall(fn_val, args) when is_list(args) do
-    invoke_fn(fn_val, args)
-  end
+  def funcall(fn_val, args) when is_list(args), do: ExLisp.Runtime.funcall(fn_val, args)
+  def funcall(fn_val, a), do: ExLisp.Runtime.funcall(fn_val, a)
+  def funcall(fn_val, a, b), do: ExLisp.Runtime.funcall(fn_val, a, b)
+  def funcall(fn_val, a, b, c), do: ExLisp.Runtime.funcall(fn_val, a, b, c)
 
-  def funcall(fn_val, a), do: invoke_fn(fn_val, [a])
-  def funcall(fn_val, a, b), do: invoke_fn(fn_val, [a, b])
-  def funcall(fn_val, a, b, c), do: invoke_fn(fn_val, [a, b, c])
-
-  def apply(fn_val, args) when is_list(args) do
-    flat_args =
-      case args do
-        [] ->
-          []
-
-        _ ->
-          [last | rev_leading] = Enum.reverse(args)
-          leading = Enum.reverse(rev_leading)
-
-          trailing =
-            cond do
-              last in [nil, []] -> []
-              is_list(last) -> last
-              true -> [last]
-            end
-
-          leading ++ trailing
-      end
-
-    invoke_fn(fn_val, flat_args)
-  end
+  def apply(fn_val, args) when is_list(args), do: ExLisp.Runtime.apply(fn_val, args)
 
   def identity(x), do: x
 
@@ -1711,14 +1592,6 @@ defmodule ExLisp.Builtins do
     if left < right, do: :lt, else: if(left > right, do: :gt, else: :eq)
   end
 
-  def compare_nums(a, b) when is_number(a) and is_number(b) do
-    cond do
-      a < b -> :lt
-      a > b -> :gt
-      true -> :eq
-    end
-  end
-
   def compare_nums(%ExLisp.Ratio{numerator: an, denominator: ad}, %ExLisp.Ratio{
         numerator: bn,
         denominator: bd
@@ -1976,8 +1849,6 @@ defmodule ExLisp.Builtins do
   def eq({:__keyword__, x}, y), do: eq(x, y)
   def eq(x, {:__keyword__, y}), do: eq(x, y)
   def eq(x, y) when is_binary(x) and is_binary(y), do: :erts_debug.same(x, y) |> lisp_bool()
-  def eq({:__keyword__, value}, other), do: eq(value, other)
-  def eq(other, {:__keyword__, value}), do: eq(other, value)
 
   def eq(%ExLisp.Symbol{id: xid, name: name}, %ExLisp.Symbol{id: yid, name: name}),
     do: (xid != nil and xid == yid) |> lisp_bool()
@@ -6854,7 +6725,6 @@ defmodule ExLisp.Builtins do
     end
   end
 
-  def to_string_val(%ExLisp.Character{} = c), do: to_string(c)
   def to_string_val(val), do: inspect(val)
 
   def char(str, idx) when is_integer(idx) and idx >= 0 do
@@ -7295,7 +7165,6 @@ defmodule ExLisp.Builtins do
   def char_gte(_c), do: :t
   def char_gte(c1, c2), do: char_gte([c1, c2])
 
-  defp char_ordered?([], _relation, _mode), do: true
   defp char_ordered?([_], _relation, _mode), do: true
 
   defp char_ordered?([first, second | rest], relation, mode) do
@@ -11289,7 +11158,7 @@ defmodule ExLisp.Builtins do
   def system_apropos(args) when is_list(args) do
     case args do
       [query | _] -> ExLisp.Quicklisp.system_apropos(query)
-      query -> ExLisp.Quicklisp.system_apropos(query)
+      [] -> raise ArgumentError, "system-apropos requires a query"
     end
   end
 
@@ -11407,7 +11276,7 @@ defmodule ExLisp.Builtins do
   def hex_search(args) when is_list(args) do
     case args do
       [query | _] -> ExLisp.Hex.search(query)
-      query -> ExLisp.Hex.search(query)
+      [] -> raise ArgumentError, "hex-search requires a query"
     end
   end
 
@@ -11451,7 +11320,6 @@ defmodule ExLisp.Builtins do
 
   def quit(_), do: System.halt(0)
 
-  defp parse_quit_code(code) when is_integer(code), do: code
   defp parse_quit_code([]), do: 0
   defp parse_quit_code([code]) when is_integer(code), do: code
   defp parse_quit_code([code | _]) when is_integer(code), do: code
@@ -12426,14 +12294,14 @@ defmodule ExLisp.Builtins do
         cond do
           is_function(f, 0) -> Kernel.spawn(f)
           is_function(f, 1) -> Kernel.spawn(fn -> f.([]) end)
-          true -> Kernel.spawn(fn -> f.() end)
+          true -> raise ArgumentError, "spawn requires a nullary or unary function"
         end
 
       [%ExLisp.Closure{fun: f}] ->
         cond do
           is_function(f, 0) -> Kernel.spawn(f)
           is_function(f, 1) -> Kernel.spawn(fn -> f.([]) end)
-          true -> Kernel.spawn(fn -> f.() end)
+          true -> raise ArgumentError, "spawn requires a nullary or unary function"
         end
 
       [%ExLisp.Closure{fun: f} | call_args] when is_list(call_args) ->
@@ -12470,7 +12338,7 @@ defmodule ExLisp.Builtins do
     cond do
       is_function(f, 0) -> Kernel.spawn(f)
       is_function(f, 1) -> Kernel.spawn(fn -> f.([]) end)
-      true -> Kernel.spawn(fn -> f.() end)
+      true -> raise ArgumentError, "spawn requires a nullary or unary function"
     end
   end
 
@@ -12478,7 +12346,7 @@ defmodule ExLisp.Builtins do
     cond do
       is_function(f, 0) -> Kernel.spawn(f)
       is_function(f, 1) -> Kernel.spawn(fn -> f.([]) end)
-      true -> Kernel.spawn(fn -> f.() end)
+      true -> raise ArgumentError, "spawn requires a nullary or unary function"
     end
   end
 

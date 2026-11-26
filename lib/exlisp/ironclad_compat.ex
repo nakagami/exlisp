@@ -209,7 +209,7 @@ defmodule ExLisp.IroncladCompat do
     if rem(bits, 8) == 0 do
       :binary.decode_unsigned(binary)
     else
-      <<head::size(bits), _::bitstring>> = binary
+      <<head::size(^bits), _::bitstring>> = binary
       head
     end
   end

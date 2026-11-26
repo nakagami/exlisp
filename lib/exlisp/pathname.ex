@@ -57,7 +57,6 @@ defmodule ExLisp.Pathname do
 
   def pathname([:_values_, [p | _]]), do: pathname(p)
   def pathname([:_values_, []]), do: %__MODULE__{}
-  def pathname(nil), do: %__MODULE__{}
 
   def pathname([pathspec]), do: pathname(pathspec)
 

@@ -69,7 +69,10 @@ defmodule ExLisp.MutableCons do
 
   def resolve(value), do: value
 
-  def resolve_cell(value) when is_list(value), do: resolve_root(value, [])
+  def resolve_cell(value) when is_list(value) do
+    if mutable_cons_active?(), do: resolve_root(value, []), else: value
+  end
+
   def resolve_cell(value), do: value
 
   def replace(original, replacement) do
@@ -108,17 +111,28 @@ defmodule ExLisp.MutableCons do
   end
 
   defp find_replacement(scope, value) do
-    case Process.get({@mapping_key, scope}) do
-      nil ->
-        case :ets.lookup(@table, {scope, value}) do
-          [{{^scope, ^value}, replacement}] -> {:ok, replacement}
-          [] -> :error
-        end
+    shared_replacement =
+      case :ets.lookup(@table, {scope, value}) do
+        [{{^scope, ^value}, replacement}] -> replacement
+        [] -> :error
+      end
 
-      mappings ->
-        Enum.find_value(mappings, :error, fn {original, replacement} ->
-          if :erts_debug.same(original, value), do: {:ok, replacement}
-        end)
+    local_replacement =
+      Process.get({@mapping_key, scope}, [])
+      |> Enum.find_value(fn {original, replacement} ->
+        if :erts_debug.same(original, value), do: replacement, else: false
+      end)
+
+    cond do
+      shared_replacement == :error ->
+        :error
+
+      local_replacement != false and local_replacement == shared_replacement ->
+        {:ok, local_replacement}
+
+      true ->
+        cache_mapping(scope, value, shared_replacement)
+        {:ok, shared_replacement}
     end
   end
 
@@ -219,12 +233,18 @@ defmodule ExLisp.MutableCons do
   end
 
   defp register_pair(scope, original, replacement) do
+    :ets.insert(@table, {{scope, original}, replacement})
+    cache_mapping(scope, original, replacement)
+  end
+
+  defp cache_mapping(scope, original, replacement) do
     mappings =
       Process.get({@mapping_key, scope}, [])
-      |> Enum.reject(fn {candidate, _replacement} -> :erts_debug.same(candidate, original) end)
+      |> Enum.reject(fn {candidate, _existing} ->
+        :erts_debug.same(candidate, original)
+      end)
 
     Process.put({@mapping_key, scope}, [{original, replacement} | mappings])
-    :ets.insert(@table, {{scope, original}, replacement})
   end
 
   defp mark_active(scope) do
@@ -235,7 +255,21 @@ defmodule ExLisp.MutableCons do
 
   defp mutable_cons_active? do
     scope = scope()
-    Process.get({@active_key, scope}, false)
+
+    case Process.get({@active_key, scope}, false) do
+      true ->
+        true
+
+      false ->
+        ensure_table()
+
+        if :ets.member(@table, {scope, :__mutable_cons_active__}) do
+          Process.put({@active_key, scope}, true)
+          true
+        else
+          false
+        end
+    end
   end
 
   def scope, do: Process.get(:exlisp_mutable_cons_scope, self())

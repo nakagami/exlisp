@@ -896,12 +896,14 @@ defmodule ExLisp.LispParser do
         MapSet.member?(@preserved_symbols, down) ->
           down
 
-        match?(<<"+", _::binary-size(byte_size(down) - 2), "+">>, down) and byte_size(down) > 2 ->
-          <<"+", inner::binary-size(byte_size(down) - 2), "+">> = down
+        byte_size(down) > 2 and String.starts_with?(down, "+") and
+            String.ends_with?(down, "+") ->
+          inner = binary_part(down, 1, byte_size(down) - 2)
           "+#{String.replace(inner, "-", "_")}+"
 
-        match?(<<"*", _::binary-size(byte_size(down) - 2), "*">>, down) and byte_size(down) > 2 ->
-          <<"*", inner::binary-size(byte_size(down) - 2), "*">> = down
+        byte_size(down) > 2 and String.starts_with?(down, "*") and
+            String.ends_with?(down, "*") ->
+          inner = binary_part(down, 1, byte_size(down) - 2)
           "*#{String.replace(inner, "-", "_")}*"
 
         not String.contains?(down, "-") ->

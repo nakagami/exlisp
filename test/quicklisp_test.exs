@@ -7,6 +7,30 @@ defmodule QuicklispTest do
     :ok
   end
 
+  test "Quicklisp archive integrity validates size and digests" do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "exlisp-quicklisp-archive-#{System.unique_integer([:positive])}"
+      )
+
+    contents = "archive contents"
+    File.write!(path, contents)
+    on_exit(fn -> File.rm(path) end)
+
+    release = %{
+      size: byte_size(contents),
+      md5: :crypto.hash(:md5, contents) |> Base.encode16(case: :lower),
+      sha1: :crypto.hash(:sha, contents) |> Base.encode16(case: :lower)
+    }
+
+    assert ExLisp.Quicklisp.verify_archive!(path, release) == :ok
+
+    assert_raise RuntimeError, ~r/SHA1 mismatch/, fn ->
+      ExLisp.Quicklisp.verify_archive!(path, %{release | sha1: "invalid"})
+    end
+  end
+
   test "ASDF propagates component parse and evaluation errors" do
     dir = Path.join(System.tmp_dir!(), "exlisp-asdf-errors-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)

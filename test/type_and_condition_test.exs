@@ -18,14 +18,21 @@ defmodule ExLisp.TypeAndConditionTest do
 
   describe "Type system and COERCE" do
     test "coerce sequence between list, vector, string, bit-vector" do
-      assert ExLisp.eval("(coerce '(1 2 3) 'vector)") |> ExLisp.Builtins.seq_to_list() == [1, 2, 3]
+      assert ExLisp.eval("(coerce '(1 2 3) 'vector)") |> ExLisp.Builtins.seq_to_list() == [
+               1,
+               2,
+               3
+             ]
+
       assert ExLisp.eval("(coerce #(1 2 3) 'list)") == [1, 2, 3]
       assert ExLisp.eval("(coerce '(#\\a #\\b #\\c) 'string)") == "abc"
+
       assert ExLisp.eval("(coerce \"xyz\" 'list)") == [
                ExLisp.Character.new(?x),
                ExLisp.Character.new(?y),
                ExLisp.Character.new(?z)
              ]
+
       assert ExLisp.eval("(equal (coerce '(1 0 1) 'bit-vector) #*101)") == :t
     end
 

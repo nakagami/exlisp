@@ -59,6 +59,7 @@ defmodule ExLisp.Stream do
   def open_stream_p(%__MODULE__{id: id, open: open}) do
     ExLisp.Builtins.lisp_bool(Process.get({:exlisp_stream_open, id}, open))
   end
+
   def open_stream_p(pid) when is_pid(pid), do: ExLisp.Builtins.lisp_bool(Process.alive?(pid))
   def open_stream_p(:standard_io), do: :t
   def open_stream_p([s]), do: open_stream_p(s)
@@ -375,7 +376,10 @@ defmodule ExLisp.Stream do
     direction = Keyword.get(parsed_opts, :direction, :input)
     element_type = Keyword.get(parsed_opts, :element_type, :character)
     external_format = Keyword.get(parsed_opts, :external_format, :default)
-    if_exists = Keyword.get(parsed_opts, :if_exists, if(direction == :input, do: nil, else: :error))
+
+    if_exists =
+      Keyword.get(parsed_opts, :if_exists, if(direction == :input, do: nil, else: :error))
+
     if_does_not_exist =
       Keyword.get(
         parsed_opts,
@@ -386,6 +390,7 @@ defmodule ExLisp.Stream do
           _ -> :create
         end
       )
+
     file_exists = File.exists?(path_str)
 
     if direction == :probe do
@@ -508,13 +513,14 @@ defmodule ExLisp.Stream do
         count
 
       :error ->
-    case File.stat(path) do
-      {:ok, %{size: size}} ->
-        unit = element_type_width(resolve_file_element_type(path))
-        div(size, unit)
+        case File.stat(path) do
+          {:ok, %{size: size}} ->
+            unit = element_type_width(resolve_file_element_type(path))
+            div(size, unit)
 
-      _ -> nil
-    end
+          _ ->
+            nil
+        end
     end
   end
 
@@ -557,21 +563,21 @@ defmodule ExLisp.Stream do
     if match?(%__MODULE__{type: :broadcast, extra: %{streams: []}}, stream) do
       1
     else
-    text = if is_binary(string), do: string, else: ExLisp.Builtins.to_string_val(string)
-    opt_list = if is_list(opts), do: opts, else: [opts]
-    parsed_opts = ExLisp.Builtins.parse_lisp_keywords(opt_list)
-    start_idx = Keyword.get(parsed_opts, :start, 0) || 0
-    end_idx = Keyword.get(parsed_opts, :end, nil)
+      text = if is_binary(string), do: string, else: ExLisp.Builtins.to_string_val(string)
+      opt_list = if is_list(opts), do: opts, else: [opts]
+      parsed_opts = ExLisp.Builtins.parse_lisp_keywords(opt_list)
+      start_idx = Keyword.get(parsed_opts, :start, 0) || 0
+      end_idx = Keyword.get(parsed_opts, :end, nil)
 
-    slice =
-      if is_integer(end_idx),
-        do: String.slice(text, start_idx, end_idx - start_idx),
-        else: String.slice(text, start_idx..-1//1)
+      slice =
+        if is_integer(end_idx),
+          do: String.slice(text, start_idx, end_idx - start_idx),
+          else: String.slice(text, start_idx..-1//1)
 
-    case stream_external_format(stream) do
-      format when format in [:utf_8, :"utf-8", :default, :utf8] -> byte_size(slice)
-      _ -> byte_size(slice)
-    end
+      case stream_external_format(stream) do
+        format when format in [:utf_8, :"utf-8", :default, :utf8] -> byte_size(slice)
+        _ -> byte_size(slice)
+      end
     end
   end
 
@@ -939,9 +945,15 @@ defmodule ExLisp.Stream do
         case result do
           bytes when is_binary(bytes) and byte_size(bytes) == width ->
             :binary.decode_unsigned(bytes)
-          :eof -> handle_eof(eof_error_p, eof_value)
-          {:error, _} -> handle_eof(eof_error_p, eof_value)
-          _ -> handle_eof(eof_error_p, eof_value)
+
+          :eof ->
+            handle_eof(eof_error_p, eof_value)
+
+          {:error, _} ->
+            handle_eof(eof_error_p, eof_value)
+
+          _ ->
+            handle_eof(eof_error_p, eof_value)
         end
     end
   end
@@ -958,6 +970,7 @@ defmodule ExLisp.Stream do
         resolved ->
           resolved
       end
+
     code = ExLisp.Builtins.char_code(char)
     key = {:exlisp_stream_unread, stream_id(s)}
     existing = Process.get(key, [])
@@ -975,14 +988,14 @@ defmodule ExLisp.Stream do
         eof_value \\ nil,
         _rec \\ nil
       ) do
-        resolved = resolve_input_stream(stream)
+    resolved = resolve_input_stream(stream)
 
-        s =
-          case {peek_type, resolved} do
-            {nil, %__MODULE__{type: :echo, extra: %{input: input}}} -> input
-            {false, %__MODULE__{type: :echo, extra: %{input: input}}} -> input
-            _ -> resolved
-          end
+    s =
+      case {peek_type, resolved} do
+        {nil, %__MODULE__{type: :echo, extra: %{input: input}}} -> input
+        {false, %__MODULE__{type: :echo, extra: %{input: input}}} -> input
+        _ -> resolved
+      end
 
     result =
       cond do
@@ -1025,7 +1038,9 @@ defmodule ExLisp.Stream do
         :eof
 
       character ->
-        if predicate.(character), do: character, else: read_until_peek(stream, eof_error_p, eof_value, predicate)
+        if predicate.(character),
+          do: character,
+          else: read_until_peek(stream, eof_error_p, eof_value, predicate)
     end
   end
 
@@ -1090,9 +1105,6 @@ defmodule ExLisp.Stream do
 
       %ExLisp.Character{code: c} ->
         collect_line_chars(s, [c])
-
-      c when is_integer(c) ->
-        collect_line_chars(s, [c])
     end
   end
 
@@ -1111,13 +1123,6 @@ defmodule ExLisp.Stream do
           [:_values_, [line, nil]]
 
         %ExLisp.Character{code: c} ->
-          collect_line_chars(s, [c | acc])
-
-        ?\n ->
-          line = acc |> Enum.reverse() |> List.to_string() |> String.trim_trailing("\r")
-          [:_values_, [line, nil]]
-
-        c when is_integer(c) ->
           collect_line_chars(s, [c | acc])
       end
     end
@@ -1168,7 +1173,9 @@ defmodule ExLisp.Stream do
     curr_idx =
       Enum.reduce_while(indices, start_idx, fn i, cur ->
         reader = if binary_input, do: &read_byte/3, else: &read_char/4
-        value = if binary_input, do: reader.(stream, nil, :eof), else: reader.(stream, nil, :eof, nil)
+
+        value =
+          if binary_input, do: reader.(stream, nil, :eof), else: reader.(stream, nil, :eof, nil)
 
         case value do
           :eof ->
@@ -1304,10 +1311,13 @@ defmodule ExLisp.Stream do
     end
   end
 
-  defp increment_file_element_count(%__MODULE__{
-         type: :broadcast,
-         extra: %{streams: streams}
-       }, count),
+  defp increment_file_element_count(
+         %__MODULE__{
+           type: :broadcast,
+           extra: %{streams: streams}
+         },
+         count
+       ),
        do: Enum.each(streams, &increment_file_element_count(&1, count))
 
   defp increment_file_element_count(_, _), do: :ok
@@ -1483,8 +1493,12 @@ defmodule ExLisp.Stream do
 
   defp resolve_input_stream(nil),
     do: Process.get(:exlisp_standard_input_stream) || resolve_synonym(:":*standard-input*:")
+
   defp resolve_input_stream(:t),
-    do: terminal_input_stream(Process.get(:exlisp_terminal_io_stream) || resolve_synonym(:":*terminal-io*:"))
+    do:
+      terminal_input_stream(
+        Process.get(:exlisp_terminal_io_stream) || resolve_synonym(:":*terminal-io*:")
+      )
 
   defp resolve_input_stream(%__MODULE__{type: :synonym, extra: %{symbol: sym}}),
     do: resolve_synonym(sym)
@@ -1492,6 +1506,7 @@ defmodule ExLisp.Stream do
   defp resolve_input_stream(stream), do: stream
 
   defp resolve_output_stream(nil), do: resolve_synonym(:":*standard-output*:")
+
   defp resolve_output_stream(:t),
     do: Process.get(:exlisp_terminal_io_stream) || resolve_synonym(:":*terminal-io*:")
 
@@ -1506,6 +1521,7 @@ defmodule ExLisp.Stream do
 
   defp resolve_stream(nil),
     do: Process.get(:exlisp_standard_input_stream) || resolve_synonym(:":*standard-input*:")
+
   defp resolve_stream(:t),
     do: Process.get(:exlisp_terminal_io_stream) || resolve_synonym(:":*terminal-io*:")
 
@@ -1532,12 +1548,17 @@ defmodule ExLisp.Stream do
 
         is_binary(sym) ->
           sym |> String.trim(":") |> String.to_atom()
-        match?(%ExLisp.Symbol{}, sym) -> String.to_atom(sym.name)
-        true -> :":*standard-input*:"
+
+        match?(%ExLisp.Symbol{}, sym) ->
+          String.to_atom(sym.name)
+
+        true ->
+          :":*standard-input*:"
       end
 
     normalized = ExLisp.Env.normalize_name(norm_sym)
     normalized_text = Atom.to_string(normalized)
+
     process_value =
       Process.get({:exlisp_special_stream, normalized}) ||
         Process.get(
@@ -1556,7 +1577,10 @@ defmodule ExLisp.Stream do
 
   defp resolve_synonym_from_env(norm_sym) do
     try do
-      candidates = [norm_sym, norm_sym |> Atom.to_string() |> String.replace("-", "_") |> String.to_atom()]
+      candidates = [
+        norm_sym,
+        norm_sym |> Atom.to_string() |> String.replace("-", "_") |> String.to_atom()
+      ]
 
       Enum.find_value(candidates, fn candidate ->
         try do
@@ -1580,10 +1604,12 @@ defmodule ExLisp.Stream do
   defp do_write_string(s, str) do
     if is_binary(str) and byte_size(str) > 0 do
       Process.put({:exlisp_stream_at_newline, stream_id(s)}, String.ends_with?(str, "\n"))
+
       Process.put(
         {:exlisp_stream_position, stream_id(s)},
         Process.get({:exlisp_stream_position, stream_id(s)}, 0) + String.length(str)
       )
+
       increment_file_element_count(s, String.length(str))
     end
 
@@ -1658,8 +1684,6 @@ defmodule ExLisp.Stream do
     _, _ -> :ok
   end
 
-  defp immediately_available?(%__MODULE__{type: :string_input}), do: true
-
   defp immediately_available?(%__MODULE__{type: :file, device: pid}) when is_pid(pid) do
     case :file.position(pid, :cur) do
       {:ok, pos} ->
@@ -1673,8 +1697,6 @@ defmodule ExLisp.Stream do
         false
     end
   end
-
-  defp immediately_available?(_), do: false
 
   defp normalize_external_format(:default), do: :utf_8
   defp normalize_external_format(:utf8), do: :utf_8
@@ -1710,6 +1732,7 @@ defmodule ExLisp.Stream do
 
   defp handle_eof(:t, _eof_val),
     do: ExLisp.Condition.error(:end_of_file, "End of file on stream")
+
   defp handle_eof(nil, eof_val), do: eof_val
   defp handle_eof(false, eof_val), do: eof_val
   defp handle_eof(_, eof_val), do: eof_val

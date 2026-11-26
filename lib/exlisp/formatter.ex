@@ -1378,17 +1378,12 @@ defmodule ExLisp.Formatter do
   end
 
   # Append closing delimiter to end of line
-  defp combine_lines_with_close([], close_str), do: [close_str]
-
   defp combine_lines_with_close(lines, close_str) do
     case Enum.reverse(lines) do
       [last_line | rest] ->
         # Check if line ends with inline comment
         updated_last = append_close_delimiter(last_line, close_str)
         Enum.reverse([updated_last | rest])
-
-      [] ->
-        [close_str]
     end
   end
 

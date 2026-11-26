@@ -15,10 +15,7 @@ defmodule ExLisp.Hex do
   def ensure_mix_loaded do
     find_and_add_beam_libs()
 
-    Application.ensure_all_started(:ssl)
-    Application.ensure_all_started(:inets)
-    Application.ensure_all_started(:logger)
-    Application.ensure_all_started(:mix)
+    Enum.each([:ssl, :inets, :logger, :mix], &ensure_application_started!/1)
 
     try do
       Mix.Local.append_archives()
@@ -27,12 +24,24 @@ defmodule ExLisp.Hex do
       _ -> :ok
     end
 
-    Application.ensure_all_started(:hex)
+    ensure_application_started!(:hex)
+
+    unless Code.ensure_loaded?(Mix) and Code.ensure_loaded?(Hex) do
+      raise RuntimeError, "Mix and Hex are required for hex:install"
+    end
+
     reconsolidate_protocols()
     :ok
-  rescue
-    _ ->
-      :ok
+  end
+
+  defp ensure_application_started!(app) do
+    case Application.ensure_all_started(app) do
+      {:ok, _started} ->
+        :ok
+
+      {:error, reason} ->
+        raise RuntimeError, "Failed to start #{app}: #{inspect(reason)}"
+    end
   end
 
   @doc """
@@ -78,8 +87,8 @@ defmodule ExLisp.Hex do
         end)
         |> Enum.reject(&is_nil/1)
 
-      _ ->
-        []
+      {:error, reason} ->
+        raise RuntimeError, "Failed to search Hex.pm: #{inspect(reason)}"
     end
   end
 
@@ -114,8 +123,8 @@ defmodule ExLisp.Hex do
           [ExLisp.Symbol.new("LINKS"), Enum.map(links, fn {k, v} -> [k, v] end)]
         ]
 
-      _ ->
-        nil
+      {:error, reason} ->
+        raise RuntimeError, "Failed to fetch Hex.pm package #{pkg_name}: #{inspect(reason)}"
     end
   end
 
@@ -146,6 +155,9 @@ defmodule ExLisp.Hex do
     # Merge with existing dependencies
     existing_deps = get_all_installed_deps()
     merged_deps = merge_deps(existing_deps, deps)
+
+    previous_ignore_module_conflict =
+      Code.compiler_options() |> Map.get(:ignore_module_conflict, false)
 
     Code.put_compiler_option(:ignore_module_conflict, true)
 
@@ -184,6 +196,8 @@ defmodule ExLisp.Hex do
 
       installed_apps
     after
+      Code.put_compiler_option(:ignore_module_conflict, previous_ignore_module_conflict)
+
       if saved_project != nil and Code.ensure_loaded?(Mix.ProjectStack) do
         try do
           Mix.ProjectStack.push(
@@ -393,16 +407,16 @@ defmodule ExLisp.Hex do
   end
 
   defp fetch_json(url) do
-    case System.cmd("curl", ["-sSL", "-H", "User-Agent: ExLisp", url]) do
+    case System.cmd("curl", ["-fsSL", "-H", "User-Agent: ExLisp", url]) do
       {body, 0} ->
         parse_json(body)
 
-      _ ->
-        {:error, :fetch_failed}
+      {body, code} ->
+        {:error, {:curl, code, String.trim(body)}}
     end
   rescue
-    _ ->
-      {:error, :fetch_failed}
+    error in [ErlangError, ArgumentError] ->
+      {:error, {:fetch_exception, Exception.message(error)}}
   end
 
   defp parse_json(body) when is_binary(body) do

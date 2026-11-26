@@ -1732,7 +1732,7 @@ defmodule ExLisp.Evaluator do
             end
 
           fun_val ->
-            Builtins.invoke_fn(fun_val, args)
+            ExLisp.JIT.invoke(op, fun_val, args)
         end
     end
   end

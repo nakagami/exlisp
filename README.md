@@ -348,6 +348,36 @@ ExLisp.Global.add(1, 2)
 # => 3
 ```
 
+### Automatic JIT Compilation
+
+Named Lisp functions remain interpreted initially and are compiled to BEAM after
+repeated calls. The default threshold is 32 calls. Set
+`EXLISP_JIT_THRESHOLD` to a positive integer to change it, for example:
+
+```bash
+EXLISP_JIT_THRESHOLD=8 exlisp script.lisp
+```
+
+Redefining a Lisp function invalidates its cached compiled version. If BEAM
+compilation is not possible, ExLisp reports a warning and keeps using the
+interpreted function. Runtime errors from compiled functions are propagated
+without evaluating the function a second time.
+
+### Performance Baseline
+
+The dependency-free benchmark compares interpreted and explicitly compiled
+execution:
+
+```bash
+mix run bench/performance.exs
+
+# Smaller, faster iteration set
+EXLISP_BENCH_FAST=1 mix run bench/performance.exs
+
+# Override the median sample count
+EXLISP_BENCH_REPETITIONS=5 mix run bench/performance.exs
+```
+
 ## Limitations and Notes
 
 ### Destructive Cons Cells and Circular Lists

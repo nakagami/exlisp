@@ -898,7 +898,7 @@ defmodule ExLisp.CLOS do
 
   defp parse_initargs_kv(initargs) when is_list(initargs) do
     cond do
-      Keyword.keyword?(initargs) or (initargs != [] and is_tuple(hd(initargs))) ->
+      Keyword.keyword?(initargs) or match?([head | _] when is_tuple(head), initargs) ->
         Enum.reduce(initargs, %{}, fn
           {k, v}, acc ->
             norm_k =
@@ -939,7 +939,7 @@ defmodule ExLisp.CLOS do
 
   defp normalize_initarg_pairs(initargs) when is_list(initargs) do
     cond do
-      Keyword.keyword?(initargs) or (initargs != [] and is_tuple(hd(initargs))) ->
+      Keyword.keyword?(initargs) or match?([head | _] when is_tuple(head), initargs) ->
         Enum.flat_map(initargs, fn
           {key, val} -> [{normalize_initarg_name(key), val}]
           _ -> []
@@ -1534,7 +1534,6 @@ defmodule ExLisp.CLOS do
       case method do
         %{lambda_list: lambda_list} -> lambda_list
         %{ast: ast} -> ast
-        %ExLisp.Closure{params: params} -> params
         _ -> []
       end
 
@@ -1634,7 +1633,6 @@ defmodule ExLisp.CLOS do
   end
 
   defp generic_name(%{name: name}), do: normalize_name(name)
-  defp generic_name(%ExLisp.Closure{name: name}), do: normalize_name(name)
   defp generic_name(name), do: normalize_name(name)
 
   defp method_identity(method) do

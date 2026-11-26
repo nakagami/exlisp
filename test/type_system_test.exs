@@ -122,6 +122,7 @@ defmodule TypeSystemTest do
         (check-type x integer)
         x)
       """
+
       assert ExLisp.eval(code) == 10
     end
 
@@ -131,6 +132,7 @@ defmodule TypeSystemTest do
         (check-type x integer)
         x)
       """
+
       assert_raise RuntimeError, fn ->
         ExLisp.eval(code)
       end
@@ -141,7 +143,10 @@ defmodule TypeSystemTest do
       assert ExLisp.eval("(the string \"hello\")") == "hello"
       assert ExLisp.eval("(functionp (the function #'cons))") == :t
       assert ExLisp.eval("(the (simple-base-string 5) \"hello\")") == "hello"
-      assert ExLisp.eval("(the (simple-bit-vector 5) (make-array 5 :element-type 'bit :initial-contents '(0 0 1 1 0)))") != nil
+
+      assert ExLisp.eval(
+               "(the (simple-bit-vector 5) (make-array 5 :element-type 'bit :initial-contents '(0 0 1 1 0)))"
+             ) != nil
     end
 
     test "the form raises error on mismatched type" do
@@ -161,6 +166,7 @@ defmodule TypeSystemTest do
           (cons :list)
           (otherwise :other)))
       """
+
       ExLisp.eval(code)
 
       assert ExLisp.eval("(classify 42)") == :int
@@ -175,6 +181,7 @@ defmodule TypeSystemTest do
         (integer :int)
         (string :str))
       """
+
       assert_raise RuntimeError, fn ->
         ExLisp.eval(code)
       end

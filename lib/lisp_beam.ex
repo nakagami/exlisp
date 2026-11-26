@@ -1237,7 +1237,8 @@ defmodule LispBeam do
               {:atom, 1, nil}
             end
 
-          _ -> {:atom, 1, nil}
+          _ ->
+            {:atom, 1, nil}
         end
 
       name when name in [:load_time_value, :_cl_load_time_value_, :"load-time-value"] ->
@@ -1405,9 +1406,6 @@ defmodule LispBeam do
 
       name when name in [:nth_value, :"nth-value", :_cl_nth_value_] ->
         compile_nth_value(args, local_env)
-
-      name when name in [:with_mutex, :"with-mutex", :_sb_thread_with_mutex_] ->
-        compile_with_mutex(args, local_env)
 
       name when name in [:catch, :_cl_catch_] ->
         compile_catch(args, local_env)
@@ -2105,9 +2103,7 @@ defmodule LispBeam do
 
                   k ->
                     {:list, 1,
-                     [{:id, 1, ["case-eql"]},
-                      key_var_ast,
-                      {:list, 1, [{:id, 1, ["quote"]}, k]}]}
+                     [{:id, 1, ["case-eql"]}, key_var_ast, {:list, 1, [{:id, 1, ["quote"]}, k]}]}
                 end)
 
               case_test =
@@ -2589,6 +2585,7 @@ defmodule LispBeam do
     case binding_node do
       {:list, _, [name_node, packages_node | types]} ->
         iterator = {:id, 1, ["__package_iterator_#{unique_id()}"]}
+
         iterator_args =
           if types == [] do
             [packages_node]
@@ -2605,8 +2602,7 @@ defmodule LispBeam do
                 {:list, 1,
                  [
                    iterator,
-                   {:list, 1,
-                    [{:id, 1, ["package-iterator"]} | iterator_args]}
+                   {:list, 1, [{:id, 1, ["package-iterator"]} | iterator_args]}
                  ]}
               ]},
              {:list, 1,
@@ -3374,7 +3370,8 @@ defmodule LispBeam do
         {:fun, 1,
          {:clauses, [{:clause, 1, [{:var, 1, erl_var_name(raw_args_sym)}], [], compiled_body}]}}
 
-      {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Closure}, {:atom, 1, :new}}, [raw_fun, {:atom, 1, nil}, {:atom, 1, true}]}
+      {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Closure}, {:atom, 1, :new}},
+       [raw_fun, {:atom, 1, nil}, {:atom, 1, true}]}
     else
       param_names = extract_param_names(params_node)
       mutated = find_mutated_vars(body_nodes)
@@ -3482,8 +3479,7 @@ defmodule LispBeam do
               [target_node | rest_args] ->
                 arg_vars =
                   Enum.map(rest_args, fn _ ->
-                    {:id, 1,
-                     ["__#{prefix}_arg_#{unique_id()}"]}
+                    {:id, 1, ["__#{prefix}_arg_#{unique_id()}"]}
                   end)
 
                 arg_bindings =
@@ -3521,8 +3517,7 @@ defmodule LispBeam do
               :error ->
                 arg_vars =
                   Enum.map(acc_args, fn _ ->
-                    {:id, 1,
-                     ["__#{prefix}_arg_#{unique_id()}"]}
+                    {:id, 1, ["__#{prefix}_arg_#{unique_id()}"]}
                   end)
 
                 arg_bindings =
@@ -3840,815 +3835,810 @@ defmodule LispBeam do
           true ->
             case op do
               name when name in [:documentation, :_cl_documentation_] ->
-            case place_args do
-              [target_node, type_node] ->
-                {:call, 1,
-                 {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_documentation}},
-                 [
-                   compile_expr(target_node, local_env),
-                   compile_expr(type_node, local_env),
-                   compile_expr(val_node, local_env)
-                 ]}
+                case place_args do
+                  [target_node, type_node] ->
+                    {:call, 1,
+                     {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_documentation}},
+                     [
+                       compile_expr(target_node, local_env),
+                       compile_expr(type_node, local_env),
+                       compile_expr(val_node, local_env)
+                     ]}
 
-              [target_node] ->
-                {:call, 1,
-                 {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_documentation}},
-                 [
-                   compile_expr(target_node, local_env),
-                   {:atom, 1, :function},
-                   compile_expr(val_node, local_env)
-                 ]}
-
-              _ ->
-                compile_setq([place, val_node], local_env)
-            end
-
-          name when name in [:values, :_cl_values_] ->
-            compile_setf_values(place_args, val_node, local_env)
-
-          name when name in [:car, :_cl_car_] ->
-            case place_args do
-              [target_node] ->
-                case target_node do
-                  {:list, _pos, [{:id, _, ["progn"]} | forms]} when forms != [] ->
-                    init_forms = Enum.drop(forms, -1)
-                    last_form = List.last(forms)
-
-                    new_setf =
-                      {:list, 1,
-                       [{:id, 1, ["setf"]}, {:list, 1, [{:id, 1, ["car"]}, last_form]}, val_node]}
-
-                    compile_expr(
-                      {:list, 1, [{:id, 1, ["progn"]} | init_forms ++ [new_setf]]},
-                      local_env
-                    )
+                  [target_node] ->
+                    {:call, 1,
+                     {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_documentation}},
+                     [
+                       compile_expr(target_node, local_env),
+                       {:atom, 1, :function},
+                       compile_expr(val_node, local_env)
+                     ]}
 
                   _ ->
-                    val_var =
-                      {:id, 1, ["__setf_val_#{unique_id()}"]}
-
-                    ast =
-                      {:list, 1,
-                       [
-                         {:id, 1, ["let*"]},
-                         {:list, 1, [{:list, 1, [val_var, val_node]}]},
-                         {:list, 1,
-                          [
-                            {:id, 1, ["setf"]},
-                            target_node,
-                            {:list, 1,
-                             [
-                               {:id, 1, ["cons"]},
-                               val_var,
-                               {:list, 1, [{:id, 1, ["cdr"]}, target_node]}
-                             ]}
-                          ]},
-                         val_var
-                       ]}
-
-                    compile_expr(ast, local_env)
+                    compile_setq([place, val_node], local_env)
                 end
 
-              _ ->
-                compile_setq([place, val_node], local_env)
-            end
+              name when name in [:values, :_cl_values_] ->
+                compile_setf_values(place_args, val_node, local_env)
 
-          name when name in [:cdr, :_cl_cdr_] ->
-            case place_args do
-              [target_node] ->
-                case target_node do
-                  {:list, _pos, [{:id, _, ["progn"]} | forms]} when forms != [] ->
-                    init_forms = Enum.drop(forms, -1)
-                    last_form = List.last(forms)
+              name when name in [:car, :_cl_car_] ->
+                case place_args do
+                  [target_node] ->
+                    case target_node do
+                      {:list, _pos, [{:id, _, ["progn"]} | forms]} when forms != [] ->
+                        init_forms = Enum.drop(forms, -1)
+                        last_form = List.last(forms)
 
-                    new_setf =
-                      {:list, 1,
-                       [{:id, 1, ["setf"]}, {:list, 1, [{:id, 1, ["cdr"]}, last_form]}, val_node]}
+                        new_setf =
+                          {:list, 1,
+                           [
+                             {:id, 1, ["setf"]},
+                             {:list, 1, [{:id, 1, ["car"]}, last_form]},
+                             val_node
+                           ]}
 
-                    compile_expr(
-                      {:list, 1, [{:id, 1, ["progn"]} | init_forms ++ [new_setf]]},
-                      local_env
-                    )
+                        compile_expr(
+                          {:list, 1, [{:id, 1, ["progn"]} | init_forms ++ [new_setf]]},
+                          local_env
+                        )
+
+                      _ ->
+                        val_var =
+                          {:id, 1, ["__setf_val_#{unique_id()}"]}
+
+                        ast =
+                          {:list, 1,
+                           [
+                             {:id, 1, ["let*"]},
+                             {:list, 1, [{:list, 1, [val_var, val_node]}]},
+                             {:list, 1,
+                              [
+                                {:id, 1, ["setf"]},
+                                target_node,
+                                {:list, 1,
+                                 [
+                                   {:id, 1, ["cons"]},
+                                   val_var,
+                                   {:list, 1, [{:id, 1, ["cdr"]}, target_node]}
+                                 ]}
+                              ]},
+                             val_var
+                           ]}
+
+                        compile_expr(ast, local_env)
+                    end
 
                   _ ->
-                    val_var =
-                      {:id, 1, ["__setf_val_#{unique_id()}"]}
-
-                    ast =
-                      {:list, 1,
-                       [
-                         {:id, 1, ["let*"]},
-                         {:list, 1, [{:list, 1, [val_var, val_node]}]},
-                         {:list, 1,
-                          [
-                            {:id, 1, ["setf"]},
-                            target_node,
-                            {:list, 1,
-                             [
-                               {:id, 1, ["cons"]},
-                               {:list, 1, [{:id, 1, ["car"]}, target_node]},
-                               val_var
-                             ]}
-                          ]},
-                         val_var
-                       ]}
-
-                    compile_expr(ast, local_env)
+                    compile_setq([place, val_node], local_env)
                 end
 
-              _ ->
-                compile_setq([place, val_node], local_env)
-            end
+              name when name in [:cdr, :_cl_cdr_] ->
+                case place_args do
+                  [target_node] ->
+                    case target_node do
+                      {:list, _pos, [{:id, _, ["progn"]} | forms]} when forms != [] ->
+                        init_forms = Enum.drop(forms, -1)
+                        last_form = List.last(forms)
 
-          name when name in [:nth, :_cl_nth_] ->
-            case place_args do
-              [idx_node, target_node] ->
-                case target_node do
-                  {:list, _pos, [{:id, _, ["progn"]} | forms]} when forms != [] ->
-                    init_forms = Enum.drop(forms, -1)
-                    last_form = List.last(forms)
+                        new_setf =
+                          {:list, 1,
+                           [
+                             {:id, 1, ["setf"]},
+                             {:list, 1, [{:id, 1, ["cdr"]}, last_form]},
+                             val_node
+                           ]}
 
-                    new_setf =
-                      {:list, 1,
-                       [
-                         {:id, 1, ["setf"]},
-                         {:list, 1, [{:id, 1, ["nth"]}, idx_node, last_form]},
-                         val_node
-                       ]}
+                        compile_expr(
+                          {:list, 1, [{:id, 1, ["progn"]} | init_forms ++ [new_setf]]},
+                          local_env
+                        )
 
-                    compile_expr(
-                      {:list, 1, [{:id, 1, ["progn"]} | init_forms ++ [new_setf]]},
-                      local_env
-                    )
+                      _ ->
+                        val_var =
+                          {:id, 1, ["__setf_val_#{unique_id()}"]}
+
+                        ast =
+                          {:list, 1,
+                           [
+                             {:id, 1, ["let*"]},
+                             {:list, 1, [{:list, 1, [val_var, val_node]}]},
+                             {:list, 1,
+                              [
+                                {:id, 1, ["setf"]},
+                                target_node,
+                                {:list, 1,
+                                 [
+                                   {:id, 1, ["cons"]},
+                                   {:list, 1, [{:id, 1, ["car"]}, target_node]},
+                                   val_var
+                                 ]}
+                              ]},
+                             val_var
+                           ]}
+
+                        compile_expr(ast, local_env)
+                    end
 
                   _ ->
+                    compile_setq([place, val_node], local_env)
+                end
+
+              name when name in [:nth, :_cl_nth_] ->
+                case place_args do
+                  [idx_node, target_node] ->
+                    case target_node do
+                      {:list, _pos, [{:id, _, ["progn"]} | forms]} when forms != [] ->
+                        init_forms = Enum.drop(forms, -1)
+                        last_form = List.last(forms)
+
+                        new_setf =
+                          {:list, 1,
+                           [
+                             {:id, 1, ["setf"]},
+                             {:list, 1, [{:id, 1, ["nth"]}, idx_node, last_form]},
+                             val_node
+                           ]}
+
+                        compile_expr(
+                          {:list, 1, [{:id, 1, ["progn"]} | init_forms ++ [new_setf]]},
+                          local_env
+                        )
+
+                      _ ->
+                        val_var =
+                          {:id, 1, ["__setf_val_#{unique_id()}"]}
+
+                        idx_var =
+                          {:id, 1, ["__setf_idx_#{unique_id()}"]}
+
+                        ast =
+                          {:list, 1,
+                           [
+                             {:id, 1, ["let*"]},
+                             {:list, 1,
+                              [
+                                {:list, 1, [idx_var, idx_node]},
+                                {:list, 1, [val_var, val_node]}
+                              ]},
+                             {:list, 1,
+                              [
+                                {:id, 1, ["setf"]},
+                                target_node,
+                                {:list, 1,
+                                 [
+                                   {:id, 1, ["_cl_set_nth_"]},
+                                   idx_var,
+                                   target_node,
+                                   val_var
+                                 ]}
+                              ]},
+                             val_var
+                           ]}
+
+                        compile_expr(ast, local_env)
+                    end
+
+                  _ ->
+                    compile_setq([place, val_node], local_env)
+                end
+
+              name when name in [:getf, :_cl_getf_] ->
+                case place_args do
+                  [target_node, indicator_node | default_rest] ->
+                    default_node = List.first(default_rest)
+
                     val_var =
                       {:id, 1, ["__setf_val_#{unique_id()}"]}
+
+                    ind_var =
+                      {:id, 1, ["__setf_ind_#{unique_id()}"]}
+
+                    def_bindings =
+                      if default_node do
+                        def_var =
+                          {:id, 1, ["__setf_def_#{unique_id()}"]}
+
+                        [{:list, 1, [def_var, default_node]}]
+                      else
+                        []
+                      end
+
+                    case target_node do
+                      {:list, pos, [acc_op | acc_args]} ->
+                        {arg_bindings, bound_args} =
+                          Enum.reduce(acc_args, {[], []}, fn
+                            {:list, _, [{:id, _, ["progn"]} | forms]} = _arg_progn, {b_acc, a_acc}
+                            when forms != [] ->
+                              init_forms = Enum.drop(forms, -1)
+                              last_form = List.last(forms)
+
+                              dummy_var =
+                                {:id, 1, ["__setf_init_#{unique_id()}"]}
+
+                              progn_init = {:list, 1, [{:id, 1, ["progn"]} | init_forms]}
+
+                              {b_acc ++ [{:list, 1, [dummy_var, progn_init]}],
+                               a_acc ++ [last_form]}
+
+                            {:id, _, _} = arg_id, {b_acc, a_acc} ->
+                              {b_acc, a_acc ++ [arg_id]}
+
+                            other_arg, {b_acc, a_acc} ->
+                              arg_var =
+                                {:id, 1, ["__setf_arg_#{unique_id()}"]}
+
+                              {b_acc ++ [{:list, 1, [arg_var, other_arg]}], a_acc ++ [arg_var]}
+                          end)
+
+                        bound_target = {:list, pos, [acc_op | bound_args]}
+
+                        all_bindings =
+                          arg_bindings ++
+                            [{:list, 1, [ind_var, indicator_node]}] ++
+                            def_bindings ++
+                            [{:list, 1, [val_var, val_node]}]
+
+                        ast =
+                          {:list, 1,
+                           [
+                             {:id, 1, ["let*"]},
+                             {:list, 1, all_bindings},
+                             {:list, 1,
+                              [
+                                {:id, 1, ["setf"]},
+                                bound_target,
+                                {:list, 1,
+                                 [
+                                   {:id, 1, ["_cl_put_plist_"]},
+                                   bound_target,
+                                   ind_var,
+                                   val_var
+                                 ]}
+                              ]},
+                             val_var
+                           ]}
+
+                        compile_expr(ast, local_env)
+
+                      _ ->
+                        all_bindings =
+                          [{:list, 1, [ind_var, indicator_node]}] ++
+                            def_bindings ++
+                            [{:list, 1, [val_var, val_node]}]
+
+                        ast =
+                          {:list, 1,
+                           [
+                             {:id, 1, ["let*"]},
+                             {:list, 1, all_bindings},
+                             {:list, 1,
+                              [
+                                {:id, 1, ["setf"]},
+                                target_node,
+                                {:list, 1,
+                                 [
+                                   {:id, 1, ["_cl_put_plist_"]},
+                                   target_node,
+                                   ind_var,
+                                   val_var
+                                 ]}
+                              ]},
+                             val_var
+                           ]}
+
+                        compile_expr(ast, local_env)
+                    end
+
+                  _ ->
+                    compile_setq([place, val_node], local_env)
+                end
+
+              name when name in [:symbol_function, :_cl_symbol_function_, :fdefinition] ->
+                case place_args do
+                  [sym_node | _] ->
+                    {:call, 1,
+                     {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_symbol_function}},
+                     [compile_expr(sym_node, local_env), compile_expr(val_node, local_env)]}
+
+                  _ ->
+                    compile_setq([place, val_node], local_env)
+                end
+
+              name when name in [:symbol_value, :_cl_symbol_value_] ->
+                case place_args do
+                  [sym_node | _] ->
+                    {:call, 1,
+                     {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_symbol_value}},
+                     [compile_expr(sym_node, local_env), compile_expr(val_node, local_env)]}
+
+                  _ ->
+                    compile_setq([place, val_node], local_env)
+                end
+
+              :gethash ->
+                case place_args do
+                  [key_node, table_node | _] ->
+                    {:call, 1,
+                     {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_gethash}},
+                     [
+                       compile_expr(key_node, local_env),
+                       compile_expr(table_node, local_env),
+                       compile_expr(val_node, local_env)
+                     ]}
+
+                  _ ->
+                    compile_setq([place, val_node], local_env)
+                end
+
+              name when name in [:char, :_cl_char_, :schar, :_cl_schar_] ->
+                case place_args do
+                  [seq_node, idx_node] ->
+                    {kind, target, target_bindings} = decompose_place_target(seq_node)
 
                     idx_var =
-                      {:id, 1, ["__setf_idx_#{unique_id()}"]}
+                      {:id, 1, ["__setf_char_idx_#{unique_id()}"]}
 
-                    ast =
+                    val_var =
+                      {:id, 1, ["__setf_char_val_#{unique_id()}"]}
+
+                    all_bindings =
+                      target_bindings ++
+                        [
+                          {:list, 1, [idx_var, idx_node]},
+                          {:list, 1, [val_var, val_node]}
+                        ]
+
+                    update_call =
                       {:list, 1,
                        [
-                         {:id, 1, ["let*"]},
-                         {:list, 1,
-                          [
-                            {:list, 1, [idx_var, idx_node]},
-                            {:list, 1, [val_var, val_node]}
-                          ]},
-                         {:list, 1,
-                          [
-                            {:id, 1, ["setf"]},
-                            target_node,
-                            {:list, 1,
-                             [
-                               {:id, 1, ["_cl_set_nth_"]},
-                               idx_var,
-                               target_node,
-                               val_var
-                             ]}
-                          ]},
+                         {:id, 1, ["_cl_set_char_update_seq_"]},
+                         target,
+                         idx_var,
                          val_var
                        ]}
 
-                    compile_expr(ast, local_env)
-                end
-
-              _ ->
-                compile_setq([place, val_node], local_env)
-            end
-
-          name when name in [:getf, :_cl_getf_] ->
-            case place_args do
-              [target_node, indicator_node | default_rest] ->
-                default_node = List.first(default_rest)
-
-                val_var =
-                  {:id, 1, ["__setf_val_#{unique_id()}"]}
-
-                ind_var =
-                  {:id, 1, ["__setf_ind_#{unique_id()}"]}
-
-                def_bindings =
-                  if default_node do
-                    def_var =
-                      {:id, 1, ["__setf_def_#{unique_id()}"]}
-
-                    [{:list, 1, [def_var, default_node]}]
-                  else
-                    []
-                  end
-
-                case target_node do
-                  {:list, pos, [acc_op | acc_args]} ->
-                    {arg_bindings, bound_args} =
-                      Enum.reduce(acc_args, {[], []}, fn
-                        {:list, _, [{:id, _, ["progn"]} | forms]} = _arg_progn, {b_acc, a_acc}
-                        when forms != [] ->
-                          init_forms = Enum.drop(forms, -1)
-                          last_form = List.last(forms)
-
-                          dummy_var =
-                            {:id, 1,
-                             ["__setf_init_#{unique_id()}"]}
-
-                          progn_init = {:list, 1, [{:id, 1, ["progn"]} | init_forms]}
-
-                          {b_acc ++ [{:list, 1, [dummy_var, progn_init]}], a_acc ++ [last_form]}
-
-                        {:id, _, _} = arg_id, {b_acc, a_acc} ->
-                          {b_acc, a_acc ++ [arg_id]}
-
-                        other_arg, {b_acc, a_acc} ->
-                          arg_var =
-                            {:id, 1,
-                             ["__setf_arg_#{unique_id()}"]}
-
-                          {b_acc ++ [{:list, 1, [arg_var, other_arg]}], a_acc ++ [arg_var]}
-                      end)
-
-                    bound_target = {:list, pos, [acc_op | bound_args]}
-
-                    all_bindings =
-                      arg_bindings ++
-                        [{:list, 1, [ind_var, indicator_node]}] ++
-                        def_bindings ++
-                        [{:list, 1, [val_var, val_node]}]
+                    set_form =
+                      case kind do
+                        :var -> {:list, 1, [{:id, 1, ["setq"]}, target, update_call]}
+                        :accessor -> {:list, 1, [{:id, 1, ["setf"]}, target, update_call]}
+                        :expr -> update_call
+                      end
 
                     ast =
                       {:list, 1,
                        [
                          {:id, 1, ["let*"]},
                          {:list, 1, all_bindings},
-                         {:list, 1,
-                          [
-                            {:id, 1, ["setf"]},
-                            bound_target,
-                            {:list, 1,
-                             [
-                               {:id, 1, ["_cl_put_plist_"]},
-                               bound_target,
-                               ind_var,
-                               val_var
-                             ]}
-                          ]},
+                         set_form,
                          val_var
                        ]}
 
                     compile_expr(ast, local_env)
 
                   _ ->
+                    compile_setq([place, val_node], local_env)
+                end
+
+              name when name in [:elt, :_cl_elt_] ->
+                case place_args do
+                  [seq_node, idx_node] ->
+                    {kind, target, target_bindings} = decompose_place_target(seq_node)
+
+                    idx_var =
+                      {:id, 1, ["__setf_elt_idx_#{unique_id()}"]}
+
+                    val_var =
+                      {:id, 1, ["__setf_elt_val_#{unique_id()}"]}
+
                     all_bindings =
-                      [{:list, 1, [ind_var, indicator_node]}] ++
-                        def_bindings ++
-                        [{:list, 1, [val_var, val_node]}]
+                      target_bindings ++
+                        [
+                          {:list, 1, [idx_var, idx_node]},
+                          {:list, 1, [val_var, val_node]}
+                        ]
+
+                    update_call =
+                      {:list, 1,
+                       [
+                         {:id, 1, ["_cl_set_elt_update_seq_"]},
+                         target,
+                         idx_var,
+                         val_var
+                       ]}
+
+                    set_form =
+                      case kind do
+                        :var -> {:list, 1, [{:id, 1, ["setq"]}, target, update_call]}
+                        :accessor -> {:list, 1, [{:id, 1, ["setf"]}, target, update_call]}
+                        :expr -> update_call
+                      end
 
                     ast =
                       {:list, 1,
                        [
                          {:id, 1, ["let*"]},
                          {:list, 1, all_bindings},
-                         {:list, 1,
-                          [
-                            {:id, 1, ["setf"]},
-                            target_node,
-                            {:list, 1,
-                             [
-                               {:id, 1, ["_cl_put_plist_"]},
-                               target_node,
-                               ind_var,
-                               val_var
-                             ]}
-                          ]},
+                         set_form,
                          val_var
                        ]}
 
                     compile_expr(ast, local_env)
+
+                  _ ->
+                    compile_setq([place, val_node], local_env)
+                end
+
+              name when name in [:subseq, :_cl_subseq_] ->
+                case place_args do
+                  [seq_node, start_node] ->
+                    {kind, target, target_bindings} = decompose_place_target(seq_node)
+
+                    start_var =
+                      {:id, 1, ["__setf_subseq_start_#{unique_id()}"]}
+
+                    val_var =
+                      {:id, 1, ["__setf_subseq_val_#{unique_id()}"]}
+
+                    all_bindings =
+                      target_bindings ++
+                        [
+                          {:list, 1, [start_var, start_node]},
+                          {:list, 1, [val_var, val_node]}
+                        ]
+
+                    update_call =
+                      {:list, 1,
+                       [
+                         {:id, 1, ["_cl_set_subseq_update_seq_"]},
+                         target,
+                         start_var,
+                         val_var
+                       ]}
+
+                    set_form =
+                      case kind do
+                        :var -> {:list, 1, [{:id, 1, ["setq"]}, target, update_call]}
+                        :accessor -> {:list, 1, [{:id, 1, ["setf"]}, target, update_call]}
+                        :expr -> update_call
+                      end
+
+                    ast =
+                      {:list, 1,
+                       [
+                         {:id, 1, ["let*"]},
+                         {:list, 1, all_bindings},
+                         set_form,
+                         val_var
+                       ]}
+
+                    compile_expr(ast, local_env)
+
+                  [seq_node, start_node, end_node] ->
+                    {kind, target, target_bindings} = decompose_place_target(seq_node)
+
+                    start_var =
+                      {:id, 1, ["__setf_subseq_start_#{unique_id()}"]}
+
+                    end_var =
+                      {:id, 1, ["__setf_subseq_end_#{unique_id()}"]}
+
+                    val_var =
+                      {:id, 1, ["__setf_subseq_val_#{unique_id()}"]}
+
+                    all_bindings =
+                      target_bindings ++
+                        [
+                          {:list, 1, [start_var, start_node]},
+                          {:list, 1, [end_var, end_node]},
+                          {:list, 1, [val_var, val_node]}
+                        ]
+
+                    update_call =
+                      {:list, 1,
+                       [
+                         {:id, 1, ["_cl_set_subseq_update_seq_"]},
+                         target,
+                         start_var,
+                         end_var,
+                         val_var
+                       ]}
+
+                    set_form =
+                      case kind do
+                        :var -> {:list, 1, [{:id, 1, ["setq"]}, target, update_call]}
+                        :accessor -> {:list, 1, [{:id, 1, ["setf"]}, target, update_call]}
+                        :expr -> update_call
+                      end
+
+                    ast =
+                      {:list, 1,
+                       [
+                         {:id, 1, ["let*"]},
+                         {:list, 1, all_bindings},
+                         set_form,
+                         val_var
+                       ]}
+
+                    compile_expr(ast, local_env)
+
+                  _ ->
+                    compile_setq([place, val_node], local_env)
+                end
+
+              name when name in [:row_major_aref, :_cl_row_major_aref_, :"row-major-aref"] ->
+                case place_args do
+                  [arr_node, idx_node] ->
+                    arr_var = :"V_arr_#{unique_id()}"
+                    idx_var = :"V_idx_#{unique_id()}"
+                    val_var = :"V_val_#{unique_id()}"
+
+                    {:block, 1,
+                     [
+                       {:match, 1, {:var, 1, arr_var}, compile_expr(arr_node, local_env)},
+                       {:match, 1, {:var, 1, idx_var}, compile_expr(idx_node, local_env)},
+                       {:match, 1, {:var, 1, val_var}, compile_expr(val_node, local_env)},
+                       {:call, 1,
+                        {:remote, 1, {:atom, 1, ExLisp.Builtins},
+                         {:atom, 1, :set_row_major_aref}},
+                        [{:var, 1, arr_var}, {:var, 1, idx_var}, {:var, 1, val_var}]}
+                     ]}
+
+                  _ ->
+                    compile_setq([place, val_node], local_env)
+                end
+
+              name when name in [:svref, :_cl_svref_] ->
+                case place_args do
+                  [arr_node, idx_node] ->
+                    arr_var = :"V_arr_#{unique_id()}"
+                    idx_var = :"V_idx_#{unique_id()}"
+                    val_var = :"V_val_#{unique_id()}"
+
+                    {:block, 1,
+                     [
+                       {:match, 1, {:var, 1, arr_var}, compile_expr(arr_node, local_env)},
+                       {:match, 1, {:var, 1, idx_var}, compile_expr(idx_node, local_env)},
+                       {:match, 1, {:var, 1, val_var}, compile_expr(val_node, local_env)},
+                       {:call, 1,
+                        {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_svref}},
+                        [{:var, 1, arr_var}, {:var, 1, idx_var}, {:var, 1, val_var}]}
+                     ]}
+
+                  _ ->
+                    compile_setq([place, val_node], local_env)
+                end
+
+              name when name in [:aref, :_cl_aref_, :bit, :_cl_bit_, :sbit, :_cl_sbit_] ->
+                case place_args do
+                  [arr_node | idx_nodes] ->
+                    {kind, target, target_bindings} = decompose_place_target(arr_node)
+
+                    idx_vars =
+                      Enum.map(idx_nodes, fn _ ->
+                        {:id, 1, ["__setf_aref_idx_#{unique_id()}"]}
+                      end)
+
+                    val_var = {:id, 1, ["__setf_aref_val_#{unique_id()}"]}
+
+                    idx_bindings =
+                      Enum.zip(idx_vars, idx_nodes)
+                      |> Enum.map(fn {var, node} -> {:list, 1, [var, node]} end)
+
+                    all_bindings =
+                      target_bindings ++ idx_bindings ++ [{:list, 1, [val_var, val_node]}]
+
+                    update_call =
+                      {:list, 1,
+                       [
+                         {:id, 1, ["_cl_set_aref_update_seq_"]},
+                         target,
+                         {:list, 1, [{:id, 1, ["list"]} | idx_vars]},
+                         val_var
+                       ]}
+
+                    set_form =
+                      case kind do
+                        :var -> {:list, 1, [{:id, 1, ["setq"]}, target, update_call]}
+                        :accessor -> {:list, 1, [{:id, 1, ["setf"]}, target, update_call]}
+                        :expr -> update_call
+                      end
+
+                    compile_expr(
+                      {:list, 1,
+                       [
+                         {:id, 1, ["let*"]},
+                         {:list, 1, all_bindings},
+                         set_form,
+                         val_var
+                       ]},
+                      local_env
+                    )
+
+                  _ ->
+                    compile_setq([place, val_node], local_env)
+                end
+
+              name when name in [:get, :_cl_get_] ->
+                case place_args do
+                  [sym_node, prop_node] ->
+                    {:call, 1,
+                     {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_symbol_prop}},
+                     [
+                       compile_expr(sym_node, local_env),
+                       compile_expr(prop_node, local_env),
+                       compile_expr(val_node, local_env)
+                     ]}
+
+                  [sym_node, prop_node, def_node] ->
+                    sym_var = :"V_getsym_#{unique_id()}"
+                    prop_var = :"V_getprop_#{unique_id()}"
+
+                    {:block, 1,
+                     [
+                       {:match, 1, {:var, 1, sym_var}, compile_expr(sym_node, local_env)},
+                       {:match, 1, {:var, 1, prop_var}, compile_expr(prop_node, local_env)},
+                       compile_expr(def_node, local_env),
+                       {:call, 1,
+                        {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_symbol_prop}},
+                        [
+                          {:var, 1, sym_var},
+                          {:var, 1, prop_var},
+                          compile_expr(val_node, local_env)
+                        ]}
+                     ]}
+
+                  _ ->
+                    compile_setq([place, val_node], local_env)
+                end
+
+              name when name in [:symbol_plist, :_cl_symbol_plist_] ->
+                case place_args do
+                  [sym_node] ->
+                    {:call, 1,
+                     {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_symbol_plist}},
+                     [
+                       compile_expr(sym_node, local_env),
+                       compile_expr(val_node, local_env)
+                     ]}
+
+                  _ ->
+                    compile_setq([place, val_node], local_env)
+                end
+
+              name when name in [:slot_value, :_cl_slot_value_] ->
+                case place_args do
+                  [inst_node, slot_node] ->
+                    {:call, 1,
+                     {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_slot_value}},
+                     [
+                       compile_expr(inst_node, local_env),
+                       compile_expr(slot_node, local_env),
+                       compile_expr(val_node, local_env)
+                     ]}
+
+                  _ ->
+                    compile_setq([place, val_node], local_env)
+                end
+
+              :ldb ->
+                case place_args do
+                  [bytespec_node, target_node] ->
+                    dpb_call =
+                      {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :dpb}},
+                       [
+                         compile_expr(val_node, local_env),
+                         compile_expr(bytespec_node, local_env),
+                         compile_expr(target_node, local_env)
+                       ]}
+
+                    compile_single_setf(target_node, dpb_call, local_env)
+
+                  _ ->
+                    compile_setq([place, val_node], local_env)
+                end
+
+              :mask_field ->
+                case place_args do
+                  [bytespec_node, target_node] ->
+                    deposit_call =
+                      {:call, 1,
+                       {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :deposit_field}},
+                       [
+                         compile_expr(val_node, local_env),
+                         compile_expr(bytespec_node, local_env),
+                         compile_expr(target_node, local_env)
+                       ]}
+
+                    compile_single_setf(target_node, deposit_call, local_env)
+
+                  _ ->
+                    compile_setq([place, val_node], local_env)
+                end
+
+              name when name in [:readtable_case, :_cl_readtable_case_] ->
+                case place_args do
+                  [readtable_node] ->
+                    {:call, 1,
+                     {:remote, 1, {:atom, 1, ExLisp.Readtable}, {:atom, 1, :set_readtable_case}},
+                     [compile_expr(readtable_node, local_env), compile_expr(val_node, local_env)]}
+
+                  [] ->
+                    {:call, 1,
+                     {:remote, 1, {:atom, 1, ExLisp.Readtable}, {:atom, 1, :set_readtable_case}},
+                     [
+                       {:call, 1,
+                        {:remote, 1, {:atom, 1, ExLisp.Readtable},
+                         {:atom, 1, :current_readtable}}, []},
+                       compile_expr(val_node, local_env)
+                     ]}
+
+                  _ ->
+                    compile_setq([place, val_node], local_env)
+                end
+
+              name when name in [:fill_pointer, :_cl_fill_pointer_] ->
+                case place_args do
+                  [arr_node | _] ->
+                    {:call, 1,
+                     {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_fill_pointer}},
+                     [
+                       compile_expr(arr_node, local_env),
+                       compile_expr(val_node, local_env)
+                     ]}
+
+                  _ ->
+                    compile_setq([place, val_node], local_env)
+                end
+
+              accessor_name when is_atom(accessor_name) and length(place_args) == 1 ->
+                case expand_c_r_place(accessor_name, place_args) do
+                  {:ok, new_place} ->
+                    compile_single_setf(new_place, val_node, local_env)
+
+                  :error ->
+                    # e.g. (person-name p) -> set_struct_slot(p, :name, val)
+                    [target_node] = place_args
+                    accessor_str = Atom.to_string(accessor_name)
+
+                    slot_name =
+                      case String.split(accessor_str, "_") do
+                        [_struct_prefix | rest_parts] when rest_parts != [] ->
+                          Enum.join(rest_parts, "_") |> String.to_atom()
+
+                        _ ->
+                          accessor_name
+                      end
+
+                    {:call, 1,
+                     {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_struct_slot}},
+                     [
+                       compile_expr(target_node, local_env),
+                       {:atom, 1, slot_name},
+                       compile_expr(val_node, local_env)
+                     ]}
                 end
 
               _ ->
-                compile_setq([place, val_node], local_env)
-            end
-
-          name when name in [:symbol_function, :_cl_symbol_function_, :fdefinition] ->
-            case place_args do
-              [sym_node | _] ->
-                {:call, 1,
-                 {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_symbol_function}},
-                 [compile_expr(sym_node, local_env), compile_expr(val_node, local_env)]}
-
-              _ ->
-                compile_setq([place, val_node], local_env)
-            end
-
-          name when name in [:symbol_value, :_cl_symbol_value_] ->
-            case place_args do
-              [sym_node | _] ->
-                {:call, 1,
-                 {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_symbol_value}},
-                 [compile_expr(sym_node, local_env), compile_expr(val_node, local_env)]}
-
-              _ ->
-                compile_setq([place, val_node], local_env)
-            end
-
-          :gethash ->
-            case place_args do
-              [key_node, table_node | _] ->
-                {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_gethash}},
-                 [
-                   compile_expr(key_node, local_env),
-                   compile_expr(table_node, local_env),
-                   compile_expr(val_node, local_env)
-                 ]}
-
-              _ ->
-                compile_setq([place, val_node], local_env)
-            end
-
-          name when name in [:char, :_cl_char_, :schar, :_cl_schar_] ->
-            case place_args do
-              [seq_node, idx_node] ->
-                {kind, target, target_bindings} = decompose_place_target(seq_node)
-
-                idx_var =
-                  {:id, 1, ["__setf_char_idx_#{unique_id()}"]}
-
-                val_var =
-                  {:id, 1, ["__setf_char_val_#{unique_id()}"]}
-
-                all_bindings =
-                  target_bindings ++
-                    [
-                      {:list, 1, [idx_var, idx_node]},
-                      {:list, 1, [val_var, val_node]}
-                    ]
-
-                update_call =
-                  {:list, 1,
-                   [
-                     {:id, 1, ["_cl_set_char_update_seq_"]},
-                     target,
-                     idx_var,
-                     val_var
-                   ]}
-
-                set_form =
-                  case kind do
-                    :var -> {:list, 1, [{:id, 1, ["setq"]}, target, update_call]}
-                    :accessor -> {:list, 1, [{:id, 1, ["setf"]}, target, update_call]}
-                    :expr -> update_call
-                  end
-
-                ast =
-                  {:list, 1,
-                   [
-                     {:id, 1, ["let*"]},
-                     {:list, 1, all_bindings},
-                     set_form,
-                     val_var
-                   ]}
-
-                compile_expr(ast, local_env)
-
-              _ ->
-                compile_setq([place, val_node], local_env)
-            end
-
-          name when name in [:elt, :_cl_elt_] ->
-            case place_args do
-              [seq_node, idx_node] ->
-                {kind, target, target_bindings} = decompose_place_target(seq_node)
-
-                idx_var =
-                  {:id, 1, ["__setf_elt_idx_#{unique_id()}"]}
-
-                val_var =
-                  {:id, 1, ["__setf_elt_val_#{unique_id()}"]}
-
-                all_bindings =
-                  target_bindings ++
-                    [
-                      {:list, 1, [idx_var, idx_node]},
-                      {:list, 1, [val_var, val_node]}
-                    ]
-
-                update_call =
-                  {:list, 1,
-                   [
-                     {:id, 1, ["_cl_set_elt_update_seq_"]},
-                     target,
-                     idx_var,
-                     val_var
-                   ]}
-
-                set_form =
-                  case kind do
-                    :var -> {:list, 1, [{:id, 1, ["setq"]}, target, update_call]}
-                    :accessor -> {:list, 1, [{:id, 1, ["setf"]}, target, update_call]}
-                    :expr -> update_call
-                  end
-
-                ast =
-                  {:list, 1,
-                   [
-                     {:id, 1, ["let*"]},
-                     {:list, 1, all_bindings},
-                     set_form,
-                     val_var
-                   ]}
-
-                compile_expr(ast, local_env)
-
-              _ ->
-                compile_setq([place, val_node], local_env)
-            end
-
-          name when name in [:subseq, :_cl_subseq_] ->
-            case place_args do
-              [seq_node, start_node] ->
-                {kind, target, target_bindings} = decompose_place_target(seq_node)
-
-                start_var =
-                  {:id, 1,
-                   ["__setf_subseq_start_#{unique_id()}"]}
-
-                val_var =
-                  {:id, 1,
-                   ["__setf_subseq_val_#{unique_id()}"]}
-
-                all_bindings =
-                  target_bindings ++
-                    [
-                      {:list, 1, [start_var, start_node]},
-                      {:list, 1, [val_var, val_node]}
-                    ]
-
-                update_call =
-                  {:list, 1,
-                   [
-                     {:id, 1, ["_cl_set_subseq_update_seq_"]},
-                     target,
-                     start_var,
-                     val_var
-                   ]}
-
-                set_form =
-                  case kind do
-                    :var -> {:list, 1, [{:id, 1, ["setq"]}, target, update_call]}
-                    :accessor -> {:list, 1, [{:id, 1, ["setf"]}, target, update_call]}
-                    :expr -> update_call
-                  end
-
-                ast =
-                  {:list, 1,
-                   [
-                     {:id, 1, ["let*"]},
-                     {:list, 1, all_bindings},
-                     set_form,
-                     val_var
-                   ]}
-
-                compile_expr(ast, local_env)
-
-              [seq_node, start_node, end_node] ->
-                {kind, target, target_bindings} = decompose_place_target(seq_node)
-
-                start_var =
-                  {:id, 1,
-                   ["__setf_subseq_start_#{unique_id()}"]}
-
-                end_var =
-                  {:id, 1,
-                   ["__setf_subseq_end_#{unique_id()}"]}
-
-                val_var =
-                  {:id, 1,
-                   ["__setf_subseq_val_#{unique_id()}"]}
-
-                all_bindings =
-                  target_bindings ++
-                    [
-                      {:list, 1, [start_var, start_node]},
-                      {:list, 1, [end_var, end_node]},
-                      {:list, 1, [val_var, val_node]}
-                    ]
-
-                update_call =
-                  {:list, 1,
-                   [
-                     {:id, 1, ["_cl_set_subseq_update_seq_"]},
-                     target,
-                     start_var,
-                     end_var,
-                     val_var
-                   ]}
-
-                set_form =
-                  case kind do
-                    :var -> {:list, 1, [{:id, 1, ["setq"]}, target, update_call]}
-                    :accessor -> {:list, 1, [{:id, 1, ["setf"]}, target, update_call]}
-                    :expr -> update_call
-                  end
-
-                ast =
-                  {:list, 1,
-                   [
-                     {:id, 1, ["let*"]},
-                     {:list, 1, all_bindings},
-                     set_form,
-                     val_var
-                   ]}
-
-                compile_expr(ast, local_env)
-
-              _ ->
-                compile_setq([place, val_node], local_env)
-            end
-
-          name when name in [:row_major_aref, :_cl_row_major_aref_, :"row-major-aref"] ->
-            case place_args do
-              [arr_node, idx_node] ->
-                arr_var = :"V_arr_#{unique_id()}"
-                idx_var = :"V_idx_#{unique_id()}"
-                val_var = :"V_val_#{unique_id()}"
-
-                {:block, 1,
-                 [
-                   {:match, 1, {:var, 1, arr_var}, compile_expr(arr_node, local_env)},
-                   {:match, 1, {:var, 1, idx_var}, compile_expr(idx_node, local_env)},
-                   {:match, 1, {:var, 1, val_var}, compile_expr(val_node, local_env)},
-                   {:call, 1,
-                    {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_row_major_aref}},
-                    [{:var, 1, arr_var}, {:var, 1, idx_var}, {:var, 1, val_var}]}
-                 ]}
-
-              _ ->
-                compile_setq([place, val_node], local_env)
-            end
-
-          name when name in [:svref, :_cl_svref_] ->
-            case place_args do
-              [arr_node, idx_node] ->
-                arr_var = :"V_arr_#{unique_id()}"
-                idx_var = :"V_idx_#{unique_id()}"
-                val_var = :"V_val_#{unique_id()}"
-
-                {:block, 1,
-                 [
-                   {:match, 1, {:var, 1, arr_var}, compile_expr(arr_node, local_env)},
-                   {:match, 1, {:var, 1, idx_var}, compile_expr(idx_node, local_env)},
-                   {:match, 1, {:var, 1, val_var}, compile_expr(val_node, local_env)},
-                   {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_svref}},
-                    [{:var, 1, arr_var}, {:var, 1, idx_var}, {:var, 1, val_var}]}
-                 ]}
-
-              _ ->
-                compile_setq([place, val_node], local_env)
-            end
-
-          name when name in [:aref, :_cl_aref_, :bit, :_cl_bit_, :sbit, :_cl_sbit_] ->
-            case place_args do
-              [arr_node | idx_nodes] ->
-                {kind, target, target_bindings} = decompose_place_target(arr_node)
-
-                idx_vars =
-                  Enum.map(idx_nodes, fn _ ->
-                    {:id, 1, ["__setf_aref_idx_#{unique_id()}"]}
-                  end)
-
-                val_var = {:id, 1, ["__setf_aref_val_#{unique_id()}"]}
-
-                idx_bindings =
-                  Enum.zip(idx_vars, idx_nodes)
-                  |> Enum.map(fn {var, node} -> {:list, 1, [var, node]} end)
-
-                all_bindings =
-                  target_bindings ++ idx_bindings ++ [{:list, 1, [val_var, val_node]}]
-
-                update_call =
-                  {:list, 1,
-                   [
-                     {:id, 1, ["_cl_set_aref_update_seq_"]},
-                     target,
-                     {:list, 1, [{:id, 1, ["list"]} | idx_vars]},
-                     val_var
-                   ]}
-
-                set_form =
-                  case kind do
-                    :var -> {:list, 1, [{:id, 1, ["setq"]}, target, update_call]}
-                    :accessor -> {:list, 1, [{:id, 1, ["setf"]}, target, update_call]}
-                    :expr -> update_call
-                  end
-
-                compile_expr(
-                  {:list, 1,
-                   [
-                     {:id, 1, ["let*"]},
-                     {:list, 1, all_bindings},
-                     set_form,
-                     val_var
-                   ]},
-                  local_env
-                )
-
-              _ ->
-                compile_setq([place, val_node], local_env)
-            end
-
-          name when name in [:get, :_cl_get_] ->
-            case place_args do
-              [sym_node, prop_node] ->
-                {:call, 1,
-                 {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_symbol_prop}},
-                 [
-                   compile_expr(sym_node, local_env),
-                   compile_expr(prop_node, local_env),
-                   compile_expr(val_node, local_env)
-                 ]}
-
-              [sym_node, prop_node, def_node] ->
-                sym_var = :"V_getsym_#{unique_id()}"
-                prop_var = :"V_getprop_#{unique_id()}"
-
-                {:block, 1,
-                 [
-                   {:match, 1, {:var, 1, sym_var}, compile_expr(sym_node, local_env)},
-                   {:match, 1, {:var, 1, prop_var}, compile_expr(prop_node, local_env)},
-                   compile_expr(def_node, local_env),
-                   {:call, 1,
-                    {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_symbol_prop}},
-                    [
-                      {:var, 1, sym_var},
-                      {:var, 1, prop_var},
-                      compile_expr(val_node, local_env)
-                    ]}
-                 ]}
-
-              _ ->
-                compile_setq([place, val_node], local_env)
-            end
-
-          name when name in [:symbol_plist, :_cl_symbol_plist_] ->
-            case place_args do
-              [sym_node] ->
-                {:call, 1,
-                 {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_symbol_plist}},
-                 [
-                   compile_expr(sym_node, local_env),
-                   compile_expr(val_node, local_env)
-                 ]}
-
-              _ ->
-                compile_setq([place, val_node], local_env)
-            end
-
-          :svref ->
-            case place_args do
-              [vec_node, idx_node] ->
-                {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_svref}},
-                 [
-                   compile_expr(vec_node, local_env),
-                   compile_expr(idx_node, local_env),
-                   compile_expr(val_node, local_env)
-                 ]}
-
-              _ ->
-                compile_setq([place, val_node], local_env)
-            end
-
-          name when name in [:slot_value, :_cl_slot_value_] ->
-            case place_args do
-              [inst_node, slot_node] ->
-                {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_slot_value}},
-                 [
-                   compile_expr(inst_node, local_env),
-                   compile_expr(slot_node, local_env),
-                   compile_expr(val_node, local_env)
-                 ]}
-
-              _ ->
-                compile_setq([place, val_node], local_env)
-            end
-
-          :ldb ->
-            case place_args do
-              [bytespec_node, target_node] ->
-                dpb_call =
-                  {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :dpb}},
-                   [
-                     compile_expr(val_node, local_env),
-                     compile_expr(bytespec_node, local_env),
-                     compile_expr(target_node, local_env)
-                   ]}
-
-                compile_single_setf(target_node, dpb_call, local_env)
-
-              _ ->
-                compile_setq([place, val_node], local_env)
-            end
-
-          :mask_field ->
-            case place_args do
-              [bytespec_node, target_node] ->
-                deposit_call =
-                  {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :deposit_field}},
-                   [
-                     compile_expr(val_node, local_env),
-                     compile_expr(bytespec_node, local_env),
-                     compile_expr(target_node, local_env)
-                   ]}
-
-                compile_single_setf(target_node, deposit_call, local_env)
-
-              _ ->
-                compile_setq([place, val_node], local_env)
-            end
-
-          name when name in [:readtable_case, :_cl_readtable_case_] ->
-            case place_args do
-              [readtable_node] ->
-                {:call, 1,
-                 {:remote, 1, {:atom, 1, ExLisp.Readtable}, {:atom, 1, :set_readtable_case}},
-                 [compile_expr(readtable_node, local_env), compile_expr(val_node, local_env)]}
-
-              [] ->
-                {:call, 1,
-                 {:remote, 1, {:atom, 1, ExLisp.Readtable}, {:atom, 1, :set_readtable_case}},
-                 [
-                   {:call, 1,
-                    {:remote, 1, {:atom, 1, ExLisp.Readtable}, {:atom, 1, :current_readtable}},
-                    []},
-                   compile_expr(val_node, local_env)
-                 ]}
-
-              _ ->
-                compile_setq([place, val_node], local_env)
-            end
-
-          name when name in [:fill_pointer, :_cl_fill_pointer_] ->
-            case place_args do
-              [arr_node | _] ->
-                {:call, 1,
-                 {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_fill_pointer}},
-                 [
-                   compile_expr(arr_node, local_env),
-                   compile_expr(val_node, local_env)
-                 ]}
-
-              _ ->
-                compile_setq([place, val_node], local_env)
-            end
-
-          accessor_name when is_atom(accessor_name) and length(place_args) == 1 ->
-            case expand_c_r_place(accessor_name, place_args) do
-              {:ok, new_place} ->
-                compile_single_setf(new_place, val_node, local_env)
-
-              :error ->
-                # e.g. (person-name p) -> set_struct_slot(p, :name, val)
-                [target_node] = place_args
-                accessor_str = Atom.to_string(accessor_name)
-
-                slot_name =
-                  case String.split(accessor_str, "_") do
-                    [_struct_prefix | rest_parts] when rest_parts != [] ->
-                      Enum.join(rest_parts, "_") |> String.to_atom()
-
-                    _ ->
-                      accessor_name
-                  end
-
-                {:call, 1,
-                 {:remote, 1, {:atom, 1, ExLisp.Builtins}, {:atom, 1, :set_struct_slot}},
-                 [
-                   compile_expr(target_node, local_env),
-                   {:atom, 1, slot_name},
-                   compile_expr(val_node, local_env)
-                 ]}
-            end
-
-          _ ->
-            case expand_c_r_place(extract_op_name(op_node), place_args) do
-              {:ok, new_place} ->
-                compile_single_setf(new_place, val_node, local_env)
-
-              :error ->
-                setf_fn_sym = :"setf_#{extract_op_name(op_node)}"
-
-                if is_atom(setf_fn_sym) and
-                     (MapSet.member?(local_env, setf_fn_sym) or ExLisp.Env.has_fun?(setf_fn_sym)) do
-                  setf_call =
-                    {:list, 1, [{:id, 1, [Atom.to_string(setf_fn_sym)]}, val_node | place_args]}
-
-                  compile_expr(setf_call, local_env)
-                else
-                  compile_setq([place, val_node], local_env)
+                case expand_c_r_place(extract_op_name(op_node), place_args) do
+                  {:ok, new_place} ->
+                    compile_single_setf(new_place, val_node, local_env)
+
+                  :error ->
+                    setf_fn_sym = :"setf_#{extract_op_name(op_node)}"
+
+                    if is_atom(setf_fn_sym) and
+                         (MapSet.member?(local_env, setf_fn_sym) or
+                            ExLisp.Env.has_fun?(setf_fn_sym)) do
+                      setf_call =
+                        {:list, 1,
+                         [{:id, 1, [Atom.to_string(setf_fn_sym)]}, val_node | place_args]}
+
+                      compile_expr(setf_call, local_env)
+                    else
+                      compile_setq([place, val_node], local_env)
+                    end
                 end
             end
-        end
         end
 
       _ ->
@@ -4907,7 +4897,7 @@ defmodule LispBeam do
         [
           {:tuple, 1,
            [
-            {:atom, 1, :error},
+             {:atom, 1, :error},
              {:var, 1, :_},
              {:var, 1, :_}
            ]}
@@ -7161,7 +7151,8 @@ defmodule LispBeam do
                 do: canon,
                 else: ExLisp.Symbol.downcase_atom(str)
 
-            :error -> ExLisp.Symbol.downcase_atom(str)
+            :error ->
+              ExLisp.Symbol.downcase_atom(str)
           end
         end
     end
@@ -8051,8 +8042,7 @@ defmodule LispBeam do
 
         pkg_beam = compile_expr({:lit, pkg_name}, local_env)
 
-        {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Package}, {:atom, 1, :in_package}},
-         [pkg_beam]}
+        {:call, 1, {:remote, 1, {:atom, 1, ExLisp.Package}, {:atom, 1, :in_package}}, [pkg_beam]}
 
       _ ->
         {:atom, 1, :t}

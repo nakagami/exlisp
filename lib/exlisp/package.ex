@@ -2136,7 +2136,7 @@ defmodule ExLisp.Package do
 
           _ ->
             pkg
-          end
+        end
 
       _ ->
         pkg
@@ -2532,6 +2532,7 @@ defmodule ExLisp.Package do
       if is_nil(pkg_desig), do: find_package!(current_package()), else: find_package!(pkg_desig)
 
     name = reader_symbol_to_str(name_desig)
+
     case find_symbol_in_pkg(name, pkg) do
       {:found, sym, status} ->
         [:_values_, [sym, status]]
@@ -2551,6 +2552,7 @@ defmodule ExLisp.Package do
       end
 
     name = symbol_to_str(symbol_desig)
+
     if MapSet.member?(pkg.internal_symbols, name) or MapSet.member?(pkg.external_symbols, name) do
       inherited =
         Enum.flat_map(pkg.use_list, fn used_name ->
@@ -2702,14 +2704,9 @@ defmodule ExLisp.Package do
     name = symbol_to_str(symbol)
 
     if package && not String.starts_with?(Atom.to_string(symbol), "#:") do
-      source =
-        find_symbol_package(package, name)
-        |> case do
-          nil -> if package == find_package("COMMON-LISP"), do: package
-          found -> found
-        end
+      source = find_symbol_package(package, name)
 
-      if source, do: remember_symbol_package(symbol, source)
+      remember_symbol_package(symbol, source)
     end
 
     symbol

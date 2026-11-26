@@ -72,6 +72,88 @@ defmodule ExLisp.CommonLispCompatibilityTest do
            """) == [[9, 3, 4], [9, 3, 4], 9, [3, 4]]
   end
 
+  test "shared mutable cons scopes become active in other processes" do
+    scope = make_ref()
+    parent = self()
+    ExLisp.MutableCons.set_scope(scope)
+    original = [:old]
+
+    resolver =
+      spawn(fn ->
+        ExLisp.MutableCons.set_scope(scope)
+        send(parent, :ready)
+
+        receive do
+          :resolve -> send(parent, {:resolved, ExLisp.Builtins.car(original)})
+        end
+      end)
+
+    assert_receive :ready
+    refute Process.get({:exlisp_mutable_cons_active, scope})
+    assert ExLisp.Builtins.rplaca(original, :new) == [:new]
+    send(resolver, :resolve)
+    assert_receive {:resolved, :new}
+  end
+
+  test "shared mutable cons scopes observe successive updates across processes" do
+    scope = make_ref()
+    parent = self()
+    ExLisp.MutableCons.set_scope(scope)
+    original = [:a]
+    assert ExLisp.Builtins.rplaca(original, :b) == [:b]
+
+    child =
+      spawn(fn ->
+        ExLisp.MutableCons.set_scope(scope)
+        send(parent, {:initial, ExLisp.Builtins.car(original)})
+
+        receive do
+          :replace -> send(parent, {:replaced, ExLisp.Builtins.rplaca(original, :c)})
+        end
+      end)
+
+    assert_receive {:initial, :b}
+    assert ExLisp.Builtins.rplaca(original, :d) == [:d]
+    send(child, :replace)
+    assert_receive {:replaced, [:c]}
+    assert ExLisp.Builtins.car(original) == :c
+  end
+
+  test "shared mutable cons caches do not hide mappings for other cells" do
+    scope = make_ref()
+    parent = self()
+    ExLisp.MutableCons.set_scope(scope)
+    first = [:first_original]
+    second = [:second_original]
+    assert ExLisp.Builtins.rplaca(first, :first_updated) == [:first_updated]
+
+    spawn(fn ->
+      ExLisp.MutableCons.set_scope(scope)
+      ExLisp.Builtins.rplaca(second, :second_updated)
+      send(parent, {:both, ExLisp.Builtins.car(first), ExLisp.Builtins.car(second)})
+    end)
+
+    assert_receive {:both, :first_updated, :second_updated}
+  end
+
+  test "shared mutable cons reset invalidates mappings cached in other processes" do
+    scope = make_ref()
+    parent = self()
+    ExLisp.MutableCons.set_scope(scope)
+    original = [:original]
+    assert ExLisp.Builtins.rplaca(original, :updated) == [:updated]
+
+    spawn(fn ->
+      ExLisp.MutableCons.set_scope(scope)
+      ExLisp.MutableCons.reset()
+      other = [:other_original]
+      ExLisp.Builtins.rplaca(other, :other_updated)
+      send(parent, {:reset, ExLisp.Builtins.car(original), ExLisp.Builtins.car(other)})
+    end)
+
+    assert_receive {:reset, :original, :other_updated}
+  end
+
   test "circular cons mutation is observable and list-length detects it" do
     ExLisp.Env.reset()
 

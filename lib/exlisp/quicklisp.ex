@@ -6,7 +6,7 @@ defmodule ExLisp.Quicklisp do
   of third-party libraries via `ql:quickload`.
   """
 
-  @distinfo_url "http://beta.quicklisp.org/dist/quicklisp.txt"
+  @distinfo_url "https://beta.quicklisp.org/dist/quicklisp.txt"
   @loaded_table :exlisp_loaded_systems
 
   @doc """
@@ -358,7 +358,7 @@ defmodule ExLisp.Quicklisp do
     d in ["asdf", "sb-rt", "rt", "sb-bsd-sockets", "uiop", "swank"]
   end
 
-  defp ensure_project_installed(%{url: url, prefix: prefix}) do
+  defp ensure_project_installed(%{url: url, prefix: prefix} = release) do
     File.mkdir_p!(archive_dir())
     File.mkdir_p!(software_dir())
 
@@ -373,21 +373,70 @@ defmodule ExLisp.Quicklisp do
         download_file(url, archive_path)
       end
 
+      verify_archive!(archive_path, release)
+
       # Extract
       extract_archive(archive_path, software_dir())
     end
 
-    target_dir
+    if File.dir?(target_dir) do
+      target_dir
+    else
+      raise RuntimeError, "Quicklisp archive did not contain expected project directory #{prefix}"
+    end
   end
 
   defp download_file(url, target_path) do
-    # Download using curl
-    case System.cmd("curl", ["-sSL", "-o", target_path, url]) do
-      {_, 0} ->
-        :ok
+    temp_path = "#{target_path}.#{System.unique_integer([:positive])}.tmp"
+    secure_url = String.replace_prefix(url, "http://", "https://")
 
-      {err, code} ->
-        raise RuntimeError, "Failed to download #{url} (exit #{code}): #{err}"
+    try do
+      case System.cmd("curl", ["-fsSL", "-o", temp_path, secure_url]) do
+        {_, 0} ->
+          File.rename!(temp_path, target_path)
+
+        {err, code} ->
+          raise RuntimeError, "Failed to download #{secure_url} (exit #{code}): #{err}"
+      end
+    after
+      File.rm(temp_path)
+    end
+  end
+
+  @doc false
+  def verify_archive!(archive_path, release) do
+    %{size: actual_size} = File.stat!(archive_path)
+    expected_size = release[:size]
+
+    if is_integer(expected_size) and actual_size != expected_size do
+      raise RuntimeError,
+            "Quicklisp archive size mismatch for #{archive_path}: expected #{expected_size}, got #{actual_size}"
+    end
+
+    {md5, sha1} =
+      archive_path
+      |> File.stream!(64 * 1024, [])
+      |> Enum.reduce({:crypto.hash_init(:md5), :crypto.hash_init(:sha)}, fn chunk,
+                                                                            {md5_state,
+                                                                             sha1_state} ->
+        {:crypto.hash_update(md5_state, chunk), :crypto.hash_update(sha1_state, chunk)}
+      end)
+      |> then(fn {md5_state, sha1_state} ->
+        {:crypto.hash_final(md5_state) |> Base.encode16(case: :lower),
+         :crypto.hash_final(sha1_state) |> Base.encode16(case: :lower)}
+      end)
+
+    verify_digest!("MD5", archive_path, release[:md5], md5)
+    verify_digest!("SHA1", archive_path, release[:sha1], sha1)
+    :ok
+  end
+
+  defp verify_digest!(_kind, _path, expected, _actual) when expected in [nil, ""], do: :ok
+
+  defp verify_digest!(kind, path, expected, actual) do
+    if String.downcase(to_string(expected)) != actual do
+      raise RuntimeError,
+            "#{kind} mismatch for Quicklisp archive #{path}: expected #{expected}, got #{actual}"
     end
   end
 

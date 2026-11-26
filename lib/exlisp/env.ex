@@ -95,11 +95,14 @@ defmodule ExLisp.Env do
           :exlisp_fun,
           :exlisp_macro,
           :exlisp_fun_ast,
+          :exlisp_fun_ast_owner,
           :exlisp_symbol_macro,
           :exlisp_compiler_macro,
           :exlisp_special,
           :exlisp_trace_original,
-          :exlisp_trace_traced
+          :exlisp_trace_traced,
+          :exlisp_jit_compiled,
+          :exlisp_jit_failed
         ] do
       :persistent_term.erase(key)
     end
@@ -783,13 +786,17 @@ defmodule ExLisp.Env do
     ensure_env()
     fun_name = normalize_name(name)
     key = {:exlisp_fun_ast, fun_name}
+    owner = :persistent_term.get({:exlisp_fun, fun_name}, nil)
     :persistent_term.put(key, ast)
+    :persistent_term.put({:exlisp_fun_ast_owner, fun_name}, owner)
 
     name_str = Atom.to_string(fun_name)
     h_name = String.replace(name_str, "_", "-") |> String.to_atom()
     u_name = String.replace(name_str, "-", "_") |> String.to_atom()
     :persistent_term.put({:exlisp_fun_ast, h_name}, ast)
     :persistent_term.put({:exlisp_fun_ast, u_name}, ast)
+    :persistent_term.put({:exlisp_fun_ast_owner, h_name}, owner)
+    :persistent_term.put({:exlisp_fun_ast_owner, u_name}, owner)
 
     ast
   end
@@ -813,6 +820,29 @@ defmodule ExLisp.Env do
 
       ast ->
         ast
+    end
+  end
+
+  @doc false
+  def get_fun_ast_for(name, fun) do
+    fun_name = normalize_name(name)
+
+    case :persistent_term.get({:exlisp_fun_ast_owner, fun_name}, :__not_found__) do
+      :__not_found__ ->
+        namespaced_lookup_candidates(fun_name)
+        |> Enum.find_value(fn candidate ->
+          owner = :persistent_term.get({:exlisp_fun_ast_owner, candidate}, :__not_found__)
+
+          if owner !== :__not_found__ and owner === fun do
+            :persistent_term.get({:exlisp_fun_ast, candidate}, nil)
+          end
+        end)
+
+      owner when owner === fun ->
+        :persistent_term.get({:exlisp_fun_ast, fun_name}, nil)
+
+      _ ->
+        nil
     end
   end
 
@@ -882,18 +912,7 @@ defmodule ExLisp.Env do
   def call_fun(name, args) when is_list(args) do
     fun_name = normalize_name(name)
     fun = get_fun(fun_name)
-
-    case fun do
-      %ExLisp.Closure{fun: f} ->
-        f.(args)
-
-      _ ->
-        if is_function(fun, length(args)) do
-          apply(fun, args)
-        else
-          fun.(args)
-        end
-    end
+    ExLisp.JIT.invoke(fun_name, fun, args)
   end
 
   @doc """

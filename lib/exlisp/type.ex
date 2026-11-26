@@ -14,6 +14,7 @@ defmodule ExLisp.Type do
     if :ets.info(@deftype_table) == :undefined do
       :ets.new(@deftype_table, [:named_table, :public, :set, read_concurrency: true])
     end
+
     :ok
   end
 
@@ -44,7 +45,9 @@ defmodule ExLisp.Type do
     try do
       curr_pkg = ExLisp.Package.current_package()
       name_str = Atom.to_string(norm_name)
-      if curr_pkg != nil and not String.contains?(name_str, ".") and not String.contains?(name_str, ":") do
+
+      if curr_pkg != nil and not String.contains?(name_str, ".") and
+           not String.contains?(name_str, ":") do
         pkg_name = to_string(curr_pkg) |> String.downcase() |> String.replace("-", "_")
         :ets.insert(@deftype_table, {:"#{pkg_name}_#{norm_name}", {lambda_list, expander_fun}})
         :ets.insert(@deftype_table, {:"#{pkg_name}.#{norm_name}", {lambda_list, expander_fun}})
@@ -127,8 +130,11 @@ defmodule ExLisp.Type do
 
   defp bind_optional_params([p | rest_params], [a | rest_args]) do
     case p do
-      [var, _default | _] -> [{normalize_param_name(var), a} | bind_optional_params(rest_params, rest_args)]
-      var -> [{normalize_param_name(var), a} | bind_optional_params(rest_params, rest_args)]
+      [var, _default | _] ->
+        [{normalize_param_name(var), a} | bind_optional_params(rest_params, rest_args)]
+
+      var ->
+        [{normalize_param_name(var), a} | bind_optional_params(rest_params, rest_args)]
     end
   end
 
@@ -140,7 +146,8 @@ defmodule ExLisp.Type do
           | bind_optional_params(rest_params, [])
         ]
 
-      var -> [{normalize_param_name(var), :*} | bind_optional_params(rest_params, [])]
+      var ->
+        [{normalize_param_name(var), :*} | bind_optional_params(rest_params, [])]
     end
   end
 
@@ -223,7 +230,8 @@ defmodule ExLisp.Type do
     expand_type(n, depth)
   end
 
-  def expand_type([head | args], depth) when is_atom(head) or is_binary(head) or is_struct(head, ExLisp.Symbol) do
+  def expand_type([head | args], depth)
+      when is_atom(head) or is_binary(head) or is_struct(head, ExLisp.Symbol) do
     norm_head = normalize_type_name(head)
     ensure_tables()
 
@@ -267,16 +275,21 @@ defmodule ExLisp.Type do
 
   defp expand_type_arg(arg, depth) do
     cond do
-      is_list(arg) and arg != [] and (is_atom(hd(arg)) or is_binary(hd(arg)) or is_struct(hd(arg), ExLisp.Symbol)) ->
+      is_list(arg) and arg != [] and
+          (is_atom(hd(arg)) or is_binary(hd(arg)) or is_struct(hd(arg), ExLisp.Symbol)) ->
         expand_type(arg, depth)
+
       is_atom(arg) ->
         norm = normalize_type_name(arg)
         ensure_tables()
+
         case :ets.lookup(@deftype_table, norm) do
           [{^norm, _}] -> expand_type(arg, depth)
           _ -> arg
         end
-      true -> arg
+
+      true ->
+        arg
     end
   end
 
@@ -285,6 +298,7 @@ defmodule ExLisp.Type do
   def normalize_type_name(:t), do: :t
   def normalize_type_name(:common), do: :common
   def normalize_type_name(%ExLisp.Symbol{name: n}), do: normalize_type_name(n)
+
   def normalize_type_name(name) when is_binary(name) or is_atom(name) do
     normalized = ExLisp.Symbol.normalize_name(name)
 
@@ -304,6 +318,7 @@ defmodule ExLisp.Type do
         normalized
     end
   end
+
   def normalize_type_name(other), do: other
 
   # --- Type Predicate (typep) ---
@@ -323,7 +338,7 @@ defmodule ExLisp.Type do
 
   defp do_typep(_val, :t), do: true
   defp do_typep(_val, :common), do: true
-  defp do_typep(_val, :nil), do: false
+  defp do_typep(_val, nil), do: false
 
   defp do_typep(val, :null), do: val == nil or val == []
   defp do_typep(val, :boolean), do: val in [:t, nil, true, false]
@@ -355,25 +370,36 @@ defmodule ExLisp.Type do
   defp do_typep(val, :integer), do: is_integer(val)
   defp do_typep(val, :signed_byte), do: is_integer(val)
   defp do_typep(val, :unsigned_byte), do: is_integer(val) and val >= 0
+
   defp do_typep(val, :fixnum) do
     is_integer(val) and val >= -4_611_686_018_427_387_904 and val <= 4_611_686_018_427_387_903
   end
+
   defp do_typep(val, :bignum) do
     is_integer(val) and (val < -4_611_686_018_427_387_904 or val > 4_611_686_018_427_387_903)
   end
-  defp do_typep(val, type) when type in [:float, :short_float, :single_float, :double_float, :long_float], do: is_float(val)
+
+  defp do_typep(val, type)
+       when type in [:float, :short_float, :single_float, :double_float, :long_float],
+       do: is_float(val)
+
   defp do_typep(val, :bit), do: val in [0, 1]
 
-  defp do_typep(val, type) when type in [:string, :simple_string, :base_string, :simple_base_string] do
+  defp do_typep(val, type)
+       when type in [:string, :simple_string, :base_string, :simple_base_string] do
     is_binary(val) or
       (match?({:array, [_], _}, val) and
          case type do
-           t when t in [:string, :base_string] -> ExLisp.Builtins.stringp(val) == :t
-           t when t in [:simple_string, :simple_base_string] -> ExLisp.Builtins.simple_string_p(val) == :t
+           t when t in [:string, :base_string] ->
+             ExLisp.Builtins.stringp(val) == :t
+
+           t when t in [:simple_string, :simple_base_string] ->
+             ExLisp.Builtins.simple_string_p(val) == :t
          end)
   end
 
   defp do_typep(val, :pathname), do: match?(%ExLisp.Pathname{}, val)
+
   defp do_typep(%ExLisp.Thread{}, type)
        when type in [:thread, :"sb-thread.thread", :"sb_thread.thread"],
        do: true
@@ -389,13 +415,16 @@ defmodule ExLisp.Type do
   defp do_typep(%ExLisp.Pathname{host: h}, :logical_pathname) do
     h not in [nil, :unspecific, ""]
   end
+
   defp do_typep(_val, :logical_pathname), do: false
 
   defp do_typep(val, :stream), do: ExLisp.Stream.streamp(val) == :t
   defp do_typep(%ExLisp.Stream{type: :file}, :file_stream), do: true
   defp do_typep(_val, :file_stream), do: false
 
-  defp do_typep(%ExLisp.Stream{type: t}, :string_stream) when t in [:string_input, :string_output], do: true
+  defp do_typep(%ExLisp.Stream{type: t}, :string_stream)
+       when t in [:string_input, :string_output], do: true
+
   defp do_typep(_val, :string_stream), do: false
 
   defp do_typep(%ExLisp.Stream{type: :broadcast}, :broadcast_stream), do: true
@@ -419,7 +448,6 @@ defmodule ExLisp.Type do
 
   defp do_typep(val, :sequence) do
     is_list(val) or is_binary(val) or is_tuple(val) or
-      match?({:array, [_], _}, val) or match?({:bit_vector, _}, val) or
       (is_map(val) and Map.get(val, :__struct__) in [ExLisp.Array, ExLisp.Vector])
   end
 
@@ -478,9 +506,9 @@ defmodule ExLisp.Type do
   end
 
   defp do_typep(val, :compiled_function) do
-    (is_function(val) and not match?(%ExLisp.Closure{}, val)) or
+    is_function(val) or
       match?(%ExLisp.Closure{compiled: true}, val) or
-      (is_atom(val) and val not in [nil, :t, :nil, :false, :true] and
+      (is_atom(val) and val not in [nil, :t, nil, false, true] and
          (BuiltinFunction.builtin?(val) or
             (ExLisp.Env.has_fun?(val) and compiled_fun_val?(ExLisp.Env.get_fun(val)))))
   end
@@ -583,6 +611,7 @@ defmodule ExLisp.Type do
         [s | _] when is_integer(s) and s > 0 ->
           limit = Bitwise.bsl(1, s - 1)
           val >= -limit and val < limit
+
         _ ->
           true
       end
@@ -597,6 +626,7 @@ defmodule ExLisp.Type do
         [s | _] when is_integer(s) and s > 0 ->
           limit = Bitwise.bsl(1, s)
           val < limit
+
         _ ->
           true
       end
@@ -610,8 +640,10 @@ defmodule ExLisp.Type do
       case rest do
         [car_t, cdr_t | _] ->
           do_typep(hd(val), expand_type(car_t)) and do_typep(tl(val), expand_type(cdr_t))
+
         [car_t] ->
           do_typep(hd(val), expand_type(car_t))
+
         _ ->
           true
       end
@@ -620,7 +652,8 @@ defmodule ExLisp.Type do
     end
   end
 
-  defp do_typep(val, [t | rest]) when t in [:string, :simple_string, :base_string, :simple_base_string] do
+  defp do_typep(val, [t | rest])
+       when t in [:string, :simple_string, :base_string, :simple_base_string] do
     if do_typep(val, t) do
       case rest do
         [len | _] when is_integer(len) -> ExLisp.Builtins.length(val) == len
@@ -655,8 +688,10 @@ defmodule ExLisp.Type do
       case rest do
         [elem_t, size | _] ->
           check_vector_elem_and_size(val, elem_t, size)
+
         [elem_t] ->
           check_vector_elem_and_size(val, elem_t, :*)
+
         _ ->
           true
       end
@@ -681,8 +716,10 @@ defmodule ExLisp.Type do
       case rest do
         [elem_t, dims | _] ->
           check_array_elem_and_dims(val, elem_t, dims)
+
         [elem_t] ->
           check_array_elem_and_dims(val, elem_t, :*)
+
         _ ->
           true
       end
@@ -696,8 +733,10 @@ defmodule ExLisp.Type do
       case rest do
         [elem_t, dims | _] ->
           check_array_elem_and_dims(val, elem_t, dims)
+
         [elem_t] ->
           check_array_elem_and_dims(val, elem_t, :*)
+
         _ ->
           true
       end
@@ -711,6 +750,7 @@ defmodule ExLisp.Type do
     case val do
       {:instance, c, _tid} ->
         c == class_name or ExLisp.CLOS.subclassp(c, class_name) == :t
+
       _ ->
         false
     end
@@ -719,8 +759,7 @@ defmodule ExLisp.Type do
   defp do_typep(_val, _type), do: false
 
   defp compiled_fun_val?(fun) do
-    (is_function(fun) and not match?(%ExLisp.Closure{}, fun)) or
-      match?(%ExLisp.Closure{compiled: true}, fun)
+    is_function(fun) or match?(%ExLisp.Closure{compiled: true}, fun)
   end
 
   defp simple_array_type_check({:array, _, tid}) do
@@ -736,8 +775,6 @@ defmodule ExLisp.Type do
     end
   end
 
-  defp simple_array_type_check(_), do: true
-
   defp numeric_value?(num), do: is_number(num) or match?(%ExLisp.Ratio{}, num)
 
   defp check_range(num, []) do
@@ -750,7 +787,7 @@ defmodule ExLisp.Type do
 
   defp check_range(num, [low, high | _]) do
     numeric_value?(num) and
-    check_bound_low(num, low) and check_bound_high(num, high)
+      check_bound_low(num, low) and check_bound_high(num, high)
   end
 
   defp check_bound_low(_num, :*), do: true
@@ -776,9 +813,15 @@ defmodule ExLisp.Type do
 
     elem_ok =
       case elem_t do
-        :* -> true
-        :_ -> true
-        :t -> actual_elem == :t
+        :* ->
+          true
+
+        :_ ->
+          true
+
+        :t ->
+          actual_elem == :t
+
         _ ->
           expanded_elem = expand_type(elem_t)
           array_element_type_matches?(actual_elem, expanded_elem)
@@ -790,13 +833,21 @@ defmodule ExLisp.Type do
   defp check_array_elem_and_dims(val, elem_t, dims) do
     dims_ok =
       case dims do
-        :* -> true
-        :_ -> true
-        nil -> ExLisp.Builtins.array_rank(val) == 0
+        :* ->
+          true
+
+        :_ ->
+          true
+
+        nil ->
+          ExLisp.Builtins.array_rank(val) == 0
+
         rank when is_integer(rank) ->
           ExLisp.Builtins.array_rank(val) == rank
+
         dim_list when is_list(dim_list) ->
           actual_dims = ExLisp.Builtins.array_dimensions(val)
+
           length(actual_dims) == length(dim_list) and
             Enum.zip(actual_dims, dim_list)
             |> Enum.all?(fn
@@ -805,6 +856,7 @@ defmodule ExLisp.Type do
               {a, d} when is_integer(d) -> a == d
               _ -> true
             end)
+
         _ ->
           true
       end
@@ -813,9 +865,15 @@ defmodule ExLisp.Type do
 
     elem_ok =
       case elem_t do
-        :* -> true
-        :_ -> true
-        :t -> actual_elem == :t
+        :* ->
+          true
+
+        :_ ->
+          true
+
+        :t ->
+          actual_elem == :t
+
         _ ->
           array_element_type_matches?(actual_elem, expand_type(elem_t))
       end
@@ -871,10 +929,10 @@ defmodule ExLisp.Type do
       t1_norm in [:t, :common, :*] and complementary_union?(t2_norm) ->
         true
 
-      (is_nil(t2_norm) or t2_norm in [:nil, :null]) and contradictory_intersection?(t1_norm) ->
+      (is_nil(t2_norm) or t2_norm in [nil, :null]) and contradictory_intersection?(t1_norm) ->
         true
 
-      t1_norm in [:nil, :null, nil] and t2_norm in [:list, :sequence, :symbol, :atom, :t, :common] ->
+      t1_norm in [nil, :null, nil] and t2_norm in [:list, :sequence, :symbol, :atom, :t, :common] ->
         true
 
       t1_norm == :null and t2_norm in [:list, :sequence, :symbol, :atom, :t, :common] ->
@@ -882,7 +940,15 @@ defmodule ExLisp.Type do
 
       # Simple string types
       t1_norm in [:simple_string, :simple_base_string] and
-          (t2_norm in [:string, :vector, :array, :sequence, :simple_array, :base_string, :simple_string] or
+          (t2_norm in [
+             :string,
+             :vector,
+             :array,
+             :sequence,
+             :simple_array,
+             :base_string,
+             :simple_string
+           ] or
              match?([st | _] when st in [:simple_array, :array, :vector, :string], t2_norm)) ->
         case t2_norm do
           :simple_array ->
@@ -922,7 +988,15 @@ defmodule ExLisp.Type do
             true
 
           _ ->
-            t2_norm in [:string, :vector, :array, :sequence, :simple_array, :base_string, :simple_string]
+            t2_norm in [
+              :string,
+              :vector,
+              :array,
+              :sequence,
+              :simple_array,
+              :base_string,
+              :simple_string
+            ]
         end
 
       t1_norm in [:base_string, :string] and
@@ -1106,7 +1180,8 @@ defmodule ExLisp.Type do
           t2_norm in [:integer, :rational, :real, :number] ->
         true
 
-      is_list(t1_norm) and hd(t1_norm) in [:float, :short_float, :single_float, :double_float, :long_float] and
+      is_list(t1_norm) and
+        hd(t1_norm) in [:float, :short_float, :single_float, :double_float, :long_float] and
           t2_norm in [:float, :real, :number] ->
         true
 
@@ -1114,7 +1189,8 @@ defmodule ExLisp.Type do
           t2_norm in [:rational, :real, :number] ->
         true
 
-      is_list(t1_norm) and hd(t1_norm) in [:string, :simple_string, :base_string, :simple_base_string] and
+      is_list(t1_norm) and
+        hd(t1_norm) in [:string, :simple_string, :base_string, :simple_base_string] and
           t2_norm in [:string, :vector, :array, :sequence] ->
         true
 
@@ -1168,13 +1244,23 @@ defmodule ExLisp.Type do
 
   defp normalize_type_for_sub(t) do
     case t do
-      [:not, :t] -> nil
-      [:not, nil] -> :t
-      [:not, [:not, inner]] -> normalize_type_for_sub(inner)
-      %{name: name} -> normalize_type_name(name)
-      atom when is_atom(atom) -> normalize_type_name(atom)
-      str when is_binary(str) -> normalize_type_name(str)
-      %ExLisp.Symbol{name: n} -> normalize_type_name(n)
+      [:not, :t] ->
+        nil
+
+      [:not, nil] ->
+        :t
+
+      [:not, [:not, inner]] ->
+        normalize_type_for_sub(inner)
+
+      %{name: name} ->
+        normalize_type_name(name)
+
+      atom when is_atom(atom) ->
+        normalize_type_name(atom)
+
+      str when is_binary(str) ->
+        normalize_type_name(str)
 
       [head | rest] ->
         [normalize_type_for_sub(head) | Enum.map(rest, &normalize_type_for_sub/1)]
@@ -1304,8 +1390,11 @@ defmodule ExLisp.Type do
     norm = normalize_type_for_sub(expanded)
 
     cond do
-      norm in [:nil, :null] -> [:not, :t]
-      norm in [:base_char, :standard_char, :character, :extended_char] -> :character
+      norm in [nil, :null] ->
+        [:not, :t]
+
+      norm in [:base_char, :standard_char, :character, :extended_char] ->
+        :character
 
       norm in [:bit, :unsigned_byte_1, [0, 1], [:integer, 0, 1]] ->
         :bit
@@ -1336,12 +1425,23 @@ defmodule ExLisp.Type do
     norm = normalize_type_for_sub(expanded)
 
     cond do
-      norm in [:nil, :null] -> [:not, :t]
-      norm in [:short_float, :single_float] -> :single_float
-      norm in [:double_float, :long_float] -> :double_float
-      norm in [:rational, :integer, :ratio, :fixnum, :bignum] -> :rational
-      match?([t | _] when t in [:integer, :rational, :unsigned_byte, :signed_byte, :mod], norm) -> :rational
-      true -> :real
+      norm in [nil, :null] ->
+        [:not, :t]
+
+      norm in [:short_float, :single_float] ->
+        :single_float
+
+      norm in [:double_float, :long_float] ->
+        :double_float
+
+      norm in [:rational, :integer, :ratio, :fixnum, :bignum] ->
+        :rational
+
+      match?([t | _] when t in [:integer, :rational, :unsigned_byte, :signed_byte, :mod], norm) ->
+        :rational
+
+      true ->
+        :real
     end
   end
 end

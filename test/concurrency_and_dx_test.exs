@@ -24,6 +24,7 @@ defmodule ConcurrencyAndDxTest do
                  (send parent 42)))
         (receive))
       """
+
       assert ExLisp.eval(code) == 42
     end
 
@@ -34,6 +35,7 @@ defmodule ConcurrencyAndDxTest do
                  (! parent :hello)))
         (receive))
       """
+
       assert ExLisp.eval(code) == :hello
     end
 
@@ -49,6 +51,7 @@ defmodule ConcurrencyAndDxTest do
       (let ((p (spawn (lambda () (sleep 0.05)))))
         (list (process-alive-p p) (alivep p)))
       """
+
       assert ExLisp.eval(code) == [:t, :t]
     end
 
@@ -94,37 +97,47 @@ defmodule ConcurrencyAndDxTest do
       assert is_list(list)
       assert :find_my_unique_test_fn in list or :"find-my-unique-test-fn" in list
 
-      output = capture_io(fn ->
-        ExLisp.eval(~s{(apropos "unique-test")})
-      end)
+      output =
+        capture_io(fn ->
+          ExLisp.eval(~s{(apropos "unique-test")})
+        end)
+
       assert output =~ "FIND-MY-UNIQUE-TEST-FN"
     end
 
     test "describe" do
-      output = capture_io(fn ->
-        ExLisp.eval("(describe 42)")
-      end)
+      output =
+        capture_io(fn ->
+          ExLisp.eval("(describe 42)")
+        end)
+
       assert output =~ "Integer: 42"
 
-      output2 = capture_io(fn ->
-        ExLisp.eval(~s{(describe "hello")})
-      end)
+      output2 =
+        capture_io(fn ->
+          ExLisp.eval(~s{(describe "hello")})
+        end)
+
       assert output2 =~ "String: \"hello\""
     end
 
     test "room" do
-      output = capture_io(fn ->
-        ExLisp.eval("(room)")
-      end)
+      output =
+        capture_io(fn ->
+          ExLisp.eval("(room)")
+        end)
+
       assert output =~ "Memory usage:"
       assert output =~ "Processes:"
     end
 
     test "time special form" do
-      output = capture_io(fn ->
-        res = ExLisp.eval("(time (+ 10 20))")
-        assert res == 30
-      end)
+      output =
+        capture_io(fn ->
+          res = ExLisp.eval("(time (+ 10 20))")
+          assert res == 30
+        end)
+
       assert output =~ "Evaluation took:"
       assert output =~ "seconds of real time"
     end

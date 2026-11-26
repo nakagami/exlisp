@@ -2317,8 +2317,6 @@ defmodule BuiltinFunction do
              :getf,
              :remf,
              :get_properties,
-             :mapc,
-             :mapcar,
              :mapcan,
              :maplist,
              :mapl,

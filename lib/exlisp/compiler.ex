@@ -167,11 +167,28 @@ defmodule ExLisp.Compiler do
 
     fun_forms =
       Enum.map(funs, fn {name, param_names, body_nodes} ->
+        mutated_params =
+          LispBeam.mutated_vars(body_nodes)
+          |> MapSet.intersection(MapSet.new(param_names))
+
         local_env =
-          MapSet.new(param_names)
+          Enum.reduce(param_names, MapSet.new(), fn param, env ->
+            if MapSet.member?(mutated_params, param) do
+              MapSet.put(env, {:mutated, param})
+            else
+              MapSet.put(env, param)
+            end
+          end)
           |> MapSet.union(sibling_fn_set)
 
-        compiled_body = Enum.map(body_nodes, &LispBeam.compile_expr(&1, local_env))
+        init_erases =
+          Enum.map(mutated_params, fn param ->
+            {:call, 1, {:remote, 1, {:atom, 1, :erlang}, {:atom, 1, :erase}}, [{:atom, 1, param}]}
+          end)
+
+        compiled_body =
+          init_erases ++ Enum.map(body_nodes, &LispBeam.compile_expr(&1, local_env))
+
         erl_params = Enum.map(param_names, fn p -> {:var, 1, LispBeam.erl_var_name(p)} end)
 
         {:function, 1, name, length(param_names),

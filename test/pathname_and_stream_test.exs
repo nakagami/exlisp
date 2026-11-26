@@ -14,6 +14,7 @@ defmodule PathnameAndStreamTest do
               (pathname-name p)
               (pathname-type p)))
       """
+
       assert ExLisp.eval(code) == [:t, [:absolute, "tmp", "sub"], "foo", "txt"]
     end
 
@@ -24,11 +25,24 @@ defmodule PathnameAndStreamTest do
               (pathname-name p)
               (namestring p)))
       """
-      assert ExLisp.eval(code) == [[:absolute, "usr", "local", "bin"], "clisp", "/usr/local/bin/clisp"]
 
-      assert ExLisp.eval("(namestring (make-pathname :directory '(:relative \"src\") :name \"app\" :type \"ex\"))") == "src/app.ex"
-      assert ExLisp.eval("(file-namestring (make-pathname :directory '(:absolute \"tmp\") :name \"app\" :type \"ex\"))") == "app.ex"
-      assert ExLisp.eval("(directory-namestring (make-pathname :directory '(:absolute \"tmp\" \"sub\") :name \"app\"))") == "/tmp/sub/"
+      assert ExLisp.eval(code) == [
+               [:absolute, "usr", "local", "bin"],
+               "clisp",
+               "/usr/local/bin/clisp"
+             ]
+
+      assert ExLisp.eval(
+               "(namestring (make-pathname :directory '(:relative \"src\") :name \"app\" :type \"ex\"))"
+             ) == "src/app.ex"
+
+      assert ExLisp.eval(
+               "(file-namestring (make-pathname :directory '(:absolute \"tmp\") :name \"app\" :type \"ex\"))"
+             ) == "app.ex"
+
+      assert ExLisp.eval(
+               "(directory-namestring (make-pathname :directory '(:absolute \"tmp\" \"sub\") :name \"app\"))"
+             ) == "/tmp/sub/"
     end
 
     test "merge-pathnames" do
@@ -38,14 +52,21 @@ defmodule PathnameAndStreamTest do
               (pathname-name merged)
               (pathname-type merged)))
       """
+
       assert ExLisp.eval(code) == [[:absolute, "var", "log"], "foo", "txt"]
     end
 
     test "wild-pathname-p and pathname-match-p" do
       assert ExLisp.eval("(wild-pathname-p (make-pathname :name :wild))") == :t
       assert ExLisp.eval("(wild-pathname-p (make-pathname :name \"foo\"))") == nil
-      assert ExLisp.eval("(pathname-match-p \"foo.txt\" (make-pathname :name :wild :type \"txt\"))") == :t
-      assert ExLisp.eval("(pathname-match-p \"foo.lisp\" (make-pathname :name :wild :type \"txt\"))") == nil
+
+      assert ExLisp.eval(
+               "(pathname-match-p \"foo.txt\" (make-pathname :name :wild :type \"txt\"))"
+             ) == :t
+
+      assert ExLisp.eval(
+               "(pathname-match-p \"foo.lisp\" (make-pathname :name :wild :type \"txt\"))"
+             ) == nil
     end
 
     test "probe-file and truename" do
@@ -72,6 +93,7 @@ defmodule PathnameAndStreamTest do
           (close in)
           (close out)))
       """
+
       assert ExLisp.eval(code) == [:t, :t, :t, nil, :t, :t, nil, :t]
     end
 
@@ -88,6 +110,7 @@ defmodule PathnameAndStreamTest do
                 (list c1 c2 c3 c4 line missing-p))))
           (close s)))
       """
+
       assert ExLisp.eval(code) == [
                ExLisp.Character.new(?a),
                ExLisp.Character.new(10),
@@ -112,6 +135,7 @@ defmodule PathnameAndStreamTest do
             (get-output-stream-string s))
           (close s)))
       """
+
       assert ExLisp.eval(code) == "Hello\nWorld\n!"
     end
 
@@ -129,6 +153,7 @@ defmodule PathnameAndStreamTest do
           (close s1)
           (close s2)))
       """
+
       assert ExLisp.eval(code) == ["broadcast test", "broadcast test"]
     end
 
@@ -143,6 +168,7 @@ defmodule PathnameAndStreamTest do
           (close s1)
           (close s2)))
       """
+
       assert ExLisp.eval(code) == "foo bar"
     end
 
@@ -159,6 +185,7 @@ defmodule PathnameAndStreamTest do
           (close in)
           (close out)))
       """
+
       assert ExLisp.eval(code) == "hello"
     end
 
@@ -167,6 +194,7 @@ defmodule PathnameAndStreamTest do
       (with-open-stream (s (make-string-input-stream "macro test"))
         (read-line s))
       """
+
       assert ExLisp.eval(code) == "macro test"
     end
 
@@ -175,6 +203,7 @@ defmodule PathnameAndStreamTest do
       (with-open-file (s "mix.exs" :direction :input)
         (streamp s))
       """
+
       assert ExLisp.eval(code) == :t
     end
   end

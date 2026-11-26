@@ -9,6 +9,7 @@ defmodule ConditionRestartTest do
         (return-zero () 0)
         (use-value (v) v))
       """
+
       # When error is raised without handler, it throws
       assert_raise RuntimeError, fn ->
         ExLisp.eval(code)
@@ -24,6 +25,7 @@ defmodule ConditionRestartTest do
           (use-value (v) v)
           (abort () :aborted)))
       """
+
       assert ExLisp.eval(code) == 42
     end
 
@@ -35,6 +37,7 @@ defmodule ConditionRestartTest do
           (error "failed")
           (use-value (v) (* v 2))))
       """
+
       assert ExLisp.eval(code) == 200
     end
 
@@ -46,6 +49,7 @@ defmodule ConditionRestartTest do
                 (not (null (member 'my-restart r-names)))))
         (my-restart () :done))
       """
+
       assert ExLisp.eval(code) == [:t, :t]
     end
 
@@ -54,6 +58,7 @@ defmodule ConditionRestartTest do
       (with-simple-restart (skip-calc "Skip calculating")
         (+ 10 20))
       """
+
       assert ExLisp.eval(code) == 30
     end
 
@@ -64,6 +69,7 @@ defmodule ConditionRestartTest do
         (with-simple-restart (skip-calc "Skip calculating")
           (error "an error occurred")))
       """
+
       assert ExLisp.eval(code) == nil
     end
 
@@ -81,6 +87,7 @@ defmodule ConditionRestartTest do
         (my-custom-error (c)
           (my-custom-error-code c)))
       """
+
       assert ExLisp.eval(code) == 404
     end
 
@@ -91,6 +98,7 @@ defmodule ConditionRestartTest do
         (cerror "Continue past this error" "A continuable error")
         :resumed)
       """
+
       assert ExLisp.eval(code) == :resumed
     end
 
@@ -101,6 +109,7 @@ defmodule ConditionRestartTest do
         (warn "This is a warning")
         :warning-muffled)
       """
+
       assert ExLisp.eval(code) == :warning_muffled
     end
   end
