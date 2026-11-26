@@ -164,6 +164,25 @@ defmodule ExLisp.CommonLispCompatibilityTest do
            """) == [:t, nil]
   end
 
+  @tag timeout: 1_000
+  test "equal but distinct lists do not share mutable cons mappings" do
+    result =
+      ExLisp.eval("""
+      (list
+        (let ((s (copy-list '(a b c d))))
+          (nconc s s)
+          s)
+        (let ((s (list nil)))
+          (setf (car s) s)
+          s)
+        (let ((s (list nil)))
+          (setf (car s) s)
+          (setf (cdr s) s)))
+      """)
+
+    assert result == [[:a, :b, :c, :d, :a, :b, :c, :d], [[nil]], [[nil]]]
+  end
+
   test "destructive list operations preserve aliases" do
     ExLisp.Env.reset()
 

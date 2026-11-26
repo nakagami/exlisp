@@ -111,28 +111,30 @@ defmodule ExLisp.MutableCons do
   end
 
   defp find_replacement(scope, value) do
-    shared_replacement =
-      case :ets.lookup(@table, {scope, value}) do
-        [{{^scope, ^value}, replacement}] -> replacement
-        [] -> :error
-      end
+    mappings = Process.get({@mapping_key, scope}, [])
 
-    local_replacement =
-      Process.get({@mapping_key, scope}, [])
-      |> Enum.find_value(fn {original, replacement} ->
-        if :erts_debug.same(original, value), do: replacement, else: false
-      end)
+    case Enum.find(mappings, fn {original, _replacement} ->
+           :erts_debug.same(original, value)
+         end) do
+      {_original, replacement} ->
+        {:ok, replacement}
 
-    cond do
-      shared_replacement == :error ->
-        :error
+      nil ->
+        structurally_mapped_locally? =
+          Enum.any?(mappings, fn {original, _replacement} -> original == value end)
 
-      local_replacement != false and local_replacement == shared_replacement ->
-        {:ok, local_replacement}
+        if structurally_mapped_locally? do
+          :error
+        else
+          case :ets.lookup(@table, {scope, value}) do
+            [{{^scope, ^value}, replacement}] ->
+              cache_mapping(scope, value, replacement)
+              {:ok, replacement}
 
-      true ->
-        cache_mapping(scope, value, shared_replacement)
-        {:ok, shared_replacement}
+            [] ->
+              :error
+          end
+        end
     end
   end
 
