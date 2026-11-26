@@ -423,7 +423,8 @@ defmodule ExLisp.Type do
   defp do_typep(_val, :file_stream), do: false
 
   defp do_typep(%ExLisp.Stream{type: t}, :string_stream)
-       when t in [:string_input, :string_output], do: true
+       when t in [:string_input, :string_output],
+       do: true
 
   defp do_typep(_val, :string_stream), do: false
 
